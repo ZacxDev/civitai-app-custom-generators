@@ -1,0 +1,32 @@
+{
+  "$schema": "https://civitai.com/schemas/app-block/v1.json",
+  "blockId": "custom-generators",
+  "version": "0.3.3",
+  "name": "Custom Generators",
+  "type": "block",
+  "category": "generation",
+  "scopes": [
+    "ai:write:budgeted",
+    "buzz:read:self",
+    "apps:storage:read",
+    "apps:storage:write",
+    "apps:storage:shared:read",
+    "apps:storage:shared:write"
+  ],
+  "page": {
+    "path": "/",
+    "title": "Custom Generators",
+    "icon": "wand",
+    "buzzBudgetPerGen": 1000
+  },
+  "iframe": {
+    "minHeight": 640,
+    "maxHeight": 4000,
+    "resizable": true,
+    "sandbox": "allow-scripts allow-forms"
+  },
+  "contentRating": "pg13",
+  "minApiVersion": "1.0",
+  "buildCommand": "npm run build",
+  "outputDir": "dist"
+}
