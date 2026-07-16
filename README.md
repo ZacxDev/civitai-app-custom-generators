@@ -97,24 +97,84 @@ See the migration tests in
 
 ## Develop
 
-Requires Node 22+.
+Requires Node 22+. `npm install` first.
+
+### Recommended: `dev-tunnel` (prod-fidelity live dev) — the default flow
+
+`civitai app dev-tunnel` runs your **local** dev server inside the **real**
+production `PageBlockHost` at `civitai.com/apps/dev/<blockId>`, over an ephemeral
+`dev-<hex>.civit.ai` reverse tunnel. You get the actual host — real viewer, real
+consent prompts, the real resource picker + image upload, and the real Buzz
+generation bridge — hot-reloading your local edits. This is how you should build
+day-to-day.
+
+> **🔒 The dev-tunnel is invite-only beta.** It needs a moderator or
+> **app-dev-tester** account (the tunnel gate is account-scoped). If you don't
+> have beta access yet, use the [mock harness](#zero-setup-alternative-the-mock-harness)
+> below — it needs no account and runs fully offline.
+
+**1. Install the `civitai` CLI** (a self-contained Go binary — pick one; no
+self-updater, so re-run to upgrade):
 
 ```bash
-npm install
-npm run dev:harness   # offline dev: the published mock host (@civitai/blocks-react/testing)
-                      # serves the FULL block protocol — viewer, consent, picker,
-                      # image upload, the Buzz workflow, and shared/KV storage — so
-                      # no live host or injected HTTP fakes are needed.
-npm run dev           # plain Vite (expects a real host to iframe the bundle)
+brew install civitai/tap/civitai          # macOS / Linuxbrew
+# or
+npm  install -g @civitai/cli              # any Node environment
+# or
+go   install github.com/civitai/cli/cmd/civitai@latest
+```
+
+**2. Start the tunnel-ready dev server** (sets `Access-Control-Allow-Origin: *`
++ a `frame-ancestors` CSP so the prod host can embed + CORS-fetch the bundle, and
+routes HMR over the `wss://…:443` tunnel):
+
+```bash
+npm run dev:tunnel
+```
+
+**3. Open the tunnel** in a second terminal (from the repo root — it defaults the
+`blockId` from [`block.manifest.json`](block.manifest.json), here
+`custom-generators`):
+
+```bash
+civitai app dev-tunnel            # or: civitai app dev-tunnel custom-generators
+```
+
+**4. Open the printed URL** — `https://civitai.com/apps/dev/custom-generators` —
+in a browser **signed in** to your beta-enabled Civitai account. Edit any file
+under `src/` and the block live-reloads inside the real host.
+
+### Zero-setup alternative: the mock harness
+
+No account, no beta access, no network — the published mock host
+(`@civitai/blocks-react/testing`) answers the **full** block protocol locally
+(viewer, consent, resource picker, image upload, the Buzz workflow, and
+shared/KV storage), so no live host or injected HTTP fakes are needed. Use this
+if you're exploring the repo or don't have dev-tunnel beta access:
+
+```bash
+npm run dev:harness   # offline mock host at http://localhost:5188
+```
+
+### Other scripts
+
+```bash
+npm run dev           # plain Vite — no mock host, no tunnel headers (rarely needed directly)
 npm test              # vitest: a `node` (pure) project + a `jsdom` (component/e2e) project
 npm run typecheck     # tsc --noEmit
 npm run build         # tsc --noEmit && vite build  → dist/
 ```
 
-The dev harness pins host + port (`localhost:5188`) because the SDK iframe transport
-drops any `postMessage` whose origin isn't allow-listed
-(`VITE_BLOCK_ALLOWED_PARENT_ORIGINS`; see [`.env.example`](.env.example)). There are
-no secrets in this repo — the host injects the block token + viewer identity at
+The dev server pins host + port (`localhost:5188`, `--strictPort`) because the SDK
+iframe transport drops any `postMessage` whose origin isn't allow-listed
+(`VITE_BLOCK_ALLOWED_PARENT_ORIGINS`; see [`.env.example`](.env.example) — it
+defaults to `https://civitai.com`, which the tunnel's parent origin needs). The
+dev-tunnel embeddability headers + the tunnel-gated HMR websocket live in
+[`src/dev-embed.ts`](src/dev-embed.ts) (single source of truth, unit-tested in
+[`src/dev-embed.test.ts`](src/dev-embed.test.ts)) and are wired in
+[`vite.config.ts`](vite.config.ts); they are **dev-only** (`server.*` never
+applies to `vite build`), so the production bundle is untouched. There are no
+secrets in this repo — the host injects the block token + viewer identity at
 runtime.
 
 ## Build & submit (Civitai CLI)
