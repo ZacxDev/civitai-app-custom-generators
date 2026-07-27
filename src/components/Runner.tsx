@@ -24,7 +24,9 @@ import { Alert, Badge, Button, Card, Collapse, Group, Loader, NumberInput, Stack
 import type { GenButton, GeneratorConfig, GenButtonParams, QueueItem } from '../types.js';
 import { DEFAULT_PROMPT_PLACEHOLDER, buildSubmitBody, canRunButton, exposesImage, exposesPrompt, missingRequiredInputs, type RequiredInput } from '../lib/generator.js';
 import { isTerminalSnapshot, mapSnapshotStatus, pollToTerminal } from '../lib/workflow.js';
-import type { Palette } from '../theme.js';
+import { token, metaText, type Palette } from '../theme.js';
+import { EmptyState } from './EmptyState.js';
+import { SafeImage } from './SafeImage.js';
 
 interface RunnerItem extends QueueItem {
   body: WorkflowBody;
@@ -222,7 +224,9 @@ export function Runner(props: RunnerProps) {
             </Button>
           )}
           {buzzBalance != null && (
-            <Badge data-testid="runner-balance">⚡ {buzzBalance.toLocaleString()}</Badge>
+            <Badge variant="light" data-testid="runner-balance">
+              <span style={{ fontVariantNumeric: 'tabular-nums' }}>⚡ {buzzBalance.toLocaleString()}</span>
+            </Badge>
           )}
         </Group>
 
@@ -230,7 +234,7 @@ export function Runner(props: RunnerProps) {
             the generator, above the prompt/buttons/generate content (not a
             backdrop behind them). Decorative, so empty alt. */}
         {config.headerImageRef && (
-          <img
+          <SafeImage
             data-testid="runner-header-banner"
             src={config.headerImageRef.url}
             alt=""
@@ -239,10 +243,10 @@ export function Runner(props: RunnerProps) {
         )}
 
         <div>
-          <h2 style={{ margin: 0, fontSize: 20 }} data-testid="runner-title">
+          <h2 style={{ margin: 0, fontSize: 20, letterSpacing: '-0.01em', lineHeight: 1.2 }} data-testid="runner-title">
             {config.name || 'Untitled generator'}
           </h2>
-          {config.description && <p style={{ margin: '4px 0 0', color: c.muted, fontSize: 14 }}>{config.description}</p>}
+          {config.description && <p style={{ ...metaText, margin: '5px 0 0', fontSize: 13 }}>{config.description}</p>}
         </div>
 
         {!preview && !canGenerate && (
@@ -277,7 +281,7 @@ export function Runner(props: RunnerProps) {
             {showImageInput && (
               <Stack gap={6}>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>
-                  Source image (img2img) <span style={{ color: '#e5484d' }} aria-hidden>*</span>
+                  Source image (img2img) <span style={{ color: token.error }} aria-hidden>*</span>
                 </div>
                 {sourceImage ? (
                   <Group gap={10} align="flex-start">
@@ -351,7 +355,13 @@ export function Runner(props: RunnerProps) {
 
         {/* output queue */}
         <Stack gap={10} data-testid="output-queue">
-          {items.length === 0 && <p style={{ color: c.muted, fontSize: 13 }} data-testid="queue-empty">No generations yet — press a button to start.</p>}
+          {items.length === 0 && (
+            <EmptyState
+              data-testid="queue-empty"
+              title="No generations yet"
+              body="Press a generator button above to queue your first image."
+            />
+          )}
           {items.map((it) => (
             <Card key={it.id} withBorder padding="md" data-testid="queue-item" data-status={it.status}>
               <Stack gap={8}>
@@ -373,7 +383,7 @@ export function Runner(props: RunnerProps) {
 
                 {it.status === 'confirming' && (
                   <Group justify="space-between">
-                    <span style={{ fontSize: 14 }} data-testid="queue-cost">
+                    <span style={{ fontSize: 14, fontVariantNumeric: 'tabular-nums' }} data-testid="queue-cost">
                       ≈ {it.estimatedCost ?? '—'} ⚡
                     </span>
                     <Group gap={6}>

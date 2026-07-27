@@ -33,8 +33,10 @@ import {
 } from '@civitai/blocks-react';
 import type { SharedAppendValue, SharedListItem, UseSharedStorage } from '@civitai/blocks-react';
 
+import { Loader } from '@civitai/blocks-react/ui';
+
 import { AI_WRITE_BUDGETED, hasGenerateScope } from './scopes.js';
-import { palette, pageStyle, contentStyle } from './theme.js';
+import { palette, pageStyle, contentStyle, metaText } from './theme.js';
 import type { BackgroundScanResult, GeneratorConfig } from './types.js';
 import { newGenerator, newId } from './lib/generator.js';
 import {
@@ -139,7 +141,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   const rootRef = useRef<HTMLDivElement>(null);
   useBlockResize(rootRef);
 
-  const c = palette(theme !== 'light');
+  const c = palette();
 
   // Assemble the dependency bag (hooks by default; tests override any field).
   const deps: AppDeps = useMemo(
@@ -366,8 +368,14 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   if (!ready) {
     return (
       <div ref={rootRef} data-theme={theme} style={pageStyle(c)}>
-        <div style={{ margin: 'auto', opacity: 0.7 }} data-testid="app-loading">
-          Loading Custom Generators…
+        <div
+          style={{ margin: 'auto', display: 'grid', justifyItems: 'center', gap: 12 }}
+          data-testid="app-loading"
+          role="status"
+          aria-live="polite"
+        >
+          <Loader />
+          <span style={metaText}>Loading Custom Generators…</span>
         </div>
       </div>
     );

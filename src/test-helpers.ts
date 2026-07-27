@@ -10,6 +10,7 @@ import type {
   BlockUploadedImageInfo,
   BlockWorkflowSnapshot,
   WorkflowBody,
+  WorkflowBodyTextToImage,
 } from '@civitai/app-sdk/blocks';
 import type { SharedAppendValue, SharedListItem, UseSharedStorage } from '@civitai/blocks-react';
 
@@ -161,16 +162,20 @@ export interface MockWorkflowOpts {
 
 /** Capturing estimate/submit/poll triple with a deterministic poll sequence. */
 export function mockWorkflow(opts: MockWorkflowOpts = {}) {
-  const calls = { estimate: [] as WorkflowBody[], submit: [] as WorkflowBody[] };
+  // This app only ever builds the `textToImage` member of the WorkflowBody
+  // discriminated union (app-sdk 0.26+), so record the captured bodies as that
+  // member — lets tests assert on member-only fields (params/additionalResources
+  // /sourceImage/sharedContentKey) without re-narrowing at every call site.
+  const calls = { estimate: [] as WorkflowBodyTextToImage[], submit: [] as WorkflowBodyTextToImage[] };
   const polls = opts.polls ?? 1;
   let pollCount = 0;
 
   const estimate = async (body: WorkflowBody): Promise<BlockWorkflowSnapshot> => {
-    calls.estimate.push(body);
+    calls.estimate.push(body as WorkflowBodyTextToImage);
     return { workflowId: 'wf', status: 'pending', cost: { total: opts.cost ?? 10 } };
   };
   const submit = async (body: WorkflowBody): Promise<BlockWorkflowSnapshot> => {
-    calls.submit.push(body);
+    calls.submit.push(body as WorkflowBodyTextToImage);
     pollCount = 0;
     if (opts.failSubmit) return { workflowId: 'wf', status: 'failed', error: opts.failSubmit };
     return { workflowId: 'wf', status: 'pending' };

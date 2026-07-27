@@ -15,6 +15,7 @@ import type { Palette } from '../theme.js';
 import { useIsMobile } from '../useMediaQuery.js';
 import { ButtonEditor } from './ButtonEditor.js';
 import { Runner } from './Runner.js';
+import { SafeImage } from './SafeImage.js';
 
 export interface BuilderProps {
   initial: GeneratorConfig;
@@ -239,6 +240,10 @@ export function Builder({ initial, c, pickResource, uploadImage, scanBackground,
             scan resolves here in the background; only a Scanned image persists. */}
         {scan.phase === 'scanning' && (
           <Group gap={8} data-testid="header-scanning" data-scan-phase="scanning" style={{ marginTop: 10, alignItems: 'center' }}>
+            {/* The in-flight thumbnail is dimmed to read as "pending / not yet
+                applied" alongside the spinner. This `opacity` is a deliberate
+                non-color affordance on an <img> (not opacity-muted text) — the
+                one allowed exception to the zero-opacity token rule. */}
             <img
               src={scan.img.url}
               alt=""
@@ -270,7 +275,7 @@ export function Builder({ initial, c, pickResource, uploadImage, scanBackground,
         )}
 
         {config.headerImageRef && (
-          <img
+          <SafeImage
             data-testid="header-preview"
             src={config.headerImageRef.url}
             alt="Generator header"

@@ -7,8 +7,9 @@
 import type {
   BlockResourceInfo,
   BlockSourceImage,
+  BlockTextToImageParams,
   SharedStorageValue,
-  WorkflowBody,
+  WorkflowBodyTextToImage,
 } from '@civitai/app-sdk/blocks';
 
 import type {
@@ -300,8 +301,14 @@ export function mergeParams(
  *
  * DISCOVERY-ONLY ids: `modelVersionId` / `additionalResources[].modelVersionId`
  * are hints; the server re-validates + re-prices every id at estimate/submit.
+ *
+ * Typed to the `textToImage` MEMBER of the `WorkflowBody` discriminated union
+ * (app-sdk 0.26+). `WorkflowBodyTextToImage` is assignable to `WorkflowBody`, so
+ * `estimate()`/`submit()` call-sites are unchanged — this only narrows the
+ * builder so it can read/write the member-only fields (`params`,
+ * `modelVersionId`, `additionalResources`, …) that no longer live on the union.
  */
-export function buildSubmitBody(button: GenButton, opts: BuildBodyOptions = {}): WorkflowBody {
+export function buildSubmitBody(button: GenButton, opts: BuildBodyOptions = {}): WorkflowBodyTextToImage {
   if (!button.checkpoint) {
     throw new Error('Button has no checkpoint pinned — cannot build a generation body.');
   }
@@ -312,7 +319,7 @@ export function buildSubmitBody(button: GenButton, opts: BuildBodyOptions = {}):
   );
 
   const p = mergeParams(button.params, opts.paramOverrides);
-  const params: WorkflowBody['params'] = { prompt };
+  const params: BlockTextToImageParams = { prompt };
   if (p.negativePrompt) params.negativePrompt = p.negativePrompt;
   if (isNum(p.cfgScale)) params.cfgScale = p.cfgScale;
   if (p.sampler) params.sampler = p.sampler;
@@ -322,7 +329,7 @@ export function buildSubmitBody(button: GenButton, opts: BuildBodyOptions = {}):
   if (isNum(p.height)) params.height = p.height;
   if (isNum(p.quantity)) params.quantity = p.quantity;
 
-  const body: WorkflowBody = {
+  const body: WorkflowBodyTextToImage = {
     kind: 'textToImage',
     modelId: button.checkpoint.modelId,
     modelVersionId: button.checkpoint.versionId,
