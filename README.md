@@ -228,6 +228,7 @@ Publishing goes through Civitai's moderator review, then deploys to
 
 ## Links
 
+- Developer docs — [developer.civitai.com](https://developer.civitai.com)
 - Live app — [custom-generators.civit.ai](https://custom-generators.civit.ai)
 - SDK contract — [`@civitai/app-sdk`](https://www.npmjs.com/package/@civitai/app-sdk)
 - React hooks + UI pack — [`@civitai/blocks-react`](https://www.npmjs.com/package/@civitai/blocks-react)
