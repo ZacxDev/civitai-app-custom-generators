@@ -1,9 +1,9 @@
 {
   "name": "custom-generators",
   "private": true,
-  "version": "0.3.3",
+  "version": "0.3.4",
   "type": "module",
-  "description": "Custom Generators — a Civitai App Block (full-page) authoring app. Users BUILD named 'generators' (a set of buttons, each carrying an image-generation payload: pinned checkpoint + weighted LoRA stack + prompt template + params), with a live preview and inferred runtime inputs (prompt box from a {prompt} token, image box from img2img); publish them app-scoped, and RUN them (buttons + prompt input + img2img source + advanced params + an output queue). Mobile-first + desktop-responsive. Phase 2a = image generation (txt2img + img2img).",
+  "description": "Custom Generators \u2014 a Civitai App Block (full-page) authoring app. Users BUILD named 'generators' (a set of buttons, each carrying an image-generation payload: pinned checkpoint + weighted LoRA stack + prompt template + params), with a live preview and inferred runtime inputs (prompt box from a {prompt} token, image box from img2img); publish them app-scoped, and RUN them (buttons + prompt input + img2img source + advanced params + an output queue). Mobile-first + desktop-responsive. Phase 2a = image generation (txt2img + img2img).",
   "license": "Apache-2.0",
   "scripts": {
     "dev": "vite",
