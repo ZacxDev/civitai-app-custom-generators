@@ -35,7 +35,7 @@ import {
   exposesPrompt,
   loraFromPick,
 } from '../lib/generator.js';
-import type { Palette } from '../theme.js';
+import { accentWash, type Palette } from '../theme.js';
 
 export interface ButtonEditorProps {
   button: GenButton;
@@ -429,7 +429,7 @@ function renderHighlighted(text: string): ReactNode {
           key={`m${i}`}
           data-testid="prompt-token-mark"
           style={{
-            background: 'rgba(116,143,255,0.35)',
+            background: accentWash(28),
             color: 'inherit',
             borderRadius: 4,
             padding: '0 1px',

@@ -8,7 +8,7 @@ import { newButton, newGenerator, parsePublishedGenerator } from '../lib/generat
 import { GENERATION_SOURCE_IMAGE, immediateSleep, mockWorkflow } from '../test-helpers.js';
 import type { GeneratorConfig } from '../types.js';
 
-const c = palette(true);
+const c = palette();
 
 function txtConfig(): GeneratorConfig {
   return newGenerator({
