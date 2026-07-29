@@ -155,6 +155,62 @@ export function composePrompt(template: string, userInput?: string): string {
   return template.split(PROMPT_TOKEN).join('').replace(/\s+/g, ' ').trim();
 }
 
+// ---------------------------------------------------------------------------
+// Param range clamping (defense-in-depth for untrusted published `data`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Canonical min/max for the numeric generation params — the SAME ranges the
+ * Builder enforces on authoring (its `NumberField` bounds) AND the ranges the
+ * server re-validates (mirrors `BlockTextToImageParams`' documented ranges:
+ * cfgScale 1–30, steps 1–50, width/height 64–2048, quantity 1–4). Single-sourced
+ * here so the Builder inputs and the untrusted-blob clamp can't drift apart.
+ */
+export const PARAM_BOUNDS = {
+  cfgScale: { min: 1, max: 30 },
+  steps: { min: 1, max: 50 },
+  width: { min: 64, max: 2048 },
+  height: { min: 64, max: 2048 },
+  quantity: { min: 1, max: 4 },
+  seed: { min: 0, max: Number.MAX_SAFE_INTEGER },
+} as const;
+
+/** Clamp a numeric value into [min,max]; a non-finite value drops to `undefined`. */
+function clampNum(v: unknown, min: number, max: number): number | undefined {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return undefined;
+  return Math.min(max, Math.max(min, Math.round(v)));
+}
+
+/**
+ * Range-clamp a button's generation params to {@link PARAM_BOUNDS}. This is the
+ * defense-in-depth belt behind estimate+confirm+the server cap: a published
+ * generator's params come from the OPAQUE, UNMODERATED shared `data` blob, so a
+ * forged/corrupt row could carry `quantity:999` (a real spend-abuse vector) or
+ * an absurd `steps`/`width`. We clamp on the READ path so an over-limit blob can
+ * never build an over-limit submit body. Out-of-range numerics are pulled to the
+ * nearest bound; non-numeric/missing values are dropped (the orchestrator's own
+ * defaults then apply). Free-text (`negativePrompt`/`sampler`) rides through
+ * unchanged — it's re-moderated server-side and carries no spend leverage.
+ */
+export function clampParams(params: GenButtonParams | undefined): GenButtonParams {
+  const p = params ?? {};
+  const out: GenButtonParams = {};
+  if (typeof p.negativePrompt === 'string') out.negativePrompt = p.negativePrompt;
+  if (typeof p.sampler === 'string') out.sampler = p.sampler;
+  out.cfgScale = clampNum(p.cfgScale, PARAM_BOUNDS.cfgScale.min, PARAM_BOUNDS.cfgScale.max);
+  out.steps = clampNum(p.steps, PARAM_BOUNDS.steps.min, PARAM_BOUNDS.steps.max);
+  out.width = clampNum(p.width, PARAM_BOUNDS.width.min, PARAM_BOUNDS.width.max);
+  out.height = clampNum(p.height, PARAM_BOUNDS.height.min, PARAM_BOUNDS.height.max);
+  out.quantity = clampNum(p.quantity, PARAM_BOUNDS.quantity.min, PARAM_BOUNDS.quantity.max);
+  // seed: `null` is meaningful (orchestrator-random); a number is clamped ≥0.
+  out.seed = p.seed === null ? null : clampNum(p.seed, PARAM_BOUNDS.seed.min, PARAM_BOUNDS.seed.max) ?? null;
+  // Drop keys that clamped to undefined so they don't override orchestrator defaults.
+  (Object.keys(out) as Array<keyof GenButtonParams>).forEach((k) => {
+    if (out[k] === undefined) delete out[k];
+  });
+  return out;
+}
+
 /** Clamp a weight into [min,max]; non-finite falls back to the default weight. */
 export function clampWeight(value: number, min: number, max: number): number {
   const lo = Number.isFinite(min) ? min : DEFAULT_MIN_WEIGHT;
@@ -318,7 +374,10 @@ export function buildSubmitBody(button: GenButton, opts: BuildBodyOptions = {}):
     exposesPrompt(button) ? opts.promptInput : undefined,
   );
 
-  const p = mergeParams(button.params, opts.paramOverrides);
+  // Clamp the merged params (author params + runner overrides) to the canonical
+  // ranges — defense-in-depth on the money path so no over-limit value (forged
+  // blob OR a bad override) can reach the estimate/submit body.
+  const p = clampParams(mergeParams(button.params, opts.paramOverrides));
   const params: BlockTextToImageParams = { prompt };
   if (p.negativePrompt) params.negativePrompt = p.negativePrompt;
   if (isNum(p.cfgScale)) params.cfgScale = p.cfgScale;
@@ -449,9 +508,12 @@ function migrateStoredButton(raw: unknown): GenButton | null {
     label: typeof b.label === 'string' ? b.label : '',
     workflowType: b.workflowType === 'img2img' ? 'img2img' : 'txt2img',
     checkpoint: b.checkpoint,
-    loras: Array.isArray(b.loras) ? b.loras : [],
+    loras: Array.isArray(b.loras) ? b.loras.slice(0, MAX_LORAS) : [],
     promptTemplate,
-    params: b.params ?? defaultParams(),
+    // 🔴 Range-clamp params from the untrusted opaque `data` blob (a forged row
+    // could carry `quantity:999` / absurd steps). Missing params fall back to
+    // the in-range defaults. Also hard-cap the LoRA stack at MAX_LORAS above.
+    params: clampParams(b.params ?? defaultParams()),
   };
 }
 
@@ -539,3 +601,15 @@ export function updateButton(
 }
 
 export const WORKFLOW_TYPES: WorkflowType[] = ['txt2img', 'img2img'];
+
+/**
+ * Deep-clone a generator config so a FORK shares NO mutable references with its
+ * source (the parse path reconstructs buttons but keeps some nested objects —
+ * `checkpoint` / individual `loras` — pointing at the original shared `data`
+ * blob). Fresh button ids so the fork's local list identity is its own.
+ */
+export function cloneConfigForFork(config: GeneratorConfig): GeneratorConfig {
+  const clone = structuredClone(config);
+  clone.buttons = clone.buttons.map((b) => ({ ...b, id: newId() }));
+  return clone;
+}

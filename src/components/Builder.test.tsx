@@ -491,3 +491,27 @@ describe('Builder — real SDK scanStatus wiring (mock host)', () => {
     expect(screen.queryByTestId('header-preview')).not.toBeInTheDocument();
   });
 });
+
+describe('Builder — a11y: focus retained after a button reorder (feature #12)', () => {
+  it('moves keyboard focus to the moved button’s enabled move control', async () => {
+    setup();
+    await openBuilder();
+    // add a 2nd button so the first can move down
+    await userEvent.click(screen.getByTestId('add-button'));
+    const editors = screen.getAllByTestId('button-editor');
+    expect(editors).toHaveLength(2);
+    const firstId = editors[0].getAttribute('data-button-id');
+
+    await userEvent.click(within(editors[0]).getByTestId('move-down'));
+
+    await waitFor(() => {
+      const all = screen.getAllByTestId('button-editor');
+      // the first button is now the SECOND card (moved down)…
+      expect(all[1].getAttribute('data-button-id')).toBe(firstId);
+      // …and focus followed it onto its now-enabled move-up control (move-down
+      // is disabled at the bottom), rather than being dumped to the page top.
+      const moved = document.querySelector(`[data-button-id="${firstId}"]`)!;
+      expect(moved.querySelector('[data-testid="move-up"]')).toHaveFocus();
+    });
+  });
+});

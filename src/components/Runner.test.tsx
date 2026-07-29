@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import type { BlockWorkflowSnapshot } from '@civitai/app-sdk/blocks';
 
 import { Runner } from './Runner.js';
 import { palette } from '../theme.js';
@@ -140,13 +141,26 @@ describe('Runner — estimate → confirm → submit → poll queue', () => {
     expect(within(results).getAllByTestId('result-image')[0]).toHaveAttribute('src', 'res.jpg');
   });
 
-  it('surfaces a failed submit (e.g. insufficient Buzz) in the queue', async () => {
+  it('classifies a failed submit that reads as insufficient Buzz into the top-up path', async () => {
+    // 'Not enough Buzz.' matches the insufficient classifier → the typed
+    // insufficient card (with an Add Buzz affordance), NOT the generic failure.
     const wf = mockWorkflow({ failSubmit: 'Not enough Buzz.' });
     renderRunner(txtConfig(), { estimate: wf.estimate, submit: wf.submit, poll: wf.poll });
     await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
     await userEvent.click(screen.getByTestId('gen-button'));
     await userEvent.click(await screen.findByTestId('queue-confirm'));
-    expect(await screen.findByTestId('queue-failed')).toHaveTextContent(/enough Buzz/i);
+    expect(await screen.findByTestId('queue-failed-insufficient')).toBeInTheDocument();
+    expect(screen.queryByTestId('queue-failed')).not.toBeInTheDocument();
+  });
+
+  it('surfaces a GENERIC failed submit (non-Buzz) in the queue with its raw error', async () => {
+    const wf = mockWorkflow({ failSubmit: 'Orchestrator unavailable.' });
+    renderRunner(txtConfig(), { estimate: wf.estimate, submit: wf.submit, poll: wf.poll });
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+    expect(await screen.findByTestId('queue-failed')).toHaveTextContent(/orchestrator unavailable/i);
+    expect(screen.queryByTestId('queue-failed-insufficient')).not.toBeInTheDocument();
   });
 
   it('resolves a slow gen that terminates well past the old ~48s window (does not lose the result)', async () => {
@@ -444,5 +458,183 @@ describe('Runner — required exposed inputs gate the run control', () => {
     expect(screen.queryByTestId('runner-required-hint')).not.toBeInTheDocument();
     await userEvent.click(btn);
     await waitFor(() => expect(wf.calls.estimate).toHaveLength(1));
+  });
+});
+
+describe('Runner — money-path balance guard (ship-blocker #2)', () => {
+  it('blocks Confirm and warns when the estimate exceeds the balance', async () => {
+    // cost 42 > balance 10 → Confirm is replaced by an Add-Buzz affordance + warning.
+    const { wf } = renderRunner(txtConfig(), {
+      buzzBalance: 10,
+      onTopUp: vi.fn(async () => ({ purchased: false })),
+    });
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
+    await userEvent.click(screen.getByTestId('gen-button'));
+
+    await screen.findByTestId('queue-cost');
+    expect(screen.getByTestId('queue-insufficient')).toHaveTextContent(/add buzz/i);
+    // no Confirm control (can't afford) → the submit never fires
+    expect(screen.queryByTestId('queue-confirm')).not.toBeInTheDocument();
+    expect(screen.getByTestId('queue-topup')).toBeInTheDocument();
+    expect(wf.calls.submit).toHaveLength(0);
+  });
+
+  it('enables Confirm normally when the balance covers the estimate', async () => {
+    renderRunner(txtConfig(), { buzzBalance: 5000 });
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    expect(await screen.findByTestId('queue-confirm')).toBeInTheDocument();
+    expect(screen.queryByTestId('queue-insufficient')).not.toBeInTheDocument();
+  });
+
+  it('concurrent double-confirm: the 2nd gen lands in the top-up path once the 1st reserves the balance', async () => {
+    // Each gen costs 30 and is individually affordable (30 <= 50), but running
+    // both would exceed the wallet. The first, once in-flight, RESERVES its 30 so
+    // the second sees only 20 available → insufficient (no server round-trip).
+    const wf = mockWorkflow({ cost: 30 });
+    const hangingPoll = (): Promise<BlockWorkflowSnapshot> => new Promise<BlockWorkflowSnapshot>(() => {});
+    renderRunner(txtConfig(), {
+      buzzBalance: 50,
+      estimate: wf.estimate,
+      submit: wf.submit,
+      poll: hangingPoll,
+      onTopUp: vi.fn(async () => ({ purchased: false })),
+    });
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
+
+    // gen A → confirm (affordable) → A goes in-flight (submitting) and hangs there
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+    await waitFor(() => expect(screen.getByTestId('queue-item')).toHaveAttribute('data-status', 'submitting'));
+
+    // gen B → individually affordable, but 30 > (50 − 30 reserved) → insufficient
+    await userEvent.click(screen.getByTestId('gen-button'));
+    expect(await screen.findByTestId('queue-insufficient')).toHaveTextContent(/still running/i);
+    expect(screen.getByTestId('queue-topup')).toBeInTheDocument();
+    // no Confirm anywhere: A is submitting, B is gated on the top-up path
+    expect(screen.queryByTestId('queue-confirm')).not.toBeInTheDocument();
+  });
+});
+
+describe('Runner — insufficient-Buzz top-up (ship-blocker #3)', () => {
+  it('invokes the purchase modal from the pre-submit guard and re-enables Confirm after a top-up', async () => {
+    const onTopUp = vi.fn(async () => ({ purchased: true, newBalance: 100 }));
+    const onBalanceRefresh = vi.fn();
+    // cost 42, balance 10 → insufficient; a purchase lifts the local balance to 100.
+    renderRunner(txtConfig(), { buzzBalance: 10, onTopUp, onBalanceRefresh });
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
+    await userEvent.click(screen.getByTestId('gen-button'));
+
+    await userEvent.click(await screen.findByTestId('queue-topup'));
+    expect(onTopUp).toHaveBeenCalled();
+    expect(onBalanceRefresh).toHaveBeenCalled();
+    // balance badge reflects the new balance and Confirm is now available
+    await waitFor(() => expect(screen.getByTestId('runner-balance')).toHaveTextContent('100'));
+    expect(await screen.findByTestId('queue-confirm')).toBeInTheDocument();
+  });
+
+  it('a failed submit classified as insufficient offers a top-up (typed, not a generic error)', async () => {
+    const onTopUp = vi.fn(async () => ({ purchased: true, newBalance: 9000 }));
+    const wf = mockWorkflow({ failSubmit: 'Insufficient Buzz to run this generation.' });
+    renderRunner(txtConfig(), { estimate: wf.estimate, submit: wf.submit, poll: wf.poll, onTopUp });
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+
+    const card = await screen.findByTestId('queue-failed-insufficient');
+    expect(card).toBeInTheDocument();
+    await userEvent.click(within(card).getByTestId('queue-failed-topup'));
+    expect(onTopUp).toHaveBeenCalled();
+  });
+});
+
+describe('Runner — partial-failure clarity (ship-blocker #6)', () => {
+  it('messages "N of M" when fewer images return than the requested quantity', async () => {
+    // request 4 (via advanced override), only 2 come back → partial notice.
+    const wf = mockWorkflow({ cost: 12, images: ['a.jpg', 'b.jpg'], polls: 1 });
+    renderRunner(txtConfig(), { estimate: wf.estimate, submit: wf.submit, poll: wf.poll });
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
+    await userEvent.click(screen.getByRole('button', { name: /advanced/i }));
+    await userEvent.type(screen.getByTestId('ov-quantity'), '4');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+
+    const partial = await screen.findByTestId('queue-partial');
+    expect(partial).toHaveTextContent('2 of 4');
+    expect(within(await screen.findByTestId('queue-results')).getAllByTestId('result-image')).toHaveLength(2);
+  });
+
+  it('shows NO partial notice when every requested image returns', async () => {
+    const wf = mockWorkflow({ cost: 12, images: ['only.jpg'], polls: 1 });
+    renderRunner(txtConfig(), { estimate: wf.estimate, submit: wf.submit, poll: wf.poll });
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+    await screen.findByTestId('queue-results');
+    expect(screen.queryByTestId('queue-partial')).not.toBeInTheDocument();
+  });
+});
+
+describe('Runner — result actions (feature #10)', () => {
+  it('offers download links, a re-run, and open-in-generator on a succeeded gen', async () => {
+    const onOpenInGenerator = vi.fn();
+    const { wf } = renderRunner(txtConfig(), { onOpenInGenerator });
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+    await screen.findByTestId('queue-results');
+
+    const actions = screen.getByTestId('result-actions');
+    const dl = within(actions).getAllByTestId('result-download');
+    expect(dl[0]).toHaveAttribute('href', 'res.jpg');
+    expect(dl[0]).toHaveAttribute('download');
+
+    // open-in-generator delegates to the host navigation
+    await userEvent.click(within(actions).getByTestId('result-open-generator'));
+    expect(onOpenInGenerator).toHaveBeenCalled();
+
+    // re-run enqueues a fresh estimate with the SAME body
+    const before = wf.calls.estimate.length;
+    await userEvent.click(within(actions).getByTestId('result-rerun'));
+    await waitFor(() => expect(wf.calls.estimate.length).toBe(before + 1));
+    expect(wf.calls.estimate.at(-1)?.params.prompt).toBe('cyberpunk a fox');
+  });
+});
+
+describe('Runner — consent revocation mid-session re-gates the run (test coverage)', () => {
+  it('re-gates generation when the generate scope is revoked mid-session', async () => {
+    const onRequestConsent = vi.fn();
+    const wf = mockWorkflow({ cost: 42, images: ['res.jpg'], polls: 2 });
+    const baseProps = {
+      config: txtConfig(),
+      sharedContentKey: 'shared:99',
+      c,
+      buzzBalance: 5000,
+      onRequestConsent,
+      uploadSourceImage: vi.fn(async () => GENERATION_SOURCE_IMAGE),
+      estimate: wf.estimate,
+      submit: wf.submit,
+      poll: wf.poll,
+      onBack: vi.fn(),
+      pollIntervalMs: 0,
+      sleep: immediateSleep,
+    };
+    const { rerender } = render(<Runner {...baseProps} canGenerate />);
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
+    expect(screen.queryByTestId('consent-needed')).not.toBeInTheDocument();
+
+    // consent revoked upstream (token scope dropped) → canGenerate flips false.
+    rerender(<Runner {...baseProps} canGenerate={false} />);
+    expect(screen.getByTestId('consent-needed')).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('gen-button'));
+    expect(onRequestConsent).toHaveBeenCalled();
+    expect(wf.calls.estimate).toHaveLength(0); // never estimated once re-gated
+  });
+});
+
+describe('Runner — rehydration-failure notice (feature #12)', () => {
+  it('shows a non-blocking notice when passed a rehydrateNotice', () => {
+    renderRunner(txtConfig(), { rehydrateNotice: "Couldn't refresh model details." });
+    expect(screen.getByTestId('runner-rehydrate-notice')).toHaveTextContent(/couldn't refresh/i);
   });
 });

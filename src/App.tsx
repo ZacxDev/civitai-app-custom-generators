@@ -18,11 +18,14 @@ import type {
 } from '@civitai/app-sdk/blocks';
 
 import {
+  useBlockAnalytics,
   useBlockContext,
   useBlockResize,
   useBlockToken,
   useBuzzBalance,
+  useBuzzPurchase,
   useBuzzWorkflow,
+  useCivitaiNavigate,
   useGenerationResources,
   useImageUpload,
   useRequestConsent,
@@ -41,15 +44,26 @@ import type { BackgroundScanResult, GeneratorConfig } from './types.js';
 import { newGenerator, newId } from './lib/generator.js';
 import {
   buildPublishPayload,
+  cloneConfigForFork,
   collectVersionIds,
   parsePublishedGenerator,
   rehydrateConfig,
 } from './lib/generator.js';
+import type { Analytics } from './lib/analytics.js';
+import { ANALYTICS_EVENTS } from './lib/analytics.js';
+import { buildShareUrl, parseDeeplinkKey, stripDeeplinkParam } from './lib/deeplink.js';
+import { setGeneratorMeta } from './lib/meta.js';
 import type { DraftStore, StoredDraft } from './lib/drafts.js';
 import { deleteDraft as deleteDraftFn, listDrafts, saveDraft as saveDraftFn } from './lib/drafts.js';
 import { Browse } from './components/Browse.js';
 import { Builder } from './components/Builder.js';
 import { Runner } from './components/Runner.js';
+
+/** Outcome of the host Buzz-purchase modal (mirrors `useBuzzPurchase`). */
+export interface PurchaseResult {
+  purchased: boolean;
+  newBalance?: number;
+}
 
 export interface AppDeps {
   pickResource: (opts: {
@@ -98,6 +112,20 @@ export interface AppDeps {
   drafts: DraftStore;
   requestConsent: (opts: { scopes: string[] }) => void;
   requestSignIn: () => void;
+  /** Fire-and-forget funnel analytics (default: `useBlockAnalytics()`). */
+  analytics: Analytics;
+  /** Open the host Buzz-purchase modal (insufficient-Buzz recovery). */
+  openPurchaseModal: (suggestedAmount?: number) => Promise<PurchaseResult>;
+  /** Re-request the viewer's Buzz balance (after a spend / top-up). */
+  refreshBalance: () => void;
+  /** Host-mediated navigation within civitai.com (open in the Civitai generator). */
+  navigate: (path: string, target?: 'current' | 'new_tab') => void;
+  /** Copy text to the clipboard (share link). Injectable so jsdom tests can assert it. */
+  copyToClipboard: (text: string) => Promise<void>;
+  /** Read the `?g=` deeplink key at mount (default: `window.location.search`). */
+  getDeeplinkKey: () => string | null;
+  /** The app's current href (for building share links); default `window.location.href`. */
+  getHref: () => string;
   /** Test seams for the poll loop. */
   pollIntervalMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -137,6 +165,9 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   const buzz = useBuzzBalance();
   const { requestConsent } = useRequestConsent();
   const { requestSignIn } = useRequestSignIn();
+  const { track } = useBlockAnalytics();
+  const { openPurchaseModal } = useBuzzPurchase();
+  const { navigate } = useCivitaiNavigate();
 
   const rootRef = useRef<HTMLDivElement>(null);
   useBlockResize(rootRef);
@@ -173,6 +204,16 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       drafts: appStorage as unknown as DraftStore,
       requestConsent,
       requestSignIn,
+      analytics: { track },
+      openPurchaseModal,
+      refreshBalance: buzz.refetch,
+      navigate,
+      copyToClipboard: (text: string) =>
+        navigator?.clipboard?.writeText
+          ? navigator.clipboard.writeText(text)
+          : Promise.reject(new Error('Clipboard unavailable')),
+      getDeeplinkKey: () => parseDeeplinkKey(window.location.search),
+      getHref: () => window.location.href,
       ...depsOverride,
     }),
     // The hook objects are stable across renders (SDK contract); depsOverride is
@@ -197,6 +238,9 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const reload = useCallback(() => setReloadKey((k) => k + 1), []);
+  // Non-blocking notice surfaced in the Runner when best-effort resource
+  // rehydration failed (names/weights may be stale, but the run still works).
+  const [rehydrateNotice, setRehydrateNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!ready || view !== 'browse') return;
@@ -230,6 +274,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
 
   // ---- navigation ----
   const openBuilderNew = useCallback(() => {
+    depsRef.current.analytics.track(ANALYTICS_EVENTS.BUILD_STARTED);
     setEditing({ id: newId('gen'), config: newGenerator() });
     setView('builder');
   }, []);
@@ -239,20 +284,40 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     setView('builder');
   }, []);
 
-  const openConfig = useCallback(async (config: GeneratorConfig, sharedContentKey?: string) => {
-    let resolved = config;
-    try {
-      const ids = collectVersionIds(config);
-      if (ids.length > 0) {
-        const infos = await depsRef.current.resolveResources(ids);
-        resolved = rehydrateConfig(config, infos);
+  const openConfig = useCallback(
+    async (config: GeneratorConfig, sharedContentKey?: string, source: 'published' | 'draft' | 'deeplink' = 'published') => {
+      let resolved = config;
+      setRehydrateNotice(null);
+      try {
+        const ids = collectVersionIds(config);
+        if (ids.length > 0) {
+          const infos = await depsRef.current.resolveResources(ids);
+          resolved = rehydrateConfig(config, infos);
+        }
+      } catch {
+        // Rehydration is best-effort — open with the stored (already-named)
+        // config, but tell the user why some resource names/limits may look off
+        // instead of failing silently.
+        setRehydrateNotice(
+          "Couldn't refresh this generator's model details — names or weight limits may be out of date. You can still run it.",
+        );
       }
-    } catch {
-      // Rehydration is best-effort — open with the stored (already-named) config.
-    }
-    setRunning({ config: resolved, sharedContentKey });
-    setView('runner');
-  }, []);
+      depsRef.current.analytics.track(ANALYTICS_EVENTS.RUN_OPENED, {
+        source,
+        buttons: resolved.buttons.length,
+        published: !!sharedContentKey,
+      });
+      // Best-effort client-side OG/meta for the opened generator (share/same-tab).
+      try {
+        setGeneratorMeta(resolved);
+      } catch {
+        /* meta is cosmetic — never let it block opening the runner. */
+      }
+      setRunning({ config: resolved, sharedContentKey });
+      setView('runner');
+    },
+    [],
+  );
 
   const openPublished = useCallback(
     (item: SharedListItem) => {
@@ -268,7 +333,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
 
   const openDraft = useCallback(
     (draft: StoredDraft) => {
-      void openConfig(draft.config, draft.publishedKey);
+      void openConfig(draft.config, draft.publishedKey, 'draft');
     },
     [openConfig],
   );
@@ -311,6 +376,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       // upserts the SAME draft id, carrying any existing publishedKey.
       const draft = await persistDraft(config);
       const payload = buildPublishPayload(config);
+      let republish = true;
       if (draft.publishedKey) {
         // Already published → UPDATE the same shared row in place. This is the
         // fix for "editing creates a new one": never append a duplicate.
@@ -320,7 +386,13 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         // future edit updates in place instead of duplicating.
         const { key } = await depsRef.current.shared.append(payload);
         await persistDraft(config, key);
+        republish = false;
       }
+      depsRef.current.analytics.track(ANALYTICS_EVENTS.PUBLISHED, {
+        buttons: config.buttons.length,
+        republish,
+        hasHeaderImage: !!config.headerImageRef,
+      });
       reload();
     },
     [persistDraft, reload],
@@ -352,6 +424,95 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       setError(errMsg(e));
     }
   }, []);
+
+  // Cast/remove this viewer's up-vote on a published generator. Returns the
+  // authoritative post-vote count (the Browse card drives the optimistic update
+  // + rollback around this call). Tracks the vote funnel event.
+  const handleVote = useCallback(async (item: SharedListItem, nextVoted: boolean): Promise<number> => {
+    // Anonymous viewers can't vote (the host rejects the mutation). Prompt a
+    // sign-in and reject here instead of letting an optimistic +1 flash and then
+    // silently revert with no explanation.
+    if (!viewer) {
+      depsRef.current.requestSignIn();
+      throw new Error('Sign in to vote.');
+    }
+    const count = nextVoted
+      ? await depsRef.current.shared.vote(item.key)
+      : await depsRef.current.shared.unvote(item.key);
+    depsRef.current.analytics.track(ANALYTICS_EVENTS.VOTED, { voted: nextVoted, key: item.key });
+    // Reflect the authoritative count back into the App's list so a re-render
+    // (or a sort-by-popularity) sees it without a full reload.
+    setShared((list) => list.map((s) => (s.key === item.key ? { ...s, count } : s)));
+    return count;
+  }, [viewer]);
+
+  // "Make a copy" of a published generator into the viewer's own draft so they
+  // can remix it. Reuses the same parse path that opens a generator, then drops
+  // the publishedKey (a fork is a brand-new, unpublished draft) and opens the
+  // Builder on it.
+  const handleFork = useCallback(async (item: SharedListItem) => {
+    if (!viewer) {
+      depsRef.current.requestSignIn();
+      return;
+    }
+    const parsed = parsePublishedGenerator(item.value);
+    if (!parsed) {
+      setError('This generator could not be copied (unrecognised format).');
+      return;
+    }
+    // Deep-clone so the fork shares NO mutable refs with the source shared row.
+    const forked: GeneratorConfig = { ...cloneConfigForFork(parsed), name: `${parsed.name} (copy)`.trim() };
+    const id = newId('gen');
+    const draft: StoredDraft = { id, config: forked, updatedAt: Date.now() };
+    try {
+      await saveDraftFn(depsRef.current.drafts, draft);
+    } catch (e) {
+      setError(errMsg(e));
+      return;
+    }
+    depsRef.current.analytics.track(ANALYTICS_EVENTS.FORKED, { from: item.key });
+    setEditing({ id, config: forked });
+    setView('builder');
+  }, [viewer]);
+
+  // Copy a shareable `?g=<key>` deeplink for a published generator.
+  const handleShare = useCallback(async (item: SharedListItem): Promise<boolean> => {
+    const url = buildShareUrl(depsRef.current.getHref(), item.key);
+    try {
+      await depsRef.current.copyToClipboard(url);
+      depsRef.current.analytics.track(ANALYTICS_EVENTS.SHARED, { key: item.key });
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  // Deep-open a generator from a `?g=<key>` link. Runs once the shared list has
+  // loaded: find the item by key and open it in the Runner. If the key isn't in
+  // the loaded page, note it and leave the user on Browse (the block can't fetch
+  // a single shared row by key — see README limitation).
+  const deeplinkHandled = useRef(false);
+  useEffect(() => {
+    if (deeplinkHandled.current || !ready || loading) return;
+    const key = depsRef.current.getDeeplinkKey();
+    if (!key) {
+      deeplinkHandled.current = true;
+      return;
+    }
+    deeplinkHandled.current = true;
+    const item = shared.find((s) => s.key === key);
+    if (!item) return; // key not on the loaded page — stay on Browse
+    const config = parsePublishedGenerator(item.value);
+    if (!config) return;
+    depsRef.current.analytics.track(ANALYTICS_EVENTS.DEEPLINK_OPENED, { key });
+    // Clean the address bar so a reload / re-share doesn't re-trigger.
+    try {
+      window.history?.replaceState?.(null, '', stripDeeplinkParam(depsRef.current.getHref()));
+    } catch {
+      /* history API may be unavailable — non-fatal. */
+    }
+    void openConfig(config, item.key, 'deeplink');
+  }, [ready, loading, shared, openConfig]);
 
   const requestGenerateConsent = useCallback(() => {
     if (!viewer) {
@@ -399,6 +560,9 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             onEditDraft={openBuilderEdit}
             onDeleteDraft={handleDeleteDraft}
             onDeletePublished={handleDeletePublished}
+            onVote={handleVote}
+            onFork={handleFork}
+            onShare={handleShare}
             onRetry={reload}
           />
         )}
@@ -430,6 +594,11 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             submit={deps.submit}
             poll={deps.poll}
             onBack={backToBrowse}
+            onTopUp={deps.openPurchaseModal}
+            onBalanceRefresh={deps.refreshBalance}
+            onOpenInGenerator={() => deps.navigate('/generate')}
+            analytics={deps.analytics}
+            rehydrateNotice={rehydrateNotice}
             pollIntervalMs={deps.pollIntervalMs}
             sleep={deps.sleep}
           />

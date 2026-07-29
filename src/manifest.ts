@@ -8,8 +8,8 @@
 //
 // All six scopes (`ai:write:budgeted`, `buzz:read:self`, `apps:storage:read`,
 // `apps:storage:write`, `apps:storage:shared:read`, `apps:storage:shared:write`)
-// are members of BLOCK_SCOPES in @civitai/app-sdk@0.18.0, so they validate
-// directly.
+// are members of BLOCK_SCOPES in @civitai/app-sdk (verified against 0.27), so
+// they validate directly.
 
 import { defineBlock } from '@civitai/app-sdk/blocks';
 import type { BlockManifest } from '@civitai/app-sdk/blocks';

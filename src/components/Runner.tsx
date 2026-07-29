@@ -11,7 +11,7 @@
 // scans it at gen time) — distinct from the moderated cosmetic background, which
 // the Builder uploads via the DISPLAY purpose.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type {
   BlockGenerationSourceImageInfo,
   BlockSourceImage,
@@ -24,12 +24,27 @@ import { Alert, Badge, Button, Card, Collapse, Group, Loader, NumberInput, Stack
 import type { GenButton, GeneratorConfig, GenButtonParams, QueueItem } from '../types.js';
 import { DEFAULT_PROMPT_PLACEHOLDER, buildSubmitBody, canRunButton, exposesImage, exposesPrompt, missingRequiredInputs, type RequiredInput } from '../lib/generator.js';
 import { isTerminalSnapshot, mapSnapshotStatus, pollToTerminal } from '../lib/workflow.js';
+import { isInsufficientBuzzError } from '../lib/buzz.js';
+import type { Analytics } from '../lib/analytics.js';
+import { ANALYTICS_EVENTS, noopAnalytics } from '../lib/analytics.js';
 import { token, metaText, type Palette } from '../theme.js';
 import { EmptyState } from './EmptyState.js';
 import { SafeImage } from './SafeImage.js';
 
 interface RunnerItem extends QueueItem {
   body: WorkflowBody;
+  /** How many images this gen requested (for partial-failure "N of M" messaging). */
+  requested: number;
+  /** Set when a terminal failure is classified as insufficient Buzz (top-up path). */
+  insufficientBuzz?: boolean;
+}
+
+/** Suggested top-up amount (Buzz) when a gen can't be afforded — covers the gap + headroom. */
+function topUpSuggestion(cost: number | undefined, balance: number | null | undefined): number {
+  const gap = Math.max(0, (cost ?? 0) - (balance ?? 0));
+  // Round the shortfall up to a friendly increment so the modal opens with a
+  // sensible default the user can adjust.
+  return Math.max(100, Math.ceil(gap / 100) * 100);
 }
 
 export interface RunnerProps {
@@ -47,6 +62,19 @@ export interface RunnerProps {
   poll: (workflowId: string) => Promise<BlockWorkflowSnapshot>;
   onBack: () => void;
   /**
+   * Open the host Buzz-purchase modal (insufficient-Buzz recovery). Resolves
+   * with `{ purchased, newBalance? }`. Omitted → the top-up affordance hides.
+   */
+  onTopUp?: (suggestedAmount?: number) => Promise<{ purchased: boolean; newBalance?: number }>;
+  /** Re-request the viewer's Buzz balance (called after a spend / top-up). */
+  onBalanceRefresh?: () => void;
+  /** Open the on-site Civitai generator (a result action). */
+  onOpenInGenerator?: () => void;
+  /** Funnel analytics sink (defaults to a no-op). */
+  analytics?: Analytics;
+  /** Non-blocking notice (e.g. resource rehydration failed) shown above the form. */
+  rehydrateNotice?: string | null;
+  /**
    * Live-preview mode for the Builder: renders the exact runtime layout but is
    * NON-runnable — pressing a button shows a note instead of estimating/spending.
    */
@@ -59,7 +87,8 @@ export interface RunnerProps {
 }
 
 export function Runner(props: RunnerProps) {
-  const { config, sharedContentKey, c, canGenerate, buzzBalance, onRequestConsent, uploadSourceImage, estimate, submit, poll, onBack, preview = false } = props;
+  const { config, sharedContentKey, c, canGenerate, buzzBalance, onRequestConsent, uploadSourceImage, estimate, submit, poll, onBack, onTopUp, onBalanceRefresh, onOpenInGenerator, rehydrateNotice, preview = false } = props;
+  const analytics = props.analytics ?? noopAnalytics;
 
   const [promptInput, setPromptInput] = useState('');
   const [sourceImage, setSourceImage] = useState<BlockSourceImage | null>(null);
@@ -68,6 +97,16 @@ export function Runner(props: RunnerProps) {
   const [overrides, setOverrides] = useState<Partial<GenButtonParams>>({});
   const [items, setItems] = useState<RunnerItem[]>([]);
   const [runnerError, setRunnerError] = useState<string | null>(null);
+  // Live balance: seeded from the prop, but updated locally after a top-up so
+  // the insufficient-funds guard reflects the just-purchased Buzz immediately.
+  const [localBalance, setLocalBalance] = useState<number | null | undefined>(buzzBalance);
+  const [toppingUp, setToppingUp] = useState(false);
+  const effectiveBalance = localBalance ?? buzzBalance;
+
+  // Keep the local balance in sync when the parent pushes a fresh value.
+  useEffect(() => {
+    setLocalBalance(buzzBalance);
+  }, [buzzBalance]);
 
   // Runtime inputs are INFERRED: the prompt box shows iff some button's template
   // carries a `{prompt}` token; the img2img source box shows iff some button is
@@ -142,8 +181,9 @@ export function Runner(props: RunnerProps) {
       return;
     }
 
+    const requested = requestedQuantity(body);
     const id = `q_${Date.now().toString(36)}_${items.length}`;
-    const item: RunnerItem = { id, buttonLabel: button.label, status: 'estimating', body };
+    const item: RunnerItem = { id, buttonLabel: button.label, status: 'estimating', body, requested };
     setItems((list) => [item, ...list]);
 
     try {
@@ -162,7 +202,15 @@ export function Runner(props: RunnerProps) {
    */
   function applyPollResult(id: string, snap: BlockWorkflowSnapshot) {
     if (isTerminalSnapshot(snap.status)) {
-      patchItem(id, { status: mapSnapshotStatus(snap.status), imageUrls: snap.imageUrls, error: snap.error });
+      const status = mapSnapshotStatus(snap.status);
+      patchItem(id, {
+        status,
+        imageUrls: snap.imageUrls,
+        error: snap.error,
+        insufficientBuzz: status === 'failed' && isInsufficientBuzzError(snap.error),
+      });
+      // A terminal result (success or spend-failure) may have moved the balance.
+      if (status === 'succeeded' || status === 'failed') onBalanceRefresh?.();
     } else {
       patchItem(id, { status: 'stalled', workflowId: snap.workflowId, error: undefined });
     }
@@ -179,9 +227,26 @@ export function Runner(props: RunnerProps) {
   }
 
   async function confirmItem(item: RunnerItem) {
-    patchItem(item.id, { status: 'submitting', error: undefined });
+    patchItem(item.id, { status: 'submitting', error: undefined, insufficientBuzz: undefined });
+    analytics.track(ANALYTICS_EVENTS.GENERATION_SUBMITTED, {
+      buttonLabel: item.buttonLabel,
+      quantity: item.requested,
+      estimatedCost: item.estimatedCost,
+      sharedContentKey,
+    });
     try {
       const snap = await submit(item.body);
+      // A submit that comes straight back failed (e.g. insufficient Buzz) never
+      // reaches the poll loop — classify + surface it here.
+      if (snap.status === 'failed') {
+        patchItem(item.id, {
+          status: 'failed',
+          error: snap.error,
+          insufficientBuzz: isInsufficientBuzzError(snap.error),
+        });
+        onBalanceRefresh?.();
+        return;
+      }
       patchItem(item.id, {
         workflowId: snap.workflowId,
         status: mapSnapshotStatus(snap.status),
@@ -191,8 +256,41 @@ export function Runner(props: RunnerProps) {
       const terminal = await pollToTerminal(poll, snap, pollOpts(item.id));
       applyPollResult(item.id, terminal);
     } catch (e) {
-      patchItem(item.id, { status: 'failed', error: errMsg(e) });
+      const msg = errMsg(e);
+      patchItem(item.id, { status: 'failed', error: msg, insufficientBuzz: isInsufficientBuzzError(msg) });
     }
+  }
+
+  /** Open the host purchase modal to cover a shortfall, then reflect the new balance. */
+  async function topUp(cost: number | undefined) {
+    if (!onTopUp) return;
+    setToppingUp(true);
+    try {
+      const res = await onTopUp(topUpSuggestion(cost, effectiveBalance));
+      if (res.purchased) {
+        if (typeof res.newBalance === 'number') setLocalBalance(res.newBalance);
+        onBalanceRefresh?.();
+      }
+    } catch (e) {
+      setRunnerError(errMsg(e));
+    } finally {
+      setToppingUp(false);
+    }
+  }
+
+  /** Re-run a completed/failed gen with the exact same inputs (a fresh queue item). */
+  function rerun(item: RunnerItem) {
+    const id = `q_${Date.now().toString(36)}_${items.length}`;
+    const clone: RunnerItem = { id, buttonLabel: item.buttonLabel, status: 'estimating', body: item.body, requested: item.requested };
+    setItems((list) => [clone, ...list]);
+    void (async () => {
+      try {
+        const snap = await estimate(item.body);
+        patchItem(id, { status: 'confirming', estimatedCost: snap.cost?.total });
+      } catch (e) {
+        patchItem(id, { status: 'failed', error: errMsg(e) });
+      }
+    })();
   }
 
   /** Re-poll a stalled item (its gen is still running server-side). */
@@ -223,12 +321,18 @@ export function Runner(props: RunnerProps) {
               ← Back
             </Button>
           )}
-          {buzzBalance != null && (
+          {effectiveBalance != null && (
             <Badge variant="light" data-testid="runner-balance">
-              <span style={{ fontVariantNumeric: 'tabular-nums' }}>⚡ {buzzBalance.toLocaleString()}</span>
+              <span style={{ fontVariantNumeric: 'tabular-nums' }}>⚡ {effectiveBalance.toLocaleString()}</span>
             </Badge>
           )}
         </Group>
+
+        {rehydrateNotice && (
+          <Alert color="info" data-testid="runner-rehydrate-notice">
+            {rehydrateNotice}
+          </Alert>
+        )}
 
         {/* cosmetic header/cover banner — a full-width ~16:9 image at the TOP of
             the generator, above the prompt/buttons/generate content (not a
@@ -381,28 +485,95 @@ export function Runner(props: RunnerProps) {
                   </Group>
                 )}
 
-                {it.status === 'confirming' && (
-                  <Group justify="space-between">
-                    <span style={{ fontSize: 14, fontVariantNumeric: 'tabular-nums' }} data-testid="queue-cost">
-                      ≈ {it.estimatedCost ?? '—'} ⚡
-                    </span>
-                    <Group gap={6}>
-                      <Button size="sm" variant="subtle" data-testid="queue-dismiss" onClick={() => dismissItem(it.id)}>
-                        Cancel
-                      </Button>
-                      <Button size="sm" data-testid="queue-confirm" onClick={() => confirmItem(it)}>
-                        Confirm & generate
-                      </Button>
-                    </Group>
-                  </Group>
-                )}
+                {it.status === 'confirming' && (() => {
+                  // DETERMINISTIC balance guard: block Confirm when the estimate
+                  // exceeds the viewer's AVAILABLE balance, and offer a top-up
+                  // instead of letting the server reject the submit generically.
+                  // Available = balance minus Buzz already committed by OTHER
+                  // in-flight gens (submitting/processing) whose debit hasn't been
+                  // reflected in the balance yet — so two individually-affordable
+                  // gens can't be double-confirmed past the wallet.
+                  const reservedByInFlight = items
+                    .filter((o) => o.id !== it.id && (o.status === 'submitting' || o.status === 'processing'))
+                    .reduce((sum, o) => sum + (o.estimatedCost ?? 0), 0);
+                  const available = effectiveBalance != null ? effectiveBalance - reservedByInFlight : null;
+                  const cannotAfford =
+                    it.estimatedCost != null && available != null && it.estimatedCost > available;
+                  return (
+                    <Stack gap={8}>
+                      <Group justify="space-between">
+                        <span style={{ fontSize: 14, fontVariantNumeric: 'tabular-nums' }} data-testid="queue-cost">
+                          ≈ {it.estimatedCost ?? '—'} ⚡
+                        </span>
+                        <Group gap={6}>
+                          <Button size="sm" variant="subtle" data-testid="queue-dismiss" onClick={() => dismissItem(it.id)}>
+                            Cancel
+                          </Button>
+                          {cannotAfford && onTopUp ? (
+                            <Button size="sm" data-testid="queue-topup" loading={toppingUp} onClick={() => topUp(it.estimatedCost)}>
+                              Add Buzz
+                            </Button>
+                          ) : (
+                            <Button size="sm" data-testid="queue-confirm" disabled={cannotAfford} onClick={() => confirmItem(it)}>
+                              Confirm &amp; generate
+                            </Button>
+                          )}
+                        </Group>
+                      </Group>
+                      {cannotAfford && (
+                        <Alert color="warning" data-testid="queue-insufficient">
+                          This generation costs {it.estimatedCost} ⚡ but you have{' '}
+                          {(available ?? 0).toLocaleString()} ⚡ available
+                          {reservedByInFlight > 0 ? ' (other generations are still running)' : ''}. Add Buzz to
+                          continue.
+                        </Alert>
+                      )}
+                    </Stack>
+                  );
+                })()}
 
                 {it.status === 'succeeded' && it.imageUrls && it.imageUrls.length > 0 && (
-                  <div data-testid="queue-results" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(120px,1fr))', gap: 8 }}>
-                    {it.imageUrls.map((u, i) => (
-                      <img key={`${u}-${i}`} src={u} alt={`Result ${i + 1}`} data-testid="result-image" style={{ width: '100%', borderRadius: 8 }} />
-                    ))}
-                  </div>
+                  <Stack gap={8}>
+                    {/* Partial-failure clarity: fewer images than requested means
+                        the rest failed and were refunded. Say so explicitly
+                        instead of silently rendering a short grid. */}
+                    {it.imageUrls.length < it.requested && (
+                      <Alert color="info" data-testid="queue-partial">
+                        {it.imageUrls.length} of {it.requested} images generated — you were only charged for the
+                        {it.imageUrls.length === 1 ? ' one that succeeded' : ' images that succeeded'} (the rest were refunded).
+                      </Alert>
+                    )}
+                    {/* TODO(track-u): swap these raw <img>s for @civitai/components'
+                        Image primitive (lazy-load + placeholder) once Track U ships it. */}
+                    <div data-testid="queue-results" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(120px,1fr))', gap: 8 }}>
+                      {it.imageUrls.map((u, i) => (
+                        <img key={`${u}-${i}`} src={u} alt={`Result ${i + 1}`} data-testid="result-image" style={{ width: '100%', borderRadius: 8 }} />
+                      ))}
+                    </div>
+                    {/* Result actions: download each image, re-run the same inputs,
+                        or continue in the on-site Civitai generator. */}
+                    <Group gap={6} data-testid="result-actions">
+                      {it.imageUrls.map((u, i) => (
+                        <a
+                          key={`dl-${u}-${i}`}
+                          href={u}
+                          download
+                          data-testid="result-download"
+                          style={{ fontSize: 12, textDecoration: 'none', padding: '4px 10px', borderRadius: 6, border: `1px solid ${c.border}`, color: c.fg }}
+                        >
+                          ↓ Image {i + 1}
+                        </a>
+                      ))}
+                      <Button size="sm" variant="light" data-testid="result-rerun" onClick={() => rerun(it)}>
+                        Re-run
+                      </Button>
+                      {onOpenInGenerator && (
+                        <Button size="sm" variant="subtle" data-testid="result-open-generator" onClick={onOpenInGenerator}>
+                          Open in Civitai generator
+                        </Button>
+                      )}
+                    </Group>
+                  </Stack>
                 )}
 
                 {it.status === 'stalled' && (
@@ -418,7 +589,25 @@ export function Runner(props: RunnerProps) {
                   </Alert>
                 )}
 
-                {it.status === 'failed' && (
+                {it.status === 'failed' && it.insufficientBuzz && (
+                  <Alert color="warning" data-testid="queue-failed-insufficient">
+                    <Stack gap={8}>
+                      <span>Not enough Buzz to finish this generation.</span>
+                      <Group justify="flex-end" gap={6}>
+                        {onTopUp && (
+                          <Button size="sm" data-testid="queue-failed-topup" loading={toppingUp} onClick={() => topUp(it.estimatedCost)}>
+                            Add Buzz
+                          </Button>
+                        )}
+                        <Button size="sm" variant="light" data-testid="queue-failed-rerun" onClick={() => rerun(it)}>
+                          Try again
+                        </Button>
+                      </Group>
+                    </Stack>
+                  </Alert>
+                )}
+
+                {it.status === 'failed' && !it.insufficientBuzz && (
                   <Alert color="error" data-testid="queue-failed">
                     {it.error ?? 'Generation failed.'}
                   </Alert>
@@ -471,6 +660,12 @@ function statusColor(s: QueueItem['status']): 'primary' | 'success' | 'error' | 
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : 'Something went wrong.';
+}
+
+/** How many images a body requested (for partial-failure "N of M" messaging). */
+function requestedQuantity(body: WorkflowBody): number {
+  const q = body.kind === 'textToImage' ? body.params.quantity : undefined;
+  return typeof q === 'number' && q > 0 ? q : 1;
 }
 
 /** Human-readable "what's still needed to run" from a button's missing inputs. */

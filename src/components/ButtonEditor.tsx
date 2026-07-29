@@ -6,7 +6,7 @@
 // the template carries a `{prompt}` token; the img2img source box shows iff the
 // workflow is img2img. Inline hints explain what each button will surface.
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import type { BlockResourceInfo, BlockResourcePickerType } from '@civitai/app-sdk/blocks';
 
@@ -27,6 +27,7 @@ import {
 import type { GenButton, LoraRef, WorkflowType } from '../types.js';
 import {
   MAX_LORAS,
+  PARAM_BOUNDS,
   PROMPT_TOKEN,
   WORKFLOW_TYPES,
   checkpointFromPick,
@@ -63,6 +64,34 @@ export function ButtonEditor({
 }: ButtonEditorProps) {
   const [advanced, setAdvanced] = useState(false);
   const [picking, setPicking] = useState<null | 'ckpt' | 'lora'>(null);
+
+  // a11y: after a reorder the moved card jumps position; keep keyboard focus on
+  // its move control (or the still-enabled sibling / the card) so a keyboard user
+  // isn't dumped back to the top of the page.
+  const pendingFocus = useRef<null | -1 | 1>(null);
+  function moveWithFocus(dir: -1 | 1) {
+    pendingFocus.current = dir;
+    onMove(dir);
+  }
+  useEffect(() => {
+    const dir = pendingFocus.current;
+    if (dir == null) return;
+    pendingFocus.current = null;
+    requestAnimationFrame(() => {
+      const scope = document.querySelector<HTMLElement>(
+        `[data-testid="button-editor"][data-button-id="${button.id}"]`,
+      );
+      if (!scope) return;
+      const up = scope.querySelector<HTMLButtonElement>('[data-testid="move-up"]');
+      const down = scope.querySelector<HTMLButtonElement>('[data-testid="move-down"]');
+      const primary = dir === -1 ? up : down;
+      const fallback = dir === -1 ? down : up;
+      const target = primary && !primary.disabled ? primary : fallback && !fallback.disabled ? fallback : scope;
+      target?.focus();
+    });
+    // index changes exactly when THIS card moved; other shifted cards have no
+    // pendingFocus so they no-op.
+  }, [index, button.id]);
 
   async function pickCheckpoint() {
     setPicking('ckpt');
@@ -117,7 +146,7 @@ export function ButtonEditor({
   const showsImage = exposesImage(button);
 
   return (
-    <Card withBorder padding="md" data-testid="button-editor" data-button-id={button.id}>
+    <Card withBorder padding="md" data-testid="button-editor" data-button-id={button.id} tabIndex={-1}>
       <Stack gap={12}>
         <Group justify="space-between">
           <Badge>{`Button ${index + 1}`}</Badge>
@@ -128,7 +157,7 @@ export function ButtonEditor({
               aria-label="Move button up"
               data-testid="move-up"
               disabled={index === 0}
-              onClick={() => onMove(-1)}
+              onClick={() => moveWithFocus(-1)}
             >
               ↑
             </Button>
@@ -138,7 +167,7 @@ export function ButtonEditor({
               aria-label="Move button down"
               data-testid="move-down"
               disabled={index === count - 1}
-              onClick={() => onMove(1)}
+              onClick={() => moveWithFocus(1)}
             >
               ↓
             </Button>
@@ -278,16 +307,19 @@ export function ButtonEditor({
               data-testid="param-sampler"
               onChange={(e) => setParam({ sampler: e.currentTarget.value })}
             />
-            <NumberField label="CFG" testid="param-cfg" value={p.cfgScale} min={1} max={30} onChange={(n) => setParam({ cfgScale: n })} />
-            <NumberField label="Steps" testid="param-steps" value={p.steps} min={1} max={50} onChange={(n) => setParam({ steps: n })} />
-            <NumberField label="Width" testid="param-width" value={p.width} min={64} max={2048} step={64} onChange={(n) => setParam({ width: n })} />
-            <NumberField label="Height" testid="param-height" value={p.height} min={64} max={2048} step={64} onChange={(n) => setParam({ height: n })} />
-            <NumberField label="Quantity" testid="param-quantity" value={p.quantity} min={1} max={4} onChange={(n) => setParam({ quantity: n })} />
+            {/* min/max come from PARAM_BOUNDS (single-sourced with the run-path
+                clamp in lib/generator.ts) so authoring inputs and the untrusted
+                clamp can never drift. */}
+            <NumberField label="CFG" testid="param-cfg" value={p.cfgScale} min={PARAM_BOUNDS.cfgScale.min} max={PARAM_BOUNDS.cfgScale.max} onChange={(n) => setParam({ cfgScale: n })} />
+            <NumberField label="Steps" testid="param-steps" value={p.steps} min={PARAM_BOUNDS.steps.min} max={PARAM_BOUNDS.steps.max} onChange={(n) => setParam({ steps: n })} />
+            <NumberField label="Width" testid="param-width" value={p.width} min={PARAM_BOUNDS.width.min} max={PARAM_BOUNDS.width.max} step={64} onChange={(n) => setParam({ width: n })} />
+            <NumberField label="Height" testid="param-height" value={p.height} min={PARAM_BOUNDS.height.min} max={PARAM_BOUNDS.height.max} step={64} onChange={(n) => setParam({ height: n })} />
+            <NumberField label="Quantity" testid="param-quantity" value={p.quantity} min={PARAM_BOUNDS.quantity.min} max={PARAM_BOUNDS.quantity.max} onChange={(n) => setParam({ quantity: n })} />
             <NumberField
               label="Seed (blank = random)"
               testid="param-seed"
               value={p.seed ?? undefined}
-              min={0}
+              min={PARAM_BOUNDS.seed.min}
               onChange={(n) => setParam({ seed: n ?? null })}
             />
           </div>

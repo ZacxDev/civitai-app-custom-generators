@@ -1,6 +1,8 @@
 import { StrictMode } from 'react';
+import type { ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BlockGate, injectBlocksStyles } from '@civitai/blocks-react/ui';
+import { useBlockAnalytics } from '@civitai/blocks-react';
 
 // Design-system tokens (`--civitai-*` custom properties, light/dark via
 // `[data-theme]`). The pack's injectBlocksStyles() also injects these at
@@ -9,9 +11,26 @@ import { BlockGate, injectBlocksStyles } from '@civitai/blocks-react/ui';
 import '@civitai/theme/styles.css';
 
 import { App } from './App.js';
+import { ErrorBoundary } from './components/ErrorBoundary.js';
+import { ANALYTICS_EVENTS } from './lib/analytics.js';
 import { Harness } from './Harness.js';
 import { installHarnessTransport } from './dev-transport.js';
 import './index.css';
+
+// Top-level boundary wrapper that reports caught render crashes to analytics
+// (fire-and-forget) so a malformed shared row that crashes a child is visible in
+// telemetry, not just recovered silently. Mounted INSIDE <BlockGate> (only the
+// embedded path renders it), so `useBlockAnalytics()` always has host context.
+function RootBoundary({ children }: { children: ReactNode }) {
+  const { track } = useBlockAnalytics();
+  return (
+    <ErrorBoundary
+      onError={(error) => track(ANALYTICS_EVENTS.APP_CRASHED, { message: error.message, stack: error.stack })}
+    >
+      {children}
+    </ErrorBoundary>
+  );
+}
 
 // Inject the /ui pack's themed stylesheet once up-front (idempotent; the pack
 // components also self-inject on first render — this just guarantees tokens
@@ -37,9 +56,12 @@ if (!container) throw new Error('#root missing from index.html');
 // DIRECTLY (top-level at its bare `<slug>.civit.ai` origin, no BLOCK_INIT)
 // instead of hanging on the app's loading state. It's inert on the embedded
 // happy path and the dev harness (both post BLOCK_INIT), so it renders the app
-// unchanged there. The run slug is derived from `location.hostname`.
+// unchanged there. The run slug is derived from `location.hostname`. The
+// RootBoundary error boundary wraps the actual app inside the gate.
 createRoot(container).render(
   <StrictMode>
-    <BlockGate>{useHarness ? <Harness><App /></Harness> : <App />}</BlockGate>
+    <BlockGate>
+      <RootBoundary>{useHarness ? <Harness><App /></Harness> : <App />}</RootBoundary>
+    </BlockGate>
   </StrictMode>,
 );
