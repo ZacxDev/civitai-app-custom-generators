@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" role="img" aria-label="Custom Generators cover">
+  <!-- Custom Generators cover — "Build the button. Share the button."
+       Modular violet bars travel left to right, converging into a symmetric funnel and
+       emerging as a neat row of identical gold diamonds. Many inputs, one output.
+       Left third is nearly empty (two sparse bars entering) — density rises toward the mouth.
+       No bracket, no spine: the funnel is bilaterally symmetric so nothing reads as a digit.
+       Palette: ink #0B0E14 ground · violet #7C4DFF bars · gold #FFD166 diamonds. -->
+  <rect width="1600" height="900" fill="#0B0E14"/>
+  <g fill="#7C4DFF">
+    <!-- quiet left third: the feed entering -->
+    <rect x="90"  y="345" width="210" height="30" rx="15"/>
+    <rect x="140" y="525" width="200" height="30" rx="15"/>
+    <!-- the funnel: seven bars whose right ends converge on a single point at (1180,450) -->
+    <rect x="760" y="158" width="177" height="44" rx="22"/>
+    <rect x="680" y="248" width="338" height="44" rx="22"/>
+    <rect x="620" y="338" width="479" height="44" rx="22"/>
+    <rect x="560" y="428" width="620" height="44" rx="22"/>
+    <rect x="620" y="518" width="479" height="44" rx="22"/>
+    <rect x="680" y="608" width="338" height="44" rx="22"/>
+    <rect x="760" y="698" width="177" height="44" rx="22"/>
+  </g>
+  <!-- the output: identical, evenly spaced, the only warm element -->
+  <g fill="#FFD166">
+    <polygon points="1400,284 1446,330 1400,376 1354,330"/>
+    <polygon points="1400,404 1446,450 1400,496 1354,450"/>
+    <polygon points="1400,524 1446,570 1400,616 1354,570"/>
+  </g>
+</svg>
