@@ -1,13 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Custom Generators">
-  <!-- Custom Generators — "Build the button. Share the button."
-       Motif: the funnel. Three bars of decreasing width taper to one gold diamond.
-       Centered and bilaterally symmetric — no letterform to collapse into (rev-2 §2.1).
-       Palette: plate #7C4DFF · bars #B9A3FF · diamond #FFD166 (3 colours). -->
-  <rect width="1024" height="1024" rx="224" fill="#7C4DFF"/>
-  <g fill="#B9A3FF">
-    <rect x="202" y="246" width="620" height="76" rx="38"/>
-    <rect x="292" y="362" width="440" height="76" rx="38"/>
-    <rect x="382" y="478" width="260" height="76" rx="38"/>
-  </g>
-  <polygon points="512,586 612,686 512,786 412,686" fill="#FFD166"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" fill="#A880ED"/>
+  <circle cx="512.00" cy="512.00" r="330.00" fill="#8046E5"/>
+  <circle cx="512.00" cy="512.00" r="254.00" fill="#A880ED"/>
+  <circle cx="512.00" cy="512.00" r="194.00" fill="#F6F2FD"/>
 </svg>
