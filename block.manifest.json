@@ -3,6 +3,7 @@
   "blockId": "custom-generators",
   "version": "0.4.0",
   "name": "Custom Generators",
+  "tagline": "Build the button. Share the button.",
   "type": "block",
   "category": "generation",
   "scopes": [
