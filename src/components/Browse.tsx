@@ -12,13 +12,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react';
 
-import { Alert, Badge, Button, Card, Group, Loader, Modal, SegmentedControl, Stack, TextInput } from '@civitai/blocks-react/ui';
+import { Alert, Badge, Button, Card, Group, Loader, Modal, Stack, TextInput } from '@civitai/blocks-react/ui';
+// Design-system primitives (`@civitai/components-react` 0.3.0): the accessible
+// SegmentedControl, hover/focus Tooltip, and the Toast notification system. These
+// render the same `data-civitai-ui` + `--civitai-*` token contract as the
+// blocks-react/ui pack, so they sit alongside it as one visual system.
+import { SegmentedControl, Tooltip, ToastProvider, useToast } from '@civitai/components-react';
 
 import type { SharedListItem } from '@civitai/blocks-react';
 import type { StoredDraft } from '../lib/drafts.js';
-import type { GeneratorData } from '../types.js';
 import { token, radius, metaText, type Palette } from '../theme.js';
+import { formatCostRange, generatorCostRange } from '../lib/cost.js';
+import { EXAMPLE_SHARED_ITEMS } from '../lib/examples.js';
 import { EmptyState } from './EmptyState.js';
+import { IntroPanel } from './IntroPanel.js';
 import { SafeImage } from './SafeImage.js';
 
 type Tab = 'discover' | 'mine';
@@ -37,6 +44,8 @@ export interface BrowseProps {
   myDrafts: StoredDraft[];
   myPublished: SharedListItem[];
   viewerId: number | null;
+  /** Prompt the logged-out viewer to sign in (persistent header affordance). */
+  onSignIn: () => void;
   onCreate: () => void;
   onOpenPublished: (item: SharedListItem) => void;
   onOpenDraft: (draft: StoredDraft) => void;
@@ -50,17 +59,14 @@ export interface BrowseProps {
   onFork: (item: SharedListItem) => void;
   /** Copy a shareable deeplink; resolves `true` on a successful copy. */
   onShare: (item: SharedListItem) => Promise<boolean>;
+  /**
+   * The per-viewer MODERATED cover url for a card, resolved by the host from the
+   * stored `headerImageRef.imageId` (via `useGatedImages`). 🔴 Covers render from
+   * THIS only — never from the unmoderated stored `url`. `null` (hidden / above
+   * the viewer's ceiling / unresolved / no cover) ⇒ no cover image.
+   */
+  coverUrlFor: (item: SharedListItem) => string | null;
   onRetry: () => void;
-}
-
-/**
- * The cosmetic cover image url for a published generator, read from the opaque
- * `data` blob. Accepts the new `headerImageRef` AND the legacy
- * `backgroundImageRef` (rows published before the header-image rename).
- */
-function headerImageUrl(item: SharedListItem): string | undefined {
-  const data = item.value.data as GeneratorData | undefined;
-  return (data?.headerImageRef ?? data?.backgroundImageRef)?.url;
 }
 
 /** Case-insensitive match against a published generator's title + description. */
@@ -76,8 +82,10 @@ interface VoteState {
 }
 
 export function Browse(props: BrowseProps) {
-  const { c, loading, error, discover, myDrafts, myPublished, viewerId, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onRetry } = props;
+  const { c, loading, error, discover, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, coverUrlFor, onRetry } = props;
   const [tab, setTab] = useState<Tab>('discover');
+  // One-time onboarding intro on Discover; dismissed for the session.
+  const [introDismissed, setIntroDismissed] = useState(false);
   // Confirm-gated withdraw of an own published generator.
   const [pendingDelete, setPendingDelete] = useState<SharedListItem | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -176,6 +184,10 @@ export function Browse(props: BrowseProps) {
   const visibleDrafts = myDrafts.slice(0, draftsVisible);
 
   return (
+    // ToastProvider owns the share-confirmation toast (see PublishedCard). Scoped
+    // to Browse (the only surface that raises a toast) so it needs no app-root
+    // wiring and each Browse render — including tests — is self-contained.
+    <ToastProvider>
     <Stack gap={16} data-testid="browse">
       <Group
         justify="space-between"
@@ -191,12 +203,21 @@ export function Browse(props: BrowseProps) {
             <h1 style={{ margin: 0, fontSize: 19, letterSpacing: '-0.01em', lineHeight: 1.2 }}>
               Custom Generators
             </h1>
-            <span style={metaText}>Build and run one-tap image generators</span>
+            <span style={metaText}>Build and run one-click image generators</span>
           </Stack>
         </Group>
-        <Button data-testid="create-generator" leftSection="+" onClick={onCreate}>
-          Create
-        </Button>
+        {viewerId == null ? (
+          // Persistent top-level sign-in for anonymous viewers — building, running,
+          // voting and forking all need an account, so surface it up front instead
+          // of only reacting when they try one of those actions.
+          <Button data-testid="header-signin" onClick={onSignIn}>
+            Sign in to build &amp; run
+          </Button>
+        ) : (
+          <Button data-testid="create-generator" leftSection="+" onClick={onCreate}>
+            Create
+          </Button>
+        )}
       </Group>
 
       <div ref={tablistRef}>
@@ -232,6 +253,15 @@ export function Browse(props: BrowseProps) {
       {tab === 'discover' && (
         <div role="tabpanel" id="panel-discover" aria-labelledby="tab-discover" tabIndex={0}>
           <Stack gap={10} data-testid="discover-list">
+            {!introDismissed && (
+              <IntroPanel
+                c={c}
+                examples={EXAMPLE_SHARED_ITEMS}
+                onTryExample={onFork}
+                onCreate={onCreate}
+                onDismiss={() => setIntroDismissed(true)}
+              />
+            )}
             <Group justify="space-between" gap={8} style={{ flexWrap: 'wrap' }}>
               <div style={{ flex: '1 1 200px', minWidth: 160 }}>
                 <TextInput
@@ -260,14 +290,17 @@ export function Browse(props: BrowseProps) {
                 <span style={metaText}>Loading generators…</span>
               </Group>
             )}
-            {!loading && filteredDiscover.length === 0 && (
+            {/* When the intro panel is showing and there's no query, it already
+                carries the concept + a "Build your own" CTA, so the plain empty
+                panel would be redundant — suppress it in that case. */}
+            {!loading && filteredDiscover.length === 0 && (query.trim() || introDismissed) && (
               <EmptyState
                 data-testid="discover-empty"
                 title={query.trim() ? 'No matches' : 'No published generators yet'}
                 body={
                   query.trim()
                     ? `No generators match “${query.trim()}”.`
-                    : 'Build a set of one-tap generation buttons and publish it for everyone to run.'
+                    : 'Build a set of one-click generation buttons and publish it for everyone to run.'
                 }
                 action={
                   query.trim() ? undefined : (
@@ -285,6 +318,7 @@ export function Browse(props: BrowseProps) {
                   key={item.key}
                   item={item}
                   c={c}
+                  coverUrl={coverUrlFor(item)}
                   voteCount={vs.count}
                   voted={vs.voted}
                   onVote={() => toggleVote(item)}
@@ -371,6 +405,7 @@ export function Browse(props: BrowseProps) {
                     key={item.key}
                     item={item}
                     c={c}
+                    coverUrl={coverUrlFor(item)}
                     voteCount={vs.count}
                     voted={vs.voted}
                     onVote={() => toggleVote(item)}
@@ -421,6 +456,7 @@ export function Browse(props: BrowseProps) {
         </Stack>
       </Modal>
     </Stack>
+    </ToastProvider>
   );
 }
 
@@ -457,6 +493,7 @@ function WandIcon(): React.JSX.Element {
 function PublishedCard({
   item,
   c,
+  coverUrl,
   voteCount,
   voted,
   onVote,
@@ -467,6 +504,8 @@ function PublishedCard({
 }: {
   item: SharedListItem;
   c: Palette;
+  /** Host-resolved MODERATED cover url (from the stored `imageId`), or null. */
+  coverUrl: string | null;
   voteCount: number;
   voted: boolean;
   onVote: () => void;
@@ -478,16 +517,19 @@ function PublishedCard({
   /** When present, renders a confirm-gated Delete affordance (own published only). */
   onDelete?: () => void;
 }) {
-  const coverUrl = headerImageUrl(item);
   const desc = (item.value.body ?? '').split('\n')[0];
-  const [copied, setCopied] = useState(false);
+  // Approximate at-a-glance run cost (heuristic; the real price is the host
+  // estimate on the run path). Shown prefixed with "≈" so it never reads as exact.
+  const costLabel = formatCostRange(generatorCostRange(item.value));
+  const toast = useToast();
 
   async function share() {
     if (!onShare) return;
     const ok = await onShare();
     if (ok) {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      // Confirm the copy via the design-system Toast (auto-dismisses) instead of
+      // the former inline "Copied!" button-label swap.
+      toast.show({ message: 'Link copied to clipboard', color: 'success' });
     }
   }
 
@@ -512,27 +554,39 @@ function PublishedCard({
                 {desc}
               </div>
             )}
+            {costLabel && (
+              <div
+                style={{ ...metaText, marginTop: 4, fontVariantNumeric: 'tabular-nums' }}
+                data-testid="published-cost"
+              >
+                {costLabel}
+              </div>
+            )}
           </div>
           <Group gap={8} wrap={false}>
-            <Button
-              size="sm"
-              variant={voted ? 'light' : 'subtle'}
-              data-testid="vote-button"
-              aria-pressed={voted}
-              aria-label={voted ? 'Remove upvote' : 'Upvote'}
-              onClick={onVote}
-            >
-              ▲ <Badge variant="light" data-testid="published-votes"><span style={{ fontVariantNumeric: 'tabular-nums' }}>{voteCount}</span></Badge>
-            </Button>
+            <Tooltip label={voted ? 'Remove your upvote' : 'Upvote this generator'}>
+              <Button
+                size="sm"
+                variant={voted ? 'light' : 'subtle'}
+                data-testid="vote-button"
+                aria-pressed={voted}
+                aria-label={voted ? 'Remove upvote' : 'Upvote'}
+                onClick={onVote}
+              >
+                ▲ <Badge variant="light" data-testid="published-votes"><span style={{ fontVariantNumeric: 'tabular-nums' }}>{voteCount}</span></Badge>
+              </Button>
+            </Tooltip>
             {onShare && (
               <Button size="sm" variant="subtle" data-testid="published-share" onClick={share}>
-                {copied ? 'Copied!' : 'Share'}
+                Share
               </Button>
             )}
             {onFork && (
-              <Button size="sm" variant="subtle" data-testid="published-fork" onClick={onFork}>
-                Make a copy
-              </Button>
+              <Tooltip label="Fork into your own editable draft">
+                <Button size="sm" variant="subtle" data-testid="published-fork" onClick={onFork}>
+                  Make a copy
+                </Button>
+              </Tooltip>
             )}
             {onDelete && (
               <Button size="sm" variant="subtle" color="error" data-testid="published-delete" onClick={onDelete}>

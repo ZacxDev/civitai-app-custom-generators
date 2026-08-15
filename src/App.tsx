@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  BlockGatedImage,
   BlockGenerationSourceImageInfo,
   BlockPendingImageInfo,
   BlockResourceInfo,
@@ -26,6 +27,7 @@ import {
   useBuzzPurchase,
   useBuzzWorkflow,
   useCivitaiNavigate,
+  useGatedImages,
   useGenerationResources,
   useImageUpload,
   useRequestConsent,
@@ -46,6 +48,7 @@ import {
   buildPublishPayload,
   cloneConfigForFork,
   collectVersionIds,
+  headerImageRefOf,
   parsePublishedGenerator,
   rehydrateConfig,
 } from './lib/generator.js';
@@ -98,6 +101,13 @@ export interface AppDeps {
    */
   uploadSourceImage: () => Promise<BlockGenerationSourceImageInfo | null>;
   resolveResources: (ids: number[]) => Promise<BlockResourceInfo[]>;
+  /**
+   * Resolve per-VIEWER MODERATED display data for a list of image ids
+   * (`useGatedImages().getImages`). Each result is `visible` (incl. a host-served
+   * `url`) or `hidden` (NO url). 🔴 This is the ONLY sanctioned source of a cover
+   * url — the stored `headerImageRef.url` is unmoderated and never rendered.
+   */
+  getImages: (imageIds: number[]) => Promise<BlockGatedImage[]>;
   estimate: (body: WorkflowBody) => Promise<BlockWorkflowSnapshot>;
   submit: (body: WorkflowBody) => Promise<BlockWorkflowSnapshot>;
   poll: (workflowId: string) => Promise<BlockWorkflowSnapshot>;
@@ -147,6 +157,8 @@ interface EditTarget {
 interface RunTarget {
   config: GeneratorConfig;
   sharedContentKey?: string;
+  /** Host-resolved MODERATED cover url (from `headerImageRef.imageId`), or null. */
+  headerUrl?: string | null;
 }
 
 export function App({ deps: depsOverride }: AppProps = {}) {
@@ -159,6 +171,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   const imageUpload = useImageUpload({ asyncScan: true });
   const sourceUpload = useImageUpload({ purpose: 'generationSource' });
   const genResources = useGenerationResources();
+  const gatedImages = useGatedImages();
   const workflow = useBuzzWorkflow();
   const sharedHook = useSharedStorage();
   const appStorage = useAppStorage();
@@ -192,6 +205,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       },
       uploadSourceImage: sourceUpload.open,
       resolveResources: genResources.fetch,
+      getImages: gatedImages.getImages,
       estimate: workflow.estimate,
       submit: workflow.submit,
       poll: workflow.poll,
@@ -242,6 +256,13 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   // rehydration failed (names/weights may be stale, but the run still works).
   const [rehydrateNotice, setRehydrateNotice] = useState<string | null>(null);
 
+  // 🔴 Per-viewer MODERATED cover urls for the Discover/Mine cards, keyed by the
+  // stored `headerImageRef.imageId`. Resolved via the host `getImages` gate (see
+  // the effect below): a `visible` id maps to its host-served url, everything
+  // else (hidden / above the viewer's ceiling / unresolved / errored) maps to
+  // `null` so a card NEVER falls back to the unmoderated stored `url`.
+  const [coverUrls, setCoverUrls] = useState<Record<number, string | null>>({});
+
   useEffect(() => {
     if (!ready || view !== 'browse') return;
     let cancelled = false;
@@ -270,6 +291,48 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   const myPublished = useMemo(
     () => (viewer ? shared.filter((s) => s.authorUserId === viewer.id) : []),
     [shared, viewer],
+  );
+
+  // Resolve the MODERATED cover url for every card whose stored data carries a
+  // header `imageId` not yet resolved. Batches the ids through the host
+  // `getImages` gate; a `visible` id keeps its host-served url, all others map to
+  // `null` (never the unmoderated stored url). Failures fail-closed to `null`.
+  useEffect(() => {
+    const wanted = new Set<number>();
+    for (const item of shared) {
+      const id = headerImageRefOf(item.value)?.imageId;
+      if (typeof id === 'number') wanted.add(id);
+    }
+    const missing = [...wanted].filter((id) => !(id in coverUrls));
+    if (missing.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      // Seed every requested id to null first, so an unresolved/omitted id is a
+      // definitive "no cover", never a fall-through to the raw url.
+      const resolved: Record<number, string | null> = {};
+      for (const id of missing) resolved[id] = null;
+      try {
+        const images = await depsRef.current.getImages(missing);
+        for (const img of images) {
+          resolved[img.imageId] = img.status === 'visible' ? img.url : null;
+        }
+      } catch {
+        /* fail-closed — leave the seeded nulls (no cover) */
+      }
+      if (!cancelled) setCoverUrls((prev) => ({ ...prev, ...resolved }));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [shared, coverUrls]);
+
+  // Card cover lookup passed to Browse: the resolved moderated url, or null.
+  const coverUrlFor = useCallback(
+    (item: SharedListItem): string | null => {
+      const id = headerImageRefOf(item.value)?.imageId;
+      return typeof id === 'number' ? coverUrls[id] ?? null : null;
+    },
+    [coverUrls],
   );
 
   // ---- navigation ----
@@ -307,13 +370,27 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         buttons: resolved.buttons.length,
         published: !!sharedContentKey,
       });
-      // Best-effort client-side OG/meta for the opened generator (share/same-tab).
+      // 🔴 Resolve the MODERATED cover url from the stored `imageId` (never the
+      // unmoderated stored `url`). Fail-closed to null (no banner) on hidden /
+      // unresolved / error.
+      let headerUrl: string | null = null;
+      const headerId = resolved.headerImageRef?.imageId;
+      if (typeof headerId === 'number') {
+        try {
+          const [img] = await depsRef.current.getImages([headerId]);
+          headerUrl = img && img.status === 'visible' ? img.url : null;
+        } catch {
+          headerUrl = null;
+        }
+      }
+      // Best-effort client-side OG/meta — og:image ONLY from the resolved
+      // moderated cover url.
       try {
-        setGeneratorMeta(resolved);
+        setGeneratorMeta(resolved, headerUrl);
       } catch {
         /* meta is cosmetic — never let it block opening the runner. */
       }
-      setRunning({ config: resolved, sharedContentKey });
+      setRunning({ config: resolved, sharedContentKey, headerUrl });
       setView('runner');
     },
     [],
@@ -554,6 +631,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             myDrafts={myDrafts}
             myPublished={myPublished}
             viewerId={viewer?.id ?? null}
+            onSignIn={deps.requestSignIn}
             onCreate={openBuilderNew}
             onOpenPublished={openPublished}
             onOpenDraft={openDraft}
@@ -563,6 +641,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             onVote={handleVote}
             onFork={handleFork}
             onShare={handleShare}
+            coverUrlFor={coverUrlFor}
             onRetry={reload}
           />
         )}
@@ -585,6 +664,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
           <Runner
             config={running.config}
             sharedContentKey={running.sharedContentKey}
+            headerUrl={running.headerUrl}
             c={c}
             canGenerate={canGenerate}
             buzzBalance={buzzTotal}
@@ -597,6 +677,17 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             onTopUp={deps.openPurchaseModal}
             onBalanceRefresh={deps.refreshBalance}
             onOpenInGenerator={() => deps.navigate('/generate')}
+            onCopyImageLink={async (url) => {
+              // Sandbox-legal "save" affordance: copy the image url via the same
+              // host-clipboard path Share uses (a file download / new tab is
+              // blocked for an unverified block). Resolve true/false, never throw.
+              try {
+                await deps.copyToClipboard(url);
+                return true;
+              } catch {
+                return false;
+              }
+            }}
             analytics={deps.analytics}
             rehydrateNotice={rehydrateNotice}
             pollIntervalMs={deps.pollIntervalMs}

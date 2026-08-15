@@ -1,7 +1,7 @@
 {
   "$schema": "https://civitai.com/schemas/app-block/v1.json",
   "blockId": "custom-generators",
-  "version": "0.4.0",
+  "version": "0.5.2",
   "name": "Custom Generators",
   "tagline": "Build the button. Share the button.",
   "type": "block",
@@ -14,6 +14,14 @@
     "apps:storage:shared:read",
     "apps:storage:shared:write"
   ],
+  "scopeJustifications": {
+    "ai:write:budgeted": "Spends the viewer's Buzz to run the generator's one-tap image generations, capped per generation by the manifest page.buzzBudgetPerGen and gated behind an explicit estimate + Confirm step.",
+    "buzz:read:self": "Reads the viewer's Buzz balance to display it and to block Confirm when a generation's estimated cost exceeds the available balance, offering a top-up instead of a failed spend.",
+    "apps:storage:read": "Reads the viewer's own app-scoped drafts so they can resume editing generators they previously saved.",
+    "apps:storage:write": "Saves the viewer's own generator drafts to their app-scoped storage so work persists between sessions.",
+    "apps:storage:shared:read": "Lists published generators from shared storage to populate the Discover feed that all users browse.",
+    "apps:storage:shared:write": "Publishes, updates, and withdraws the viewer's own generators in shared storage so other users can find and run them in Discover."
+  },
   "page": {
     "path": "/",
     "title": "Custom Generators",

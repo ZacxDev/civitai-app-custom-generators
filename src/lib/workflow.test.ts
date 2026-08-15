@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { BlockWorkflowSnapshot } from '@civitai/app-sdk/blocks';
 
-import { isTerminalSnapshot, mapSnapshotStatus, pollToTerminal } from './workflow.js';
+import { isTerminalSnapshot, mapSnapshotStatus, pollToTerminal, queueStatusLabel } from './workflow.js';
 
 const snap = (status: BlockWorkflowSnapshot['status'], extra: Partial<BlockWorkflowSnapshot> = {}): BlockWorkflowSnapshot => ({
   workflowId: 'wf1',
@@ -17,6 +17,25 @@ describe('mapSnapshotStatus', () => {
     expect(mapSnapshotStatus('failed')).toBe('failed');
     expect(mapSnapshotStatus('expired')).toBe('failed');
     expect(mapSnapshotStatus('canceled')).toBe('canceled');
+  });
+});
+
+describe('queueStatusLabel', () => {
+  it('maps raw machine tokens to human labels (never the raw token)', () => {
+    expect(queueStatusLabel('estimating')).toBe('Estimating…');
+    expect(queueStatusLabel('confirming')).toBe('Waiting for you to confirm');
+    expect(queueStatusLabel('submitting')).toBe('Submitting…');
+    expect(queueStatusLabel('processing')).toBe('Generating…');
+    expect(queueStatusLabel('stalled')).toBe('Still generating…');
+    expect(queueStatusLabel('succeeded')).toBe('Done');
+    expect(queueStatusLabel('failed')).toBe('Failed');
+    expect(queueStatusLabel('canceled')).toBe('Canceled');
+  });
+
+  it('never surfaces the raw estimating/confirming/submitting/processing jargon', () => {
+    for (const s of ['estimating', 'confirming', 'submitting', 'processing'] as const) {
+      expect(queueStatusLabel(s)).not.toBe(s);
+    }
   });
 });
 

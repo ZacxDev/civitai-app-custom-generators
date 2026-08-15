@@ -23,14 +23,32 @@ describe('setGeneratorMeta', () => {
     expect(metaContent('og:description')).toBe('cyberpunk vibes');
   });
 
-  it('adds og:image only when the generator has a header image', () => {
+  it('adds og:image ONLY from the resolved moderated cover url, never the stored url', () => {
+    // No resolved cover → no og:image, even when the config carries a stored url.
     setGeneratorMeta(newGenerator({ name: 'Plain', buttons: [newButton()] }));
     expect(metaContent('og:image')).toBeNull();
 
+    // 🔴 The stored (unmoderated) headerImageRef.url must NOT drive og:image —
+    // only the explicitly-passed resolved moderated url does.
     setGeneratorMeta(
-      newGenerator({ name: 'Covered', buttons: [newButton()], headerImageRef: { imageId: 1, url: 'https://img.example/cover.jpg' } }),
+      newGenerator({
+        name: 'Covered',
+        buttons: [newButton()],
+        headerImageRef: { imageId: 1, url: 'https://evil.tracker/beacon.gif' },
+      }),
+      undefined,
     );
-    expect(metaContent('og:image')).toBe('https://img.example/cover.jpg');
+    expect(metaContent('og:image')).toBeNull();
+
+    setGeneratorMeta(
+      newGenerator({
+        name: 'Covered',
+        buttons: [newButton()],
+        headerImageRef: { imageId: 1, url: 'https://evil.tracker/beacon.gif' },
+      }),
+      'https://image.civitai.com/moderated-cover.jpg',
+    );
+    expect(metaContent('og:image')).toBe('https://image.civitai.com/moderated-cover.jpg');
   });
 
   it('upserts (does not duplicate) og tags on repeated calls', () => {

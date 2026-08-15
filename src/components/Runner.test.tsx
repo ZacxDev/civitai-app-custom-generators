@@ -5,7 +5,7 @@ import type { BlockWorkflowSnapshot } from '@civitai/app-sdk/blocks';
 
 import { Runner } from './Runner.js';
 import { palette } from '../theme.js';
-import { newButton, newGenerator, parsePublishedGenerator } from '../lib/generator.js';
+import { newButton, newGenerator } from '../lib/generator.js';
 import { GENERATION_SOURCE_IMAGE, immediateSleep, mockWorkflow } from '../test-helpers.js';
 import type { GeneratorConfig } from '../types.js';
 
@@ -138,7 +138,12 @@ describe('Runner — estimate → confirm → submit → poll queue', () => {
     await waitFor(() => expect(wf.calls.submit).toHaveLength(1));
     expect(wf.calls.submit[0].sharedContentKey).toBe('shared:99');
     const results = await screen.findByTestId('queue-results');
-    expect(within(results).getAllByTestId('result-image')[0]).toHaveAttribute('src', 'res.jpg');
+    const resultImg = within(results).getAllByTestId('result-image')[0];
+    expect(resultImg).toHaveAttribute('src', 'res.jpg');
+    // Adopted via the design-system Image primitive: native lazy-loading + the
+    // pack's `data-civitai-ui="image"` container (placeholder/error handling).
+    expect(resultImg).toHaveAttribute('loading', 'lazy');
+    expect(resultImg.closest('[data-civitai-ui="image"]')).not.toBeNull();
   });
 
   it('classifies a failed submit that reads as insufficient Buzz into the top-up path', async () => {
@@ -304,52 +309,31 @@ describe('Runner — live preview mode (non-runnable)', () => {
   });
 });
 
-describe('Runner — header cover banner', () => {
-  const HEADER = { imageId: 424242, url: 'https://image.civitai.com/header.jpeg' };
-
-  it('renders the header image as a top cover banner when set', () => {
+describe('Runner — header cover banner (moderated headerUrl only)', () => {
+  it('renders the banner from the resolved moderated headerUrl prop', () => {
     const cfg = txtConfig();
-    cfg.headerImageRef = HEADER;
-    renderRunner(cfg);
+    // The stored (unmoderated) url is a forged tracker — it must never be used.
+    cfg.headerImageRef = { imageId: 424242, url: 'https://evil.tracker/beacon.gif' };
+    renderRunner(cfg, { headerUrl: 'https://image.civitai.com/moderated-header.jpeg' });
     const banner = screen.getByTestId('runner-header-banner');
     expect(banner.tagName).toBe('IMG');
-    expect(banner).toHaveAttribute('src', HEADER.url);
+    expect(banner).toHaveAttribute('src', 'https://image.civitai.com/moderated-header.jpeg');
     // it's the new top cover banner, NOT the retired CSS backdrop element
     expect(screen.queryByTestId('runner-background')).not.toBeInTheDocument();
   });
 
-  it('renders no banner when the generator has no header image', () => {
+  it('renders no banner when no headerUrl is resolved', () => {
     renderRunner(txtConfig());
     expect(screen.queryByTestId('runner-header-banner')).not.toBeInTheDocument();
   });
 
-  it('BACK-COMPAT: a stored value with the OLD backgroundImageRef still renders the header banner', () => {
-    // Simulate an already-published row from before the rename: its cover lives
-    // under the legacy `backgroundImageRef`. parsePublishedGenerator must surface
-    // it as headerImageRef so the runner still shows the banner.
-    const legacyValue = {
-      title: 'Legacy Gen',
-      body: 'desc',
-      data: {
-        v: 1 as const,
-        buttons: [
-          {
-            id: 'l1',
-            label: 'Go',
-            workflowType: 'txt2img' as const,
-            checkpoint: { versionId: 1001, modelId: 500 },
-            loras: [],
-            promptTemplate: 'neon {prompt}',
-            params: newButton().params,
-          },
-        ],
-        backgroundImageRef: { imageId: 9, url: 'https://image.civitai.com/legacy.jpeg' },
-      },
-    };
-    const cfg = parsePublishedGenerator(legacyValue);
-    expect(cfg).not.toBeNull();
-    renderRunner(cfg!);
-    expect(screen.getByTestId('runner-header-banner')).toHaveAttribute('src', 'https://image.civitai.com/legacy.jpeg');
+  it('🔴 NEVER renders the banner from the stored headerImageRef.url (no resolved headerUrl)', () => {
+    // A forged/unmoderated stored url present in config but NO headerUrl resolved
+    // (hidden / withheld from this viewer) → the Runner shows nothing.
+    const cfg = txtConfig();
+    cfg.headerImageRef = { imageId: 7, url: 'https://evil.tracker/beacon.gif' };
+    renderRunner(cfg, { headerUrl: null });
+    expect(screen.queryByTestId('runner-header-banner')).not.toBeInTheDocument();
   });
 });
 
@@ -576,18 +560,25 @@ describe('Runner — partial-failure clarity (ship-blocker #6)', () => {
 });
 
 describe('Runner — result actions (feature #10)', () => {
-  it('offers download links, a re-run, and open-in-generator on a succeeded gen', async () => {
+  it('offers copy-image-link (sandbox-legal), a re-run, and open-in-generator on a succeeded gen', async () => {
     const onOpenInGenerator = vi.fn();
-    const { wf } = renderRunner(txtConfig(), { onOpenInGenerator });
+    // The sandbox-legal "save" affordance: copy the image url to the clipboard
+    // (a file download / new tab is blocked for an unverified block).
+    const onCopyImageLink = vi.fn(async () => true);
+    const { wf } = renderRunner(txtConfig(), { onOpenInGenerator, onCopyImageLink });
     await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
     await userEvent.click(screen.getByTestId('gen-button'));
     await userEvent.click(await screen.findByTestId('queue-confirm'));
     await screen.findByTestId('queue-results');
 
     const actions = screen.getByTestId('result-actions');
-    const dl = within(actions).getAllByTestId('result-download');
-    expect(dl[0]).toHaveAttribute('href', 'res.jpg');
-    expect(dl[0]).toHaveAttribute('download');
+    const copy = within(actions).getAllByTestId('result-copy-link');
+    await userEvent.click(copy[0]);
+    // copied the image url via the host-clipboard seam, and confirmed inline
+    await waitFor(() => expect(onCopyImageLink).toHaveBeenCalledWith('res.jpg'));
+    await waitFor(() => expect(copy[0]).toHaveTextContent(/link copied/i));
+    // never a silent failure, never a raw error
+    expect(screen.queryByTestId('runner-error')).not.toBeInTheDocument();
 
     // open-in-generator delegates to the host navigation
     await userEvent.click(within(actions).getByTestId('result-open-generator'));
@@ -598,6 +589,27 @@ describe('Runner — result actions (feature #10)', () => {
     await userEvent.click(within(actions).getByTestId('result-rerun'));
     await waitFor(() => expect(wf.calls.estimate.length).toBe(before + 1));
     expect(wf.calls.estimate.at(-1)?.params.prompt).toBe('cyberpunk a fox');
+  });
+
+  it('a failed copy surfaces a recoverable notice — never a silent failure', async () => {
+    const onCopyImageLink = vi.fn(async () => false); // host clipboard unavailable
+    renderRunner(txtConfig(), { onCopyImageLink });
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+    await screen.findByTestId('queue-results');
+
+    await userEvent.click(within(screen.getByTestId('result-actions')).getAllByTestId('result-copy-link')[0]);
+    expect(await screen.findByTestId('runner-error')).toHaveTextContent(/couldn't copy the image link/i);
+  });
+
+  it('hides the copy affordance entirely when no clipboard seam is provided (no dead button)', async () => {
+    renderRunner(txtConfig()); // default renderRunner passes no onCopyImageLink
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+    await screen.findByTestId('queue-results');
+    expect(screen.queryByTestId('result-copy-link')).not.toBeInTheDocument();
   });
 });
 
@@ -636,5 +648,79 @@ describe('Runner — rehydration-failure notice (feature #12)', () => {
   it('shows a non-blocking notice when passed a rehydrateNotice', () => {
     renderRunner(txtConfig(), { rehydrateNotice: "Couldn't refresh model details." });
     expect(screen.getByTestId('runner-rehydrate-notice')).toHaveTextContent(/couldn't refresh/i);
+  });
+});
+
+describe('Runner — feed reassurance + leave-guard (ephemeral-queue safety)', () => {
+  it('always shows the persistent "saved to your Civitai feed" reassurance', () => {
+    renderRunner(txtConfig());
+    expect(screen.getByTestId('runner-feed-note')).toHaveTextContent(/saved to your civitai feed/i);
+  });
+
+  it('Back with NO in-flight work navigates immediately (no confirm)', async () => {
+    const { props } = renderRunner(txtConfig());
+    await userEvent.click(screen.getByTestId('runner-back'));
+    expect(props.onBack).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('leave-confirm-modal')).not.toBeInTheDocument();
+  });
+
+  it('Back WHILE a gen is in flight confirms first; Stay cancels, Leave navigates', async () => {
+    // A submit that never resolves keeps an item in the non-terminal 'submitting'
+    // state so the leave-guard is armed.
+    const estimate = async (): Promise<BlockWorkflowSnapshot> => ({ workflowId: 'wf', status: 'pending', cost: { total: 10 } });
+    const submit = () => new Promise<BlockWorkflowSnapshot>(() => {}); // pending forever
+    const onBack = vi.fn();
+    render(
+      <Runner
+        config={txtConfig()}
+        c={c}
+        canGenerate
+        buzzBalance={5000}
+        onRequestConsent={vi.fn()}
+        uploadSourceImage={vi.fn(async () => GENERATION_SOURCE_IMAGE)}
+        estimate={estimate}
+        submit={submit}
+        poll={async () => ({ workflowId: 'wf', status: 'processing' })}
+        onBack={onBack}
+        pollIntervalMs={0}
+        sleep={immediateSleep}
+      />,
+    );
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+    // now 'submitting' (in-flight) — pill shows the human label; the raw token
+    // still rides on the card's data-status.
+    await waitFor(() => expect(screen.getByTestId('queue-status')).toHaveTextContent('Submitting'));
+    expect(screen.getByTestId('queue-item')).toHaveAttribute('data-status', 'submitting');
+
+    // Back → confirm modal, onBack NOT yet called
+    await userEvent.click(screen.getByTestId('runner-back'));
+    expect(await screen.findByTestId('leave-confirm-modal')).toBeInTheDocument();
+    expect(onBack).not.toHaveBeenCalled();
+
+    // Stay → modal closes, still on the runner
+    await userEvent.click(screen.getByTestId('leave-cancel'));
+    await waitFor(() => expect(screen.queryByTestId('leave-confirm-modal')).not.toBeInTheDocument());
+    expect(onBack).not.toHaveBeenCalled();
+
+    // Back again → Leave anyway → navigates
+    await userEvent.click(screen.getByTestId('runner-back'));
+    await screen.findByTestId('leave-confirm-modal');
+    await userEvent.click(screen.getByTestId('leave-confirm'));
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Runner — confirm double-charge guard (in-flight guard)', () => {
+  it('submits exactly once and removes the Confirm affordance after confirming', async () => {
+    const { wf } = renderRunner(txtConfig());
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    const confirm = await screen.findByTestId('queue-confirm');
+    await userEvent.click(confirm);
+    // exactly one paid submit, and the confirm button is gone (can't re-confirm)
+    await waitFor(() => expect(wf.calls.submit).toHaveLength(1));
+    expect(screen.queryByTestId('queue-confirm')).not.toBeInTheDocument();
   });
 });

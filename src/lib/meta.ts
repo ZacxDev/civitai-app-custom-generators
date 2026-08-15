@@ -23,13 +23,24 @@ function upsertMeta(doc: Document, property: string, content: string): void {
 /**
  * Reflect a generator into the document title + OG meta tags (best-effort,
  * client-side). Safe to call repeatedly; a no-op when there's no document.
+ *
+ * 🔴 SECURITY: `og:image` is set ONLY from `coverUrl` — the per-viewer MODERATED
+ * url the host resolves from `headerImageRef.imageId` (via `useGatedImages`).
+ * It is NEVER set from the stored free-text `headerImageRef.url`, which rides in
+ * the UNMODERATED shared `data` blob and could be a forged tracker/beacon or a
+ * content-moderation bypass. A caller with no resolved (visible) cover passes
+ * `undefined`/`null` and no `og:image` is emitted.
  */
-export function setGeneratorMeta(config: GeneratorConfig, doc: Document = document): void {
+export function setGeneratorMeta(
+  config: GeneratorConfig,
+  coverUrl?: string | null,
+  doc: Document = document,
+): void {
   if (!doc?.head) return;
   const title = config.name?.trim() || 'Custom Generator';
   const desc = config.description?.trim() || 'Run this custom generator on Civitai.';
   doc.title = `${title} — Custom Generators`;
   upsertMeta(doc, OG_TITLE, title);
   upsertMeta(doc, OG_DESC, desc);
-  if (config.headerImageRef?.url) upsertMeta(doc, OG_IMAGE, config.headerImageRef.url);
+  if (coverUrl) upsertMeta(doc, OG_IMAGE, coverUrl);
 }

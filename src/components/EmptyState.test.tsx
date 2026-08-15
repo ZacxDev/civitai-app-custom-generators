@@ -14,13 +14,13 @@ describe('EmptyState', () => {
       <EmptyState
         data-testid="empty"
         title="No published generators yet"
-        body="Build a set of one-tap generation buttons and publish it for everyone to run."
+        body="Build a set of one-click generation buttons and publish it for everyone to run."
         action={<button type="button">Create the first one</button>}
       />,
     );
     expect(screen.getByText('No published generators yet')).toBeInTheDocument();
     expect(
-      screen.getByText('Build a set of one-tap generation buttons and publish it for everyone to run.'),
+      screen.getByText('Build a set of one-click generation buttons and publish it for everyone to run.'),
     ).toBeInTheDocument();
     // The primary action is rendered inline, not omitted.
     expect(screen.getByRole('button', { name: 'Create the first one' })).toBeInTheDocument();

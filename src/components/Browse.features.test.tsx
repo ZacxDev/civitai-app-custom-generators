@@ -32,6 +32,7 @@ function renderBrowse(over: Partial<BrowseProps> = {}) {
     myDrafts: [],
     myPublished: [],
     viewerId: 99,
+    onSignIn: vi.fn(),
     onCreate: vi.fn(),
     onOpenPublished: vi.fn(),
     onOpenDraft: vi.fn(),
@@ -41,6 +42,7 @@ function renderBrowse(over: Partial<BrowseProps> = {}) {
     onVote: vi.fn(async () => 1),
     onFork: vi.fn(),
     onShare: vi.fn(async () => true),
+    coverUrlFor: () => null,
     onRetry: vi.fn(),
     ...over,
   };
@@ -211,11 +213,30 @@ describe('Browse — fork + share affordances', () => {
     expect(onFork).toHaveBeenCalledWith(expect.objectContaining({ key: 'k1' }));
   });
 
-  it('copies a share link and shows a Copied! confirmation', async () => {
+  it('copies a share link and raises a toast confirmation', async () => {
     const onShare = vi.fn(async () => true);
     renderBrowse({ discover: [item('k1', 'Alpha')], onShare });
     await userEvent.click(within(screen.getByTestId('published-card')).getByTestId('published-share'));
     expect(onShare).toHaveBeenCalledWith(expect.objectContaining({ key: 'k1' }));
-    expect(await screen.findByText('Copied!')).toBeInTheDocument();
+    // The design-system Toast (portaled to document.body) confirms the copy.
+    expect(await screen.findByText('Link copied to clipboard')).toBeInTheDocument();
+  });
+
+  it('describes the vote and fork controls with design-system Tooltips (aria-describedby)', () => {
+    renderBrowse({ discover: [item('k1', 'Alpha')], onFork: vi.fn() });
+    const card = screen.getByTestId('published-card');
+
+    // The Tooltip wires each trigger's aria-describedby to a role="tooltip" bubble
+    // carrying the supplementary label — proving the pack primitive is adopted.
+    const vote = within(card).getByTestId('vote-button');
+    const voteTipId = vote.getAttribute('aria-describedby');
+    expect(voteTipId).toBeTruthy();
+    expect(document.getElementById(voteTipId!)).toHaveAttribute('role', 'tooltip');
+    expect(document.getElementById(voteTipId!)).toHaveTextContent('Upvote this generator');
+
+    const fork = within(card).getByTestId('published-fork');
+    const forkTipId = fork.getAttribute('aria-describedby');
+    expect(forkTipId).toBeTruthy();
+    expect(document.getElementById(forkTipId!)).toHaveTextContent('Fork into your own editable draft');
   });
 });

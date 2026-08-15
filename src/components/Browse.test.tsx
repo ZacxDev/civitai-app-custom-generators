@@ -31,7 +31,11 @@ function publishedItem(
   };
 }
 
-function setup(seed: SharedListItem[], sharedOpts: { failWithdraw?: string } = {}) {
+function setup(
+  seed: SharedListItem[],
+  sharedOpts: { failWithdraw?: string } = {},
+  depsOver: Partial<AppDeps> = {},
+) {
   const shared = fakeShared(seed, sharedOpts);
   const wf = mockWorkflow();
   const deps: Partial<AppDeps> = {
@@ -42,6 +46,7 @@ function setup(seed: SharedListItem[], sharedOpts: { failWithdraw?: string } = {
     estimate: wf.estimate,
     submit: wf.submit,
     poll: wf.poll,
+    ...depsOver,
   };
   render(
     <Harness viewer={{ id: VIEWER_ID, username: 'me' }} theme="dark" consentGranted showLog={false}>
@@ -112,25 +117,80 @@ describe('Browse — delete published generator (A1, confirm-gated withdraw)', (
   });
 });
 
-describe('Browse — header cover image on published cards', () => {
-  it('renders the cover from headerImageRef', async () => {
-    setup([
-      publishedItem('shared:cover', 'Covered', {
-        data: { v: 1, buttons: [], headerImageRef: { imageId: 1, url: 'https://image.civitai.com/cover.jpeg' } },
-      }),
-    ]);
+describe('Browse — header cover image on published cards (moderated imageId resolution)', () => {
+  // A getImages gate that resolves each requested id to a distinct host-served
+  // MODERATED url — proving covers come from the imageId, not the stored url.
+  const visibleGate: Partial<AppDeps> = {
+    getImages: async (ids) =>
+      ids.map((imageId) => ({
+        imageId,
+        status: 'visible' as const,
+        nsfwLevel: 1,
+        contentRating: 'pg' as const,
+        url: `https://image.civitai.com/gated-${imageId}.jpeg`,
+        width: 1024,
+        height: 1024,
+      })),
+  };
+
+  it('(b) resolves the cover from headerImageRef.imageId via the host getImages gate', async () => {
+    setup(
+      [
+        publishedItem('shared:cover', 'Covered', {
+          // The stored `url` is a forged tracker — it must NEVER be the rendered src.
+          data: { v: 1, buttons: [], headerImageRef: { imageId: 777, url: 'https://evil.tracker/beacon.gif' } },
+        }),
+      ],
+      {},
+      visibleGate,
+    );
     const cover = await screen.findByTestId('published-cover');
-    expect(cover).toHaveAttribute('src', 'https://image.civitai.com/cover.jpeg');
+    expect(cover).toHaveAttribute('src', 'https://image.civitai.com/gated-777.jpeg');
+    expect(cover).not.toHaveAttribute('src', 'https://evil.tracker/beacon.gif');
   });
 
-  it('BACK-COMPAT: renders the cover from a legacy backgroundImageRef row', async () => {
-    setup([
-      publishedItem('shared:legacy', 'Legacy Cover', {
-        // legacy row: cover under the pre-rename field
-        data: { v: 1, buttons: [], backgroundImageRef: { imageId: 1, url: 'https://image.civitai.com/legacy.jpeg' } },
-      }),
-    ]);
+  it('BACK-COMPAT: resolves a legacy backgroundImageRef row via its imageId', async () => {
+    setup(
+      [
+        publishedItem('shared:legacy', 'Legacy Cover', {
+          data: { v: 1, buttons: [], backgroundImageRef: { imageId: 888, url: 'https://evil.tracker/legacy-beacon.gif' } },
+        }),
+      ],
+      {},
+      visibleGate,
+    );
     const cover = await screen.findByTestId('published-cover');
-    expect(cover).toHaveAttribute('src', 'https://image.civitai.com/legacy.jpeg');
+    expect(cover).toHaveAttribute('src', 'https://image.civitai.com/gated-888.jpeg');
+  });
+
+  it('(a) a forged stored url is NEVER rendered when the host withholds the image (hidden)', async () => {
+    setup(
+      [
+        publishedItem('shared:forged', 'Forged', {
+          data: { v: 1, buttons: [], headerImageRef: { imageId: 999, url: 'https://evil.tracker/beacon.gif' } },
+        }),
+      ],
+      {},
+      // Host clamps this image away for the viewer → hidden, no url.
+      { getImages: async (ids) => ids.map((imageId) => ({ imageId, status: 'hidden' as const })) },
+    );
+    // The card renders (title present) but NO cover image is shown — the raw
+    // stored url is never used as a fallback.
+    await screen.findByText('Forged');
+    expect(screen.queryByTestId('published-cover')).not.toBeInTheDocument();
+  });
+
+  it('(a) a forged stored url is NEVER rendered when resolution fails', async () => {
+    setup(
+      [
+        publishedItem('shared:err', 'Errored', {
+          data: { v: 1, buttons: [], headerImageRef: { imageId: 1234, url: 'https://evil.tracker/beacon.gif' } },
+        }),
+      ],
+      {},
+      { getImages: async () => { throw new Error('gated images unavailable'); } },
+    );
+    await screen.findByText('Errored');
+    expect(screen.queryByTestId('published-cover')).not.toBeInTheDocument();
   });
 });
