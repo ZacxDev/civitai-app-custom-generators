@@ -1,7 +1,7 @@
 {
   "$schema": "https://civitai.com/schemas/app-block/v1.json",
   "blockId": "custom-generators",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "name": "Custom Generators",
   "tagline": "Build the button. Share the button.",
   "type": "block",
