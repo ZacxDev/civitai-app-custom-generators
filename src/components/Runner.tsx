@@ -19,15 +19,17 @@ import type {
   WorkflowBody,
 } from '@civitai/app-sdk/blocks';
 
-import { Alert, Badge, Button, Card, Collapse, Group, Loader, NumberInput, Stack, TextInput } from '@civitai/blocks-react/ui';
+import { Alert, Badge, Button, Card, Collapse, Group, Loader, Modal, NumberInput, Stack, TextInput } from '@civitai/blocks-react/ui';
 
-import type { GenButton, GeneratorConfig, GenButtonParams, QueueItem } from '../types.js';
+import type { GenButton, GeneratorConfig, GenButtonParams, QueueItem, QueueStatus } from '../types.js';
 import { DEFAULT_PROMPT_PLACEHOLDER, buildSubmitBody, canRunButton, exposesImage, exposesPrompt, missingRequiredInputs, type RequiredInput } from '../lib/generator.js';
-import { isTerminalSnapshot, mapSnapshotStatus, pollToTerminal } from '../lib/workflow.js';
+import { isTerminalSnapshot, mapSnapshotStatus, pollToTerminal, queueStatusLabel } from '../lib/workflow.js';
 import { isInsufficientBuzzError } from '../lib/buzz.js';
 import type { Analytics } from '../lib/analytics.js';
 import { ANALYTICS_EVENTS, noopAnalytics } from '../lib/analytics.js';
-import { token, metaText, type Palette } from '../theme.js';
+import { Image } from '@civitai/components-react';
+
+import { token, radius, metaText, type Palette } from '../theme.js';
 import { EmptyState } from './EmptyState.js';
 import { SafeImage } from './SafeImage.js';
 
@@ -47,10 +49,30 @@ function topUpSuggestion(cost: number | undefined, balance: number | null | unde
   return Math.max(100, Math.ceil(gap / 100) * 100);
 }
 
+/**
+ * Queue statuses that mean paid/in-flight work would be lost on leave — drives
+ * both the Back/leave confirm dialog and the `beforeunload` guard. (Terminal:
+ * `succeeded|failed|canceled`; `stalled` keeps its `workflowId` and is
+ * re-pollable, so it is NOT treated as unsaved in-flight work here.)
+ */
+const IN_FLIGHT_STATUSES: ReadonlySet<QueueStatus> = new Set<QueueStatus>([
+  'estimating',
+  'confirming',
+  'submitting',
+  'processing',
+]);
+
 export interface RunnerProps {
   config: GeneratorConfig;
   /** shared_kv key of the published generator (creator attribution G5); omit for own draft. */
   sharedContentKey?: string;
+  /**
+   * The per-viewer MODERATED cover url, resolved by the host from
+   * `config.headerImageRef.imageId` (via `useGatedImages`). 🔴 The banner renders
+   * from THIS only — never from the unmoderated stored `headerImageRef.url`.
+   * `null`/omitted (hidden / above the viewer's ceiling / unresolved) ⇒ no banner.
+   */
+  headerUrl?: string | null;
   c: Palette;
   canGenerate: boolean;
   buzzBalance?: number | null;
@@ -79,6 +101,18 @@ export interface RunnerProps {
    * NON-runnable — pressing a button shows a note instead of estimating/spending.
    */
   preview?: boolean;
+  /**
+   * Copy a result image's url to the clipboard (host-clipboard write, the same
+   * proven path as Share). This is the sandbox-legal alternative to a file
+   * download: an unverified block's iframe is `allow-scripts allow-forms` only —
+   * NO `allow-downloads` (a blob/`<a download>` save is blocked) and NO
+   * `allow-popups`/`allow-popups-to-escape-sandbox` (so `window.open` /
+   * `target="_blank"` / host `navigate(_, 'new_tab')` all silently fail). Copying
+   * the url lets the viewer paste it into a top-level tab to open/save the image.
+   * Resolves `true` on success. Omitted ⇒ the copy affordance is hidden (never a
+   * button that silently does nothing).
+   */
+  onCopyImageLink?: (url: string) => Promise<boolean>;
   /** Test seams. */
   pollIntervalMs?: number;
   /** Total poll-window before a still-processing gen is marked `stalled` (ms). */
@@ -87,7 +121,7 @@ export interface RunnerProps {
 }
 
 export function Runner(props: RunnerProps) {
-  const { config, sharedContentKey, c, canGenerate, buzzBalance, onRequestConsent, uploadSourceImage, estimate, submit, poll, onBack, onTopUp, onBalanceRefresh, onOpenInGenerator, rehydrateNotice, preview = false } = props;
+  const { config, sharedContentKey, headerUrl, c, canGenerate, buzzBalance, onRequestConsent, uploadSourceImage, estimate, submit, poll, onBack, onTopUp, onBalanceRefresh, onOpenInGenerator, onCopyImageLink, rehydrateNotice, preview = false } = props;
   const analytics = props.analytics ?? noopAnalytics;
 
   const [promptInput, setPromptInput] = useState('');
@@ -102,6 +136,11 @@ export function Runner(props: RunnerProps) {
   const [localBalance, setLocalBalance] = useState<number | null | undefined>(buzzBalance);
   const [toppingUp, setToppingUp] = useState(false);
   const effectiveBalance = localBalance ?? buzzBalance;
+  // Leave-guard: when set, a "you have generations in progress" confirm gates
+  // the Back navigation (see IN_FLIGHT_STATUSES).
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  // Transient "link copied" confirmation, keyed by the copied image url.
+  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
 
   // Keep the local balance in sync when the parent pushes a fresh value.
   useEffect(() => {
@@ -227,6 +266,10 @@ export function Runner(props: RunnerProps) {
   }
 
   async function confirmItem(item: RunnerItem) {
+    // Double-charge guard: only a still-`confirming` item may be submitted. A
+    // second click (or a click on an item already moved to submitting/processing/
+    // succeeded by a prior confirm) is a no-op — never a second paid submit.
+    if (item.status !== 'confirming') return;
     patchItem(item.id, { status: 'submitting', error: undefined, insufficientBuzz: undefined });
     analytics.track(ANALYTICS_EVENTS.GENERATION_SUBMITTED, {
       buttonLabel: item.buttonLabel,
@@ -308,6 +351,51 @@ export function Runner(props: RunnerProps) {
 
   const dismissItem = (id: string) => setItems((list) => list.filter((it) => it.id !== id));
 
+  // Any paid/in-flight generation that would be lost on a Back/reload. Drives the
+  // leave-guard confirm + the native beforeunload prompt.
+  const hasInFlight = useMemo(() => items.some((it) => IN_FLIGHT_STATUSES.has(it.status)), [items]);
+
+  // Native tab-close / reload guard while work is in flight. (In the block's
+  // sandboxed iframe the host frame may not surface this prompt; it's a
+  // best-effort belt on top of the in-app Back confirm, and harmless if ignored.)
+  useEffect(() => {
+    if (preview || !hasInFlight) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [preview, hasInFlight]);
+
+  // Back navigation: confirm first if any generation is still in flight, so a
+  // just-paid gen can't be dropped by an accidental Back.
+  function handleBack() {
+    if (hasInFlight) {
+      setConfirmLeave(true);
+      return;
+    }
+    onBack();
+  }
+
+  // Copy a result image's url to the clipboard (sandbox-legal alternative to a
+  // file download — see onCopyImageLink). Shows an inline "copied" confirmation;
+  // a failure is non-fatal (the gen is already saved to the viewer's feed).
+  async function copyImageLink(url: string) {
+    if (!onCopyImageLink) return;
+    setRunnerError(null);
+    try {
+      const ok = await onCopyImageLink(url);
+      if (ok) {
+        setCopiedUrl(url);
+      } else {
+        setRunnerError("Couldn't copy the image link here — you can still open this image from your Civitai feed.");
+      }
+    } catch {
+      setRunnerError("Couldn't copy the image link here — you can still open this image from your Civitai feed.");
+    }
+  }
+
   return (
     <div data-testid="runner">
       <Stack gap={16}>
@@ -317,7 +405,7 @@ export function Runner(props: RunnerProps) {
               Preview
             </Badge>
           ) : (
-            <Button variant="subtle" size="sm" data-testid="runner-back" onClick={onBack}>
+            <Button variant="subtle" size="sm" data-testid="runner-back" onClick={handleBack}>
               ← Back
             </Button>
           )}
@@ -336,11 +424,13 @@ export function Runner(props: RunnerProps) {
 
         {/* cosmetic header/cover banner — a full-width ~16:9 image at the TOP of
             the generator, above the prompt/buttons/generate content (not a
-            backdrop behind them). Decorative, so empty alt. */}
-        {config.headerImageRef && (
+            backdrop behind them). Decorative, so empty alt.
+            🔴 Rendered from the host-resolved MODERATED `headerUrl` (from the
+            image's `imageId`), NEVER the unmoderated stored `headerImageRef.url`. */}
+        {headerUrl && (
           <SafeImage
             data-testid="runner-header-banner"
-            src={config.headerImageRef.url}
+            src={headerUrl}
             alt=""
             style={{ width: '100%', aspectRatio: '16 / 9', objectFit: 'cover', borderRadius: 12, border: `1px solid ${c.border}`, display: 'block' }}
           />
@@ -459,6 +549,14 @@ export function Runner(props: RunnerProps) {
 
         {/* output queue */}
         <Stack gap={10} data-testid="output-queue">
+          {/* Persistent reassurance: the queue is in-session (a Back/reload clears
+              these cards), but every finished generation is also saved to the
+              viewer's Civitai feed — so a cleared card never means lost work. */}
+          {!preview && (
+            <span data-testid="runner-feed-note" style={{ fontSize: 12, color: c.muted }}>
+              Generations are saved to your Civitai feed.
+            </span>
+          )}
           {items.length === 0 && (
             <EmptyState
               data-testid="queue-empty"
@@ -472,7 +570,7 @@ export function Runner(props: RunnerProps) {
                 <Group justify="space-between">
                   <strong style={{ fontSize: 14 }}>{it.buttonLabel}</strong>
                   <Badge data-testid="queue-status" color={statusColor(it.status)}>
-                    {it.status}
+                    {queueStatusLabel(it.status)}
                   </Badge>
                 </Group>
 
@@ -543,26 +641,40 @@ export function Runner(props: RunnerProps) {
                         {it.imageUrls.length === 1 ? ' one that succeeded' : ' images that succeeded'} (the rest were refunded).
                       </Alert>
                     )}
-                    {/* TODO(track-u): swap these raw <img>s for @civitai/components'
-                        Image primitive (lazy-load + placeholder) once Track U ships it. */}
+                    {/* Result images via the design-system Image primitive: a
+                        token placeholder while loading, native lazy-loading, and
+                        a graceful fallback overlay if a generated image URL dies
+                        (vs. a broken-glyph raw <img>). */}
                     <div data-testid="queue-results" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(120px,1fr))', gap: 8 }}>
                       {it.imageUrls.map((u, i) => (
-                        <img key={`${u}-${i}`} src={u} alt={`Result ${i + 1}`} data-testid="result-image" style={{ width: '100%', borderRadius: 8 }} />
+                        <Image
+                          key={`${u}-${i}`}
+                          src={u}
+                          alt={`Result ${i + 1}`}
+                          data-testid="result-image"
+                          loading="lazy"
+                          fallback="Image unavailable"
+                          wrapperStyle={{ width: '100%', aspectRatio: '1 / 1', borderRadius: radius.md }}
+                        />
                       ))}
                     </div>
                     {/* Result actions: download each image, re-run the same inputs,
                         or continue in the on-site Civitai generator. */}
                     <Group gap={6} data-testid="result-actions">
-                      {it.imageUrls.map((u, i) => (
-                        <a
-                          key={`dl-${u}-${i}`}
-                          href={u}
-                          download
-                          data-testid="result-download"
-                          style={{ fontSize: 12, textDecoration: 'none', padding: '4px 10px', borderRadius: 6, border: `1px solid ${c.border}`, color: c.fg }}
+                      {onCopyImageLink && it.imageUrls.map((u, i) => (
+                        // Copy the image url (sandbox-legal): a file download needs
+                        // allow-downloads and opening a tab needs allow-popups —
+                        // neither is granted to an unverified block. Paste the url
+                        // into a top-level tab to open/save the image.
+                        <Button
+                          key={`cp-${u}-${i}`}
+                          size="sm"
+                          variant="subtle"
+                          data-testid="result-copy-link"
+                          onClick={() => copyImageLink(u)}
                         >
-                          ↓ Image {i + 1}
-                        </a>
+                          {copiedUrl === u ? '✓ Link copied' : `⧉ Copy link ${i + 1}`}
+                        </Button>
                       ))}
                       <Button size="sm" variant="light" data-testid="result-rerun" onClick={() => rerun(it)}>
                         Re-run
@@ -625,6 +737,40 @@ export function Runner(props: RunnerProps) {
           ))}
         </Stack>
       </Stack>
+
+      {/* Leave-guard: a Back press while a generation is estimating/confirming/
+          submitting/processing confirms first, so paid/in-flight work isn't
+          dropped by an accidental navigation. */}
+      <Modal
+        opened={confirmLeave}
+        onClose={() => setConfirmLeave(false)}
+        title="Leave with generations in progress?"
+        size="sm"
+      >
+        <Stack gap={14} data-testid="leave-confirm-modal">
+          <p style={{ margin: 0, fontSize: 14 }}>
+            A generation is still in progress. Leaving clears this queue view — the generation keeps
+            running and finished images are saved to your Civitai feed, but you'll lose the progress
+            shown here.
+          </p>
+          <Group justify="flex-end" gap={8}>
+            <Button variant="subtle" size="sm" data-testid="leave-cancel" onClick={() => setConfirmLeave(false)}>
+              Stay
+            </Button>
+            <Button
+              color="error"
+              size="sm"
+              data-testid="leave-confirm"
+              onClick={() => {
+                setConfirmLeave(false);
+                onBack();
+              }}
+            >
+              Leave anyway
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </div>
   );
 }

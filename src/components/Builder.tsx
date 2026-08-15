@@ -180,6 +180,13 @@ export function Builder({ initial, c, pickResource, uploadImage, scanBackground,
 
   const editor = (
     <Stack gap={16} data-testid="builder-editor">
+      <div
+        data-testid="builder-concept-hint"
+        style={{ fontSize: 13, lineHeight: 1.5, color: c.muted }}
+      >
+        Each button below is a saved generation preset — a checkpoint, optional LoRAs, and a prompt
+        template. Runners tap a button, type into your prompt box, and get that image.
+      </div>
       <TextInput
         label="Generator name"
         required
@@ -307,8 +314,11 @@ export function Builder({ initial, c, pickResource, uploadImage, scanBackground,
       {validationErrors.length > 0 && (
         <Alert color="warning" title="Fix before publishing" data-testid="validation-errors">
           <ul style={{ margin: 0, paddingLeft: 18 }}>
-            {validationErrors.map((e) => (
-              <li key={e}>{e}</li>
+            {validationErrors.map((e, i) => (
+              // Index key: two buttons can produce the SAME error string (e.g. two
+              // unlabelled buttons → identical "needs a label"), and a duplicate
+              // `key={e}` silently drops all but the first from the list.
+              <li key={i}>{e}</li>
             ))}
           </ul>
         </Alert>
@@ -323,6 +333,14 @@ export function Builder({ initial, c, pickResource, uploadImage, scanBackground,
         config={config}
         c={c}
         preview
+        // Authoring surface: the author previews their OWN just-uploaded (and
+        // fail-closed-moderated) cover, so the local in-session url is used here.
+        // In Discover/Runner-of-published the banner is resolved from the
+        // moderated `imageId` instead (see App/Runner `headerUrl`). NOTE: a cover
+        // carried in from a FORKED generator is shown only to the forking author
+        // in their own editor — recorded as an owed follow-up to imageId-resolve
+        // the Builder preview too.
+        headerUrl={config.headerImageRef?.url ?? null}
         canGenerate
         buzzBalance={null}
         onRequestConsent={noop}

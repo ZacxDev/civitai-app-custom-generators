@@ -8,7 +8,7 @@ import type { GeneratorConfig } from './types.js';
 
 export const DEMO_GENERATOR: GeneratorConfig = {
   name: 'Neon Portrait Studio',
-  description: 'One-tap neon-lit portraits. Type a subject and pick a vibe.',
+  description: 'One-click neon-lit portraits. Type a subject and pick a vibe.',
   buttons: [
     newButton({
       id: 'demo-btn-1',

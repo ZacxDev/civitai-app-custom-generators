@@ -18,6 +18,36 @@ export function isTerminalSnapshot(status: BlockWorkflowSnapshot['status']): boo
   return TERMINAL.has(status);
 }
 
+/**
+ * Human-readable label for a queue item's status. The raw machine tokens
+ * (`estimating`/`confirming`/`submitting`/`processing`) leak implementation
+ * detail and read as jargon in the status pill — this maps each to plain
+ * language the runner understands. The raw token still rides on the card's
+ * `data-status` attribute for tests/automation.
+ */
+export function queueStatusLabel(status: QueueStatus): string {
+  switch (status) {
+    case 'estimating':
+      return 'Estimating…';
+    case 'confirming':
+      return 'Waiting for you to confirm';
+    case 'submitting':
+      return 'Submitting…';
+    case 'processing':
+      return 'Generating…';
+    case 'stalled':
+      return 'Still generating…';
+    case 'succeeded':
+      return 'Done';
+    case 'failed':
+      return 'Failed';
+    case 'canceled':
+      return 'Canceled';
+    default:
+      return status;
+  }
+}
+
 /** Map a host workflow snapshot status → the app's queue-item status. */
 export function mapSnapshotStatus(status: BlockWorkflowSnapshot['status']): QueueStatus {
   switch (status) {

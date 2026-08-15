@@ -515,3 +515,14 @@ describe('Builder — a11y: focus retained after a button reorder (feature #12)'
     });
   });
 });
+
+describe('Builder — concept hint (dogfood UX #1)', () => {
+  it('explains that each button is a saved preset (checkpoint + LoRAs + prompt template)', async () => {
+    setup();
+    await openBuilder();
+    const hint = screen.getByTestId('builder-concept-hint');
+    expect(hint).toHaveTextContent(/saved generation preset/i);
+    expect(hint).toHaveTextContent(/checkpoint/i);
+    expect(hint).toHaveTextContent(/prompt/i);
+  });
+});

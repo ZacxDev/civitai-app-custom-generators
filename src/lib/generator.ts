@@ -18,6 +18,7 @@ import type {
   GenButtonParams,
   GeneratorConfig,
   GeneratorData,
+  HeaderImageRef,
   LoraRef,
   WorkflowType,
 } from '../types.js';
@@ -37,10 +38,25 @@ export const DEFAULT_MAX_WEIGHT = 2;
 export const DEFAULT_WEIGHT = 1;
 
 let idCounter = 0;
+/** A short random suffix so two ids minted in the same millisecond can't collide
+ *  (the counter is only monotonic within a single module instance; a random slice
+ *  keeps ids distinct across fork/clone/rehydrate paths). Falls back to Math.random
+ *  where `crypto.randomUUID` is unavailable. */
+function randSuffix(): string {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID().slice(0, 8);
+    }
+  } catch {
+    /* crypto unavailable — fall through */
+  }
+  return Math.random().toString(36).slice(2, 10);
+}
+
 /** A process-local stable id for a button (persistence-irrelevant). */
 export function newId(prefix = 'btn'): string {
   idCounter += 1;
-  return `${prefix}_${Date.now().toString(36)}_${idCounter}`;
+  return `${prefix}_${Date.now().toString(36)}_${idCounter}_${randSuffix()}`;
 }
 
 export function defaultParams(): GenButtonParams {
@@ -544,6 +560,17 @@ export function parsePublishedGenerator(value: SharedStorageValue): GeneratorCon
     headerImageRef: data.headerImageRef ?? data.backgroundImageRef,
     promptPlaceholder: typeof data.promptPlaceholder === 'string' ? data.promptPlaceholder : undefined,
   };
+}
+
+/**
+ * The cosmetic header/cover ref stored in a published record's opaque `data`
+ * blob, accepting the current `headerImageRef` AND the legacy `backgroundImageRef`
+ * (pre-rename rows). Used to collect the `imageId` for host-mediated MODERATED
+ * cover resolution — the stored `url` is UNMODERATED and must never be rendered.
+ */
+export function headerImageRefOf(value: SharedStorageValue): HeaderImageRef | undefined {
+  const data = value.data as GeneratorData | undefined;
+  return data?.headerImageRef ?? data?.backgroundImageRef;
 }
 
 function firstParagraph(body: string | undefined): string {

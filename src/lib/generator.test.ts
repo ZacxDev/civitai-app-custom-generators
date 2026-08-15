@@ -14,10 +14,12 @@ import {
   exposesPrompt,
   loraFromPick,
   missingRequiredInputs,
+  headerImageRefOf,
   mergeParams,
   moveButton,
   newButton,
   newGenerator,
+  newId,
   parsePublishedGenerator,
   rehydrateConfig,
   updateButton,
@@ -483,5 +485,29 @@ describe('button list helpers', () => {
     const out = updateButton(b, 'b', { label: 'B2' });
     expect(out[0].label).toBe('A');
     expect(out[1].label).toBe('B2');
+  });
+});
+
+describe('newId — collision-resistant ids', () => {
+  it('mints unique ids even when many are created in the same millisecond', () => {
+    const ids = new Set<string>();
+    for (let i = 0; i < 2000; i++) ids.add(newId());
+    expect(ids.size).toBe(2000);
+  });
+
+  it('honours the prefix', () => {
+    expect(newId('gen')).toMatch(/^gen_/);
+  });
+});
+
+describe('headerImageRefOf — reads the stored cover ref (with legacy fallback)', () => {
+  it('reads headerImageRef', () => {
+    expect(headerImageRefOf({ title: 't', body: 'b', data: { v: 1, buttons: [], headerImageRef: { imageId: 5, url: 'u' } } })?.imageId).toBe(5);
+  });
+  it('falls back to the legacy backgroundImageRef', () => {
+    expect(headerImageRefOf({ title: 't', body: 'b', data: { v: 1, buttons: [], backgroundImageRef: { imageId: 9, url: 'u' } } })?.imageId).toBe(9);
+  });
+  it('returns undefined when no cover ref is present', () => {
+    expect(headerImageRefOf({ title: 't', body: 'b', data: { v: 1, buttons: [] } })).toBeUndefined();
   });
 });
