@@ -7,6 +7,7 @@ import { Button, Card, Group, Stack } from '@civitai/blocks-react/ui';
 import type { SharedListItem } from '@civitai/blocks-react';
 
 import { token, radius, metaText, type Palette } from '../theme.js';
+import { CLASS_RISE, motionClass, useMotion } from '../motion.js';
 import { formatCostRange, generatorCostRange } from '../lib/cost.js';
 
 export interface IntroPanelProps {
@@ -22,8 +23,12 @@ export interface IntroPanelProps {
 }
 
 export function IntroPanel({ c, examples, onTryExample, onCreate, onDismiss }: IntroPanelProps) {
+  const motion = useMotion();
   return (
-    <Card withBorder padding="md" data-testid="intro-panel">
+    // Entrance only. Dismissing UNMOUNTS the panel (see Browse), and an EXIT
+    // animation would mean keeping it mounted past the click — which changes the
+    // documented dismiss contract its tests pin. Restraint: fade it in, drop it out.
+    <Card withBorder padding="md" data-testid="intro-panel" className={motionClass(motion, CLASS_RISE)}>
       <Stack gap={12}>
         <Group justify="space-between" align="flex-start" gap={12} wrap={false}>
           <Stack gap={4} style={{ minWidth: 0 }}>

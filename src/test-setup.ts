@@ -26,11 +26,20 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-/** Build a matchMedia stub where max-width queries report the given mobile-ness. */
-export function makeMatchMedia(isMobile: boolean) {
+/**
+ * Build a matchMedia stub where max-width queries report the given mobile-ness.
+ *
+ * 🔴 `prefers-reduced-motion` is answered EXPLICITLY (default: no preference,
+ * i.e. motion plays). Without that branch it fell through to the generic
+ * `!isMobile` arm, so `setViewport('desktop')` silently reported "this viewer
+ * wants reduced motion" and every desktop test would have measured a
+ * motion-DISABLED app while looking like it measured the real one.
+ */
+export function makeMatchMedia(isMobile: boolean, reducedMotion = false) {
   return (query: string) => {
     const isMaxWidth = /max-width/.test(query);
-    const matches = isMaxWidth ? isMobile : !isMobile;
+    const isReducedMotion = /prefers-reduced-motion/.test(query);
+    const matches = isReducedMotion ? reducedMotion : isMaxWidth ? isMobile : !isMobile;
     return {
       matches,
       media: query,
@@ -47,4 +56,13 @@ export function makeMatchMedia(isMobile: boolean) {
 /** Switch the jsdom viewport between mobile and desktop for the responsive branch. */
 export function setViewport(kind: 'mobile' | 'desktop') {
   window.matchMedia = makeMatchMedia(kind === 'mobile') as typeof window.matchMedia;
+}
+
+/**
+ * Answer `(prefers-reduced-motion: reduce)` for the next render. `true` is the
+ * accessibility branch — every motion class must be withheld (see ../motion.ts).
+ * Viewport defaults to mobile, matching the suite's default.
+ */
+export function setReducedMotion(reduce: boolean, kind: 'mobile' | 'desktop' = 'mobile') {
+  window.matchMedia = makeMatchMedia(kind === 'mobile', reduce) as typeof window.matchMedia;
 }
