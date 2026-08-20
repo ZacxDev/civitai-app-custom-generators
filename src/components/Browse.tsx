@@ -22,6 +22,9 @@ import { SegmentedControl, Tooltip, ToastProvider, useToast } from '@civitai/com
 import type { SharedListItem } from '@civitai/blocks-react';
 import type { StoredDraft } from '../lib/drafts.js';
 import { token, radius, metaText, type Palette } from '../theme.js';
+// Motion is opt-in per element and gated on `prefers-reduced-motion` by
+// `useMotion()` — see ../motion.ts for the single-guard rationale.
+import { CLASS_LIFT, CLASS_RISE, CLASS_TICK, motionClass, staggerDelayMs, useChangeTick, useMotion } from '../motion.js';
 import { formatCostRange, generatorCostRange } from '../lib/cost.js';
 import { EXAMPLE_SHARED_ITEMS } from '../lib/examples.js';
 import { EmptyState } from './EmptyState.js';
@@ -84,6 +87,9 @@ interface VoteState {
 export function Browse(props: BrowseProps) {
   const { c, loading, error, discover, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, coverUrlFor, onRetry } = props;
   const [tab, setTab] = useState<Tab>('discover');
+  // Motion gate for the chrome Browse owns directly (draft cards). Cards rendered
+  // by PublishedCard/IntroPanel read it themselves.
+  const motion = useMotion();
   // One-time onboarding intro on Discover; dismissed for the session.
   const [introDismissed, setIntroDismissed] = useState(false);
   // Confirm-gated withdraw of an own published generator.
@@ -311,13 +317,14 @@ export function Browse(props: BrowseProps) {
                 }
               />
             )}
-            {visibleDiscover.map((item) => {
+            {visibleDiscover.map((item, i) => {
               const vs = voteState(item);
               return (
                 <PublishedCard
                   key={item.key}
                   item={item}
                   c={c}
+                  enterIndex={i}
                   coverUrl={coverUrlFor(item)}
                   voteCount={vs.count}
                   voted={vs.voted}
@@ -356,8 +363,16 @@ export function Browse(props: BrowseProps) {
                   }
                 />
               )}
-              {visibleDrafts.map((d) => (
-                <Card key={d.id} withBorder padding="md" data-testid="draft-card" data-draft-id={d.id}>
+              {visibleDrafts.map((d, i) => (
+                <Card
+                  key={d.id}
+                  withBorder
+                  padding="md"
+                  data-testid="draft-card"
+                  data-draft-id={d.id}
+                  className={motionClass(motion, CLASS_LIFT, CLASS_RISE)}
+                  style={motion ? { animationDelay: `${staggerDelayMs(i)}ms` } : undefined}
+                >
                   <Group justify="space-between">
                     <div>
                       <div style={{ fontWeight: 600 }}>{d.config.name || 'Untitled generator'}</div>
@@ -398,13 +413,14 @@ export function Browse(props: BrowseProps) {
                   body="Publish a generator from the builder to share it in Discover."
                 />
               )}
-              {myPublished.map((item) => {
+              {myPublished.map((item, i) => {
                 const vs = voteState(item);
                 return (
                   <PublishedCard
                     key={item.key}
                     item={item}
                     c={c}
+                    enterIndex={i}
                     coverUrl={coverUrlFor(item)}
                     voteCount={vs.count}
                     voted={vs.voted}
@@ -494,6 +510,7 @@ function PublishedCard({
   item,
   c,
   coverUrl,
+  enterIndex,
   voteCount,
   voted,
   onVote,
@@ -506,6 +523,8 @@ function PublishedCard({
   c: Palette;
   /** Host-resolved MODERATED cover url (from the stored `imageId`), or null. */
   coverUrl: string | null;
+  /** Position in its list — drives the capped entrance stagger. Omit for no entrance. */
+  enterIndex?: number;
   voteCount: number;
   voted: boolean;
   onVote: () => void;
@@ -522,6 +541,10 @@ function PublishedCard({
   // estimate on the run path). Shown prefixed with "≈" so it never reads as exact.
   const costLabel = formatCostRange(generatorCostRange(item.value));
   const toast = useToast();
+  const motion = useMotion();
+  // 0 until the count actually moves, so a freshly-painted list does not tick.
+  // Doubles as the tick element's `key` so a SECOND vote replays the animation.
+  const voteTick = useChangeTick(voteCount);
 
   async function share() {
     if (!onShare) return;
@@ -534,7 +557,14 @@ function PublishedCard({
   }
 
   return (
-    <Card withBorder padding="md" data-testid="published-card" data-key={item.key}>
+    <Card
+      withBorder
+      padding="md"
+      data-testid="published-card"
+      data-key={item.key}
+      className={motionClass(motion, CLASS_LIFT, enterIndex != null && CLASS_RISE)}
+      style={motion && enterIndex != null ? { animationDelay: `${staggerDelayMs(enterIndex)}ms` } : undefined}
+    >
       <Stack gap={10}>
         {coverUrl && (
           // A broken/dead cover URL (withdrawn image, offline host) collapses
@@ -573,7 +603,18 @@ function PublishedCard({
                 aria-label={voted ? 'Remove upvote' : 'Upvote'}
                 onClick={onVote}
               >
-                ▲ <Badge variant="light" data-testid="published-votes"><span style={{ fontVariantNumeric: 'tabular-nums' }}>{voteCount}</span></Badge>
+                ▲{' '}
+                <Badge variant="light" data-testid="published-votes">
+                  {/* `key` remounts the span so the tick REPLAYS on every vote —
+                      re-applying the same class to a reused node would not. */}
+                  <span
+                    key={voteTick}
+                    className={motionClass(motion, voteTick > 0 && CLASS_TICK)}
+                    style={{ fontVariantNumeric: 'tabular-nums' }}
+                  >
+                    {voteCount}
+                  </span>
+                </Badge>
               </Button>
             </Tooltip>
             {onShare && (

@@ -14,6 +14,7 @@ import { App } from './App.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { ANALYTICS_EVENTS } from './lib/analytics.js';
 import { Harness } from './Harness.js';
+import { injectMotionStyles } from './motion.js';
 import { installHarnessTransport } from './dev-transport.js';
 import './index.css';
 
@@ -36,6 +37,13 @@ function RootBoundary({ children }: { children: ReactNode }) {
 // components also self-inject on first render — this just guarantees tokens
 // exist before the first paint).
 injectBlocksStyles();
+
+// Same reason, for the app's own motion layer (./motion.ts). `useMotion()` also
+// self-injects, but from a `useEffect` — which React may run AFTER the first
+// paint, and an entrance animation whose stylesheet lands one frame late shows
+// the card at full opacity and THEN fades it in from 0. Injecting up-front makes
+// that impossible. Idempotent, so the hook's call is a no-op.
+injectMotionStyles();
 
 // `npm run dev:harness` sets VITE_DEV_HARNESS=true to mount the local mock host
 // (the published `@civitai/blocks-react/testing` Harness / createMockHost) that
