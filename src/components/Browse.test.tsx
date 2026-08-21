@@ -19,13 +19,14 @@ const VIEWER_ID = 99;
 function publishedItem(
   key: string,
   title: string,
-  over: { authorUserId?: number; data?: GeneratorData } = {},
+  over: { authorUserId?: number; data?: GeneratorData; viewerVoted?: boolean } = {},
 ): SharedListItem {
   return {
     key,
     authorUserId: over.authorUserId ?? VIEWER_ID,
     value: { title, body: 'a desc', data: over.data ?? { v: 1, buttons: [] } },
     count: 3,
+    viewerVoted: over.viewerVoted ?? false,
     createdAt: new Date(),
     updatedAt: new Date(),
   };

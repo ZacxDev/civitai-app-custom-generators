@@ -70,6 +70,10 @@ export function exampleSharedItems(): SharedListItem[] {
     authorUserId: 0, // sentinel — not a real author
     value: buildPublishPayload(config),
     count: 0,
+    // Synthetic rows the intro panel forks from — they exist only client-side, so
+    // no viewer can ever have voted on one. (`viewerVoted` became REQUIRED on
+    // `SharedListItem` in @civitai/blocks-react 0.29+.)
+    viewerVoted: false,
     createdAt: epoch,
     updatedAt: epoch,
   }));

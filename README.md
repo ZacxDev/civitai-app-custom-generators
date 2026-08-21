@@ -22,15 +22,26 @@ later phase.
 
 ## SDK
 
-Pinned to the published contract: `@civitai/app-sdk@^0.27.0` +
-`@civitai/blocks-react@^0.36.0` (+ `@civitai/theme@^0.2.0` for the design
-tokens). Hooks used: `useBlockContext`, `useBlockToken`, `useResourcePicker`,
+Pinned to the published contract: `@civitai/app-sdk@^0.35.0` +
+`@civitai/blocks-react@^0.43.0` (+ `@civitai/theme@^0.2.1`,
+`@civitai/components@^0.3.1` and `@civitai/components-react@^0.3.1` for the
+design system). Hooks used: `useBlockContext`, `useBlockToken`, `useResourcePicker`,
 `useImageUpload`, `useGenerationResources`, `useBuzzWorkflow`, `useBuzzBalance`,
 `useBuzzPurchase`, `useSharedStorage`, `useAppStorage`, `useBlockAnalytics`,
 `useCivitaiNavigate`, `useRequestConsent` / `useRequestSignIn`, `useBlockResize`.
 UI is composed on the `@civitai/blocks-react/ui` component pack, which as of 0.36
 delegates its theming to `@civitai/theme`'s `--civitai-*` design tokens — the
 app chrome (`theme.ts`) reads those same tokens (no hand-coded palette).
+
+🔴 **`estimate()` REJECTS as of `@civitai/blocks-react@0.43.0`.** A host reply
+carrying no usable price used to resolve as a cost-less "success"
+(civitai/civitai#4159); it now throws `WorkflowEstimateError` with a `.code`
+(`'failed' | 'no-cost'`) and the host's verbatim `.snapshot` . Every `estimate()`
+call site must sit in a `try/catch` — moderator **review preview** answers every
+workflow request with a failure, so a missing `catch` turns a reviewer's first
+click into an unhandled rejection. `src/lib/estimate.ts` owns the mapping:
+`.snapshot.error` is server-authored and UNSANITISED, so it is logged and never
+rendered; the viewer sees copy keyed off `.code`.
 
 `useImageUpload` is used with TWO purposes:
 
@@ -167,10 +178,20 @@ npm run build
 As of `@civitai/blocks-react@0.36` the `/ui` pack provides **Slider**, **Select**,
 **NumberInput**, **SegmentedControl**, **Collapse**, and **Modal** — so the app
 composes entirely on the pack (no more hand-rolled range/select/number inputs).
-The still-missing primitives (**Toast**, **Tooltip**, **Image**) are being added
-to `@civitai/components` in a parallel effort (**Track U**); the interim
-hand-rolls (the "Copied!" share confirmation, raw `<img>` result/cover grids)
-carry `TODO(track-u)` markers to adopt those once published.
+**Toast**, **Tooltip** and **Image** shipped in `@civitai/components@0.3.0`
+(Track U) and the app consumes them from `@civitai/components-react` — the
+hand-rolled interims are gone.
+
+🔴 **They need a SINGLE resolved `@civitai/components`.** Both
+`@civitai/blocks-react`'s `injectBlocksStyles()` and `@civitai/components-react`'s
+`useComponentStyles()` inject through the same `style[data-civitai-components]`
+marker, so whichever runs first wins and the second no-ops. When npm nests an
+older copy under `blocks-react` (the case in
+`civitai/civitai-app-starters#247`), the older, smaller stylesheet is the one
+that lands and Tooltip/Toast/Image render **unstyled** — a tooltip becomes
+visible layout text with no console error. Keep `@civitai/components` deduped to
+ONE version: `npm ls @civitai/components` must print a single resolution with no
+nested copy.
 
 ## Not verified without a live host
 

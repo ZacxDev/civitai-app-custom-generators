@@ -47,7 +47,7 @@ function item(key: string, title: string, count = 0): SharedListItem {
     description: `${title} description`,
     buttons: [newButton({ params: { steps: 25, width: 1024, height: 1024, quantity: 1 } })],
   };
-  return { key, authorUserId: 7, value: buildPublishPayload(config), count, createdAt: new Date(), updatedAt: new Date() };
+  return { key, authorUserId: 7, value: buildPublishPayload(config), count, viewerVoted: false, createdAt: new Date(), updatedAt: new Date() };
 }
 
 function renderBrowse(over: Partial<BrowseProps> = {}) {

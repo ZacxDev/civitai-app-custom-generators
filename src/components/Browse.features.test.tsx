@@ -12,12 +12,13 @@ import type { SharedListItem } from '@civitai/blocks-react';
 
 const c = palette();
 
-function item(key: string, title: string, count = 0, authorUserId = 7): SharedListItem {
+function item(key: string, title: string, count = 0, authorUserId = 7, viewerVoted = false): SharedListItem {
   return {
     key,
     authorUserId,
     value: { title, body: `${title} description`, data: { v: 1, buttons: [] } },
     count,
+    viewerVoted,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
@@ -49,6 +50,31 @@ function renderBrowse(over: Partial<BrowseProps> = {}) {
   render(<Browse {...props} />);
   return props;
 }
+
+describe('Browse — vote state hydrates from the host (`viewerVoted`)', () => {
+  it('a row the viewer ALREADY up-voted renders pressed, and one click UNVOTES it', async () => {
+    // `viewerVoted` is required on `SharedListItem` since @civitai/blocks-react
+    // 0.29. Before it was read, an already-voted row rendered un-voted, so the
+    // first click sent a duplicate VOTE and unvoting took two clicks.
+    const onVote = vi.fn(async () => 6);
+    renderBrowse({ discover: [item('k1', 'Alpha', 7, 7, true)], onVote });
+
+    const card = screen.getByTestId('published-card');
+    expect(within(card).getByTestId('vote-button')).toHaveAttribute('aria-pressed', 'true');
+
+    await userEvent.click(within(card).getByTestId('vote-button'));
+    // ONE click, and it is an UNVOTE (`false`), not a duplicate vote.
+    expect(onVote).toHaveBeenCalledWith(expect.objectContaining({ key: 'k1' }), false);
+    await waitFor(() => expect(within(card).getByTestId('published-votes')).toHaveTextContent('6'));
+    expect(within(card).getByTestId('vote-button')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('a row the viewer has NOT voted on still renders un-pressed', () => {
+    renderBrowse({ discover: [item('k1', 'Alpha', 7, 7, false)] });
+    const card = screen.getByTestId('published-card');
+    expect(within(card).getByTestId('vote-button')).toHaveAttribute('aria-pressed', 'false');
+  });
+});
 
 describe('Browse — voting (optimistic + rollback)', () => {
   it('optimistically increments the count and calls onVote(item, true)', async () => {

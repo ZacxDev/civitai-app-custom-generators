@@ -116,9 +116,17 @@ export function fakeShared(seed: SharedListItem[] = [], opts: { failWithdraw?: s
     const idx = items.findIndex((i) => i.key === key);
     if (idx >= 0) items[idx] = { ...items[idx], value, updatedAt: new Date() };
   };
+  /** Keys passed to `report`, with their reason — for asserting the abuse seam. */
+  const reported: Array<{ key: string; reason?: string }> = [];
   const shared: UseSharedStorage = {
     async list() {
       return { items: [...items] };
+    },
+    async get(key) {
+      return items.find((i) => i.key === key) ?? null;
+    },
+    async report(key, reason) {
+      reported.push({ key, reason });
     },
     async getCount() {
       return 0;
@@ -129,7 +137,7 @@ export function fakeShared(seed: SharedListItem[] = [], opts: { failWithdraw?: s
     async append(value) {
       appended.push(value);
       const key = `shared:${items.length}`;
-      items.unshift({ key, authorUserId: 99, value, count: 0, createdAt: new Date(), updatedAt: new Date() });
+      items.unshift({ key, authorUserId: 99, value, count: 0, viewerVoted: false, createdAt: new Date(), updatedAt: new Date() });
       return { key };
     },
     update,
@@ -148,7 +156,7 @@ export function fakeShared(seed: SharedListItem[] = [], opts: { failWithdraw?: s
       return { ok: true, deleted };
     },
   };
-  return { shared, appended, items, updated, withdrawn, update };
+  return { shared, appended, items, updated, withdrawn, reported, update };
 }
 
 export interface MockWorkflowOpts {

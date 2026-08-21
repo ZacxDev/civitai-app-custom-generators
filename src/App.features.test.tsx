@@ -40,6 +40,7 @@ function publishedSeed(key: string, title: string, authorUserId = 7): SharedList
       },
     },
     count: 2,
+    viewerVoted: false,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
@@ -178,6 +179,7 @@ describe('App — deeplink open (feature #8)', () => {
       authorUserId: 7,
       value: { title: 'Bad', body: 'x', data: { v: 2, buttons: 'nope' } as unknown as never },
       count: 0,
+      viewerVoted: false,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
