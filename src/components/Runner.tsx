@@ -25,6 +25,7 @@ import type { GenButton, GeneratorConfig, GenButtonParams, QueueItem, QueueStatu
 import { DEFAULT_PROMPT_PLACEHOLDER, buildSubmitBody, canRunButton, exposesImage, exposesPrompt, missingRequiredInputs, type RequiredInput } from '../lib/generator.js';
 import { isTerminalSnapshot, mapSnapshotStatus, pollToTerminal, queueStatusLabel } from '../lib/workflow.js';
 import { isInsufficientBuzzError } from '../lib/buzz.js';
+import { ESTIMATE_NO_COST_MESSAGE, estimateFailureMessage, isPricedSnapshot } from '../lib/estimate.js';
 import type { Analytics } from '../lib/analytics.js';
 import { ANALYTICS_EVENTS, noopAnalytics } from '../lib/analytics.js';
 import { Image } from '@civitai/components-react';
@@ -227,9 +228,17 @@ export function Runner(props: RunnerProps) {
 
     try {
       const snap = await estimate(body);
+      // Only a PRICED snapshot may reach Confirm — see `isPricedSnapshot`.
+      if (!isPricedSnapshot(snap)) {
+        patchItem(id, { status: 'failed', error: ESTIMATE_NO_COST_MESSAGE });
+        return;
+      }
       patchItem(id, { status: 'confirming', estimatedCost: snap.cost?.total });
     } catch (e) {
-      patchItem(id, { status: 'failed', error: errMsg(e) });
+      // blocks-react >= 0.43 REJECTS an unusable estimate (civitai/civitai#4159).
+      // `estimateFailureMessage` maps it to viewer-safe copy and routes the
+      // server's unsanitised reason to the console instead of the screen.
+      patchItem(id, { status: 'failed', error: estimateFailureMessage(e) });
     }
   }
 
@@ -329,9 +338,13 @@ export function Runner(props: RunnerProps) {
     void (async () => {
       try {
         const snap = await estimate(item.body);
+        if (!isPricedSnapshot(snap)) {
+          patchItem(id, { status: 'failed', error: ESTIMATE_NO_COST_MESSAGE });
+          return;
+        }
         patchItem(id, { status: 'confirming', estimatedCost: snap.cost?.total });
       } catch (e) {
-        patchItem(id, { status: 'failed', error: errMsg(e) });
+        patchItem(id, { status: 'failed', error: estimateFailureMessage(e) });
       }
     })();
   }

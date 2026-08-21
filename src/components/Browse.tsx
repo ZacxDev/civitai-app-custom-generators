@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react';
 
 import { Alert, Badge, Button, Card, Group, Loader, Modal, Stack, TextInput } from '@civitai/blocks-react/ui';
-// Design-system primitives (`@civitai/components-react` 0.3.0): the accessible
+// Design-system primitives (`@civitai/components-react` 0.3.1): the accessible
 // SegmentedControl, hover/focus Tooltip, and the Toast notification system. These
 // render the same `data-civitai-ui` + `--civitai-*` token contract as the
 // blocks-react/ui pack, so they sit alongside it as one visual system.
@@ -103,9 +103,16 @@ export function Browse(props: BrowseProps) {
   const [draftsVisible, setDraftsVisible] = useState(PAGE_SIZE);
 
   // Optimistic vote overlay: key → { count, voted }. Seeds lazily from the item's
-  // own count on first vote; sort/render prefer the overlay when present.
+  // OWN row on first vote; sort/render prefer the overlay when present.
+  //
+  // `viewerVoted` is the host's authoritative per-viewer answer (required on
+  // `SharedListItem` since @civitai/blocks-react 0.29). Seeding `voted: false`
+  // regardless — which is what this did before — meant an already-upvoted row
+  // rendered as un-voted, so the first click sent a *vote* the host rejected as
+  // a duplicate and the viewer had to click TWICE to unvote.
   const [voteOverlay, setVoteOverlay] = useState<Record<string, VoteState>>({});
-  const voteState = (item: SharedListItem): VoteState => voteOverlay[item.key] ?? { count: item.count, voted: false };
+  const voteState = (item: SharedListItem): VoteState =>
+    voteOverlay[item.key] ?? { count: item.count, voted: item.viewerVoted };
   // Per-key click sequence so an OUT-OF-ORDER resolution (rapid vote/unvote) can't
   // clobber a newer click's result — only the latest click applies its outcome.
   const voteSeq = useRef<Record<string, number>>({});

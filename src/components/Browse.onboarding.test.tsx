@@ -24,6 +24,7 @@ function itemWithButtons(key: string, title: string): SharedListItem {
     authorUserId: 7,
     value: buildPublishPayload(config),
     count: 0,
+    viewerVoted: false,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
