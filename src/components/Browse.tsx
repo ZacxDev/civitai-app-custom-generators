@@ -44,6 +44,12 @@ export interface BrowseProps {
   loading: boolean;
   error: string | null;
   discover: SharedListItem[];
+  /**
+   * The `discover` rows are ONE PAGE of a longer board. When true, "Popular" is
+   * a ranking over that page and search is a filter over it — both honest only
+   * to the depth read, so the UI says so. See the notice in the Discover panel.
+   */
+  discoverTruncated: boolean;
   myDrafts: StoredDraft[];
   myPublished: SharedListItem[];
   viewerId: number | null;
@@ -85,7 +91,7 @@ interface VoteState {
 }
 
 export function Browse(props: BrowseProps) {
-  const { c, loading, error, discover, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, coverUrlFor, onRetry } = props;
+  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, coverUrlFor, onRetry } = props;
   const [tab, setTab] = useState<Tab>('discover');
   // Motion gate for the chrome Browse owns directly (draft cards). Cards rendered
   // by PublishedCard/IntroPanel read it themselves.
@@ -297,6 +303,24 @@ export function Browse(props: BrowseProps) {
               />
             </Group>
 
+            {/* 🔴 "Popular" and search both operate on ONE PAGE of the board.
+                `list` is newest-first with no rank parameter, so a generator
+                with more votes than anything here can sit past the page and
+                never appear — and a search that misses it renders as "no such
+                generator exists", which is a wrong answer rather than a short
+                one. Shown only for those two: the "Newest" tab really is
+                showing the newest, so a notice there would be noise. */}
+            {discoverTruncated && (sort === 'top' || query.trim().length > 0) && (
+              <span
+                data-testid="discover-partial-notice"
+                role="status"
+                style={{ ...metaText, color: c.muted }}
+              >
+                {sort === 'top'
+                  ? 'Ordered by votes across the generators loaded so far, not the whole catalog.'
+                  : 'Searching the generators loaded so far, not the whole catalog.'}
+              </span>
+            )}
             {loading && (
               <Group gap={8} data-testid="discover-loading" role="status" aria-live="polite">
                 <Loader size="sm" />

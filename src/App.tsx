@@ -247,6 +247,13 @@ export function App({ deps: depsOverride }: AppProps = {}) {
 
   // ---- browse data ----
   const [shared, setShared] = useState<SharedListItem[]>([]);
+  /**
+   * The board has MORE rows than the single page read below, so anything Browse
+   * computes over `shared` — the "Popular" ordering, the search filter — covers
+   * a prefix of the board rather than the board. Surfaced in the UI; see
+   * `discoverTruncated` on <Browse>.
+   */
+  const [discoverTruncated, setDiscoverTruncated] = useState(false);
   const [myDrafts, setMyDrafts] = useState<StoredDraft[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -276,6 +283,9 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         ]);
         if (cancelled) return;
         setShared(sharedRes.items);
+        // `list` is newest-first and takes no rank parameter, so a cursor here
+        // means the rows NOT read may outrank or match anything that was.
+        setDiscoverTruncated(Boolean(sharedRes.nextCursor));
         setMyDrafts(drafts);
       } catch (e) {
         if (!cancelled) setError(errMsg(e));
@@ -624,6 +634,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       <div style={contentStyle}>
         {view === 'browse' && (
           <Browse
+            discoverTruncated={discoverTruncated}
             c={c}
             loading={loading}
             error={error}

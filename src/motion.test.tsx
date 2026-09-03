@@ -56,6 +56,7 @@ function renderBrowse(over: Partial<BrowseProps> = {}) {
     loading: false,
     error: null,
     discover: [],
+    discoverTruncated: false,
     myDrafts: [],
     myPublished: [],
     viewerId: 99,
