@@ -200,6 +200,10 @@ export function Browse(props: BrowseProps) {
     return base;
   }, [discover, query, sort, voteOverlay]);
   const visibleDiscover = filteredDiscover.slice(0, discoverVisible);
+  /** Every loaded row is on screen, so the absence of a "Show more" reads as
+   *  "that is the whole catalog" — which is false on a truncated board, and is
+   *  the one way the Newest tab lies. */
+  const allLoadedShown = filteredDiscover.length <= discoverVisible;
   const visibleDrafts = myDrafts.slice(0, draftsVisible);
 
   return (
@@ -303,22 +307,32 @@ export function Browse(props: BrowseProps) {
               />
             </Group>
 
-            {/* 🔴 "Popular" and search both operate on ONE PAGE of the board.
-                `list` is newest-first with no rank parameter, so a generator
-                with more votes than anything here can sit past the page and
-                never appear — and a search that misses it renders as "no such
-                generator exists", which is a wrong answer rather than a short
-                one. Shown only for those two: the "Newest" tab really is
-                showing the newest, so a notice there would be noise. */}
-            {discoverTruncated && (sort === 'top' || query.trim().length > 0) && (
+            {/* 🔴 EVERY claim this panel makes about the catalog is really a
+                claim about ONE PAGE of it. `list` is newest-first with no rank
+                parameter, so:
+                  - "Popular" ranks only what was loaded — a generator with more
+                    votes can sit past the page and never appear;
+                  - a search that misses such a row renders "No matches", i.e.
+                    "no such generator exists" — a WRONG answer, not a short one;
+                  - reaching the end of the loaded rows looks like the end of the
+                    catalog, on every tab including Newest.
+                🔴 The search case is the worst of the three, so when a search is
+                active its wording WINS — an earlier version let the "Popular"
+                wording win whenever both applied, which disclosed the lesser
+                problem in exactly the state the worse one was live. */}
+            {discoverTruncated && (sort === 'top' || query.trim().length > 0 || allLoadedShown) && (
               <span
                 data-testid="discover-partial-notice"
                 role="status"
-                style={{ ...metaText, color: c.muted }}
+                style={{ ...metaText }}
               >
-                {sort === 'top'
-                  ? 'Ordered by votes across the generators loaded so far, not the whole catalog.'
-                  : 'Searching the generators loaded so far, not the whole catalog.'}
+                {query.trim().length > 0
+                  ? sort === 'top'
+                    ? 'Searching and ranking only the generators loaded so far, not the whole catalog.'
+                    : 'Searching the generators loaded so far, not the whole catalog.'
+                  : sort === 'top'
+                    ? 'Ordered by votes across the generators loaded so far, not the whole catalog.'
+                    : 'Showing the generators loaded so far — the catalog has more.'}
               </span>
             )}
             {loading && (
@@ -369,7 +383,9 @@ export function Browse(props: BrowseProps) {
             {filteredDiscover.length > discoverVisible && (
               <Group justify="center">
                 <Button variant="light" size="sm" data-testid="discover-show-more" onClick={() => setDiscoverVisible((n) => n + PAGE_SIZE)}>
-                  Show more ({filteredDiscover.length - discoverVisible})
+                  {/* No exact total on a truncated board: the remainder is
+                      of the LOADED rows, not of the catalog. */}
+                  Show more{discoverTruncated ? '' : ` (${filteredDiscover.length - discoverVisible})`}
                 </Button>
               </Group>
             )}
@@ -437,11 +453,19 @@ export function Browse(props: BrowseProps) {
 
             <Stack gap={10}>
               <div style={{ fontSize: 13, color: c.muted, fontWeight: 600 }}>Published by me</div>
+              {/* 🔴 `myPublished` is filtered out of the SAME single page, so on
+                  a truncated board the viewer's own generators past that page
+                  are missing here — and if all of them are, this panel claims
+                  they published nothing. Say which of the two it is. */}
               {myPublished.length === 0 && (
                 <EmptyState
                   data-testid="published-empty"
-                  title="Nothing published yet"
-                  body="Publish a generator from the builder to share it in Discover."
+                  title={discoverTruncated ? 'Nothing published in the loaded page' : 'Nothing published yet'}
+                  body={
+                    discoverTruncated
+                      ? 'The catalog has more generators than this app loads at once, so anything you published earlier may not appear here.'
+                      : 'Publish a generator from the builder to share it in Discover.'
+                  }
                 />
               )}
               {myPublished.map((item, i) => {

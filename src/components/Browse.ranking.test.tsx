@@ -67,17 +67,27 @@ const popular = () => screen.getByRole('radio', { name: 'Popular' });
 
 const NOTICE = 'discover-partial-notice';
 
+/** 🔴 Pinned WHOLE, per branch. The first version of this file asserted only
+ *  /loaded so far/i — a fragment EVERY branch contains — so an audit showed both
+ *  messages could be replaced with arbitrary text, and could be SWAPPED with each
+ *  other, while the suite stayed green. That is exactly why the wrong-priority
+ *  bug below was invisible to it. */
+const COPY = {
+  searchAndTop: 'Searching and ranking only the generators loaded so far, not the whole catalog.',
+  search: 'Searching the generators loaded so far, not the whole catalog.',
+  top: 'Ordered by votes across the generators loaded so far, not the whole catalog.',
+  endOfList: 'Showing the generators loaded so far — the catalog has more.',
+} as const;
+
+const notice = () => screen.getByTestId(NOTICE).textContent;
+
 describe('partial-ranking disclosure', () => {
   it('🔴 says so when TOP ranks over a page that is not the whole board', async () => {
     setup(true);
     await screen.findByTestId('discover-list');
 
-    // Newest: no claim about ranking, so no notice.
-    expect(screen.queryByTestId(NOTICE)).toBeNull();
-
     await userEvent.click(popular());
-    const notice = await screen.findByTestId(NOTICE);
-    expect(notice.textContent).toMatch(/loaded so far/i);
+    await waitFor(() => expect(notice()).toBe(COPY.top));
   });
 
   it('🔴 says so when a SEARCH filters a page that is not the whole board', async () => {
@@ -85,22 +95,62 @@ describe('partial-ranking disclosure', () => {
     await screen.findByTestId('discover-list');
 
     await userEvent.type(screen.getByTestId('discover-search'), 'Alpha');
-    expect(await screen.findByTestId(NOTICE)).toBeTruthy();
+    await waitFor(() => expect(notice()).toBe(COPY.search));
+  });
+
+  it('🔴 SEARCH wording wins when both apply — it is the worse failure', async () => {
+    // The audited bug: with Popular active AND a query, the app disclosed only
+    // the ORDERING caveat while the search was returning "No matches" for a
+    // catalog it had not read. The app's own reasoning ranks the search failure
+    // worse, so the copy must cover it.
+    setup(true);
+    await screen.findByTestId('discover-list');
+
+    await userEvent.click(popular());
+    await userEvent.type(screen.getByTestId('discover-search'), 'Alpha');
+    await waitFor(() => expect(notice()).toBe(COPY.searchAndTop));
+  });
+
+  it('🔴 renders ALONGSIDE the "No matches" empty state, not instead of it', async () => {
+    // The state a user actually hits: a query that matches nothing on a
+    // truncated page. Without the notice, "No matches" is an authoritative
+    // wrong answer.
+    setup(true);
+    await screen.findByTestId('discover-list');
+
+    await userEvent.type(screen.getByTestId('discover-search'), 'zzzznomatch');
+    expect(await screen.findByTestId('discover-empty')).toBeTruthy();
+    expect(notice()).toBe(COPY.search);
+  });
+
+  it('🔴 says so on NEWEST once every loaded row is shown — the end-of-list lie', async () => {
+    // Reaching the end of the loaded rows with no "Show more" reads as the end
+    // of the catalog. That is the one way the Newest tab, which is otherwise
+    // truthful as labelled, still asserts something false.
+    setup(true);
+    await screen.findByTestId('discover-list');
+
+    await waitFor(() => expect(notice()).toBe(COPY.endOfList));
   });
 
   it('stays silent when the page IS the whole board (negative control)', async () => {
     setup(false);
     await screen.findByTestId('discover-list');
+    expect(screen.queryByTestId(NOTICE)).toBeNull();
 
     await userEvent.click(popular());
-    // Wait for the sort to actually take effect before asserting an absence —
-    // a notice that is merely late would otherwise read as a notice that is
-    // absent, which is the failure mode this control exists to avoid.
     await waitFor(() => expect(popular()).toBeChecked());
     expect(screen.queryByTestId(NOTICE)).toBeNull();
 
     await userEvent.type(screen.getByTestId('discover-search'), 'Alpha');
     await waitFor(() => expect(screen.getByTestId('discover-search')).toHaveValue('Alpha'));
     expect(screen.queryByTestId(NOTICE)).toBeNull();
+  });
+
+  it('🔴 the four messages are DISTINCT — a swap must not pass', () => {
+    // Pinning each branch is only worth anything if the branches differ; two
+    // identical strings would make a swap invisible again.
+    const all = Object.values(COPY);
+    expect(new Set(all).size).toBe(all.length);
   });
 });
