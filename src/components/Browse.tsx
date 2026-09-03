@@ -35,7 +35,12 @@ type Tab = 'discover' | 'mine';
 type SortMode = 'new' | 'top';
 
 /** How many items to reveal per "Show more" page. */
-const PAGE_SIZE = 12;
+/** Rows revealed per "Show more" click.
+ *  🔴 EXPORTED so tests can land exactly ON the boundary rather than duplicating
+ *  the number. A test that hardcodes 12 stops testing the boundary the moment
+ *  this changes, silently — measured: with the literal drifted, a `<=` -> `<`
+ *  mutant survives a fully green file. */
+export const PAGE_SIZE = 12;
 
 const TABS: Tab[] = ['discover', 'mine'];
 
@@ -383,9 +388,10 @@ export function Browse(props: BrowseProps) {
             {filteredDiscover.length > discoverVisible && (
               <Group justify="center">
                 <Button variant="light" size="sm" data-testid="discover-show-more" onClick={() => setDiscoverVisible((n) => n + PAGE_SIZE)}>
-                  {/* 🔴 The number is how many rows this click reveals — true as
-                      scoped, and never a claim about the catalog. Dropping it
-                      entirely (an earlier fix) removed a real progress signal
+                  {/* 🔴 The number is how many LOADED rows remain unshown — not
+                      how many this click reveals (a click reveals at most
+                      PAGE_SIZE), and never a claim about the catalog. Dropping
+                      it entirely (an earlier fix) removed a real progress signal
                       and left the viewer paging blind; SCOPING it keeps the
                       information without the implicature. */}
                   Show more{discoverTruncated
@@ -472,7 +478,11 @@ export function Browse(props: BrowseProps) {
               {myPublished.length === 0 && (
                 <EmptyState
                   data-testid="published-empty"
-                  title="Nothing published yet"
+                  title={
+                    viewerId != null && discoverTruncated
+                      ? 'Nothing published in the loaded page'
+                      : 'Nothing published yet'
+                  }
                   body={
                     viewerId != null && discoverTruncated
                       ? 'Publish a generator from the builder to share it in Discover. Note this app loads only part of the catalog at once, so anything you published earlier may not be listed here.'

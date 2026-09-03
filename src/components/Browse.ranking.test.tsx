@@ -27,6 +27,10 @@ import { Harness } from '@civitai/blocks-react/testing';
 import type { SharedListItem } from '@civitai/blocks-react';
 
 import { App, type AppDeps } from '../App.js';
+// 🔴 The REAL constant, not a copy. Duplicating it let the boundary case drift
+// off the boundary and keep passing — measured, a `<=` -> `<` mutant then
+// survived a green file.
+import { PAGE_SIZE } from './Browse.js';
 import { fakeShared, memoryDraftStore, mockWorkflow } from '../test-helpers.js';
 import type { GeneratorData } from '../types.js';
 
@@ -49,8 +53,6 @@ function item(key: string, title: string, count: number): SharedListItem {
  *  `discoverTruncated && true` — and an audit measured exactly that: deleting
  *  either arm of the disjunction, or the whole disjunction, SURVIVED a green
  *  suite. `rows` exists so the not-yet-paged-to-the-end state is constructible. */
-const PAGE_SIZE = 12;
-
 function manyItems(n: number) {
   // Descending vote counts so "Popular" order is deterministic and distinct
   // from insertion order.
@@ -275,7 +277,13 @@ describe('partial-ranking disclosure', () => {
       await userEvent.click(screen.getByTestId('tab-mine'));
 
       const empty = await screen.findByTestId('published-empty');
-      expect(empty.textContent).toContain('Nothing published yet');
+      // 🔴 REPOINTED. This asserted the headline "Nothing published yet" while
+      // the body below it said their generators may simply not be listed — the
+      // most prominent line on the panel telling a viewer with 30 published
+      // generators that they have none, contradicted three sentences later. The
+      // title has to move with the caveat.
+      expect(empty.textContent).toContain('Nothing published in the loaded page');
+      expect(empty.textContent).not.toContain('Nothing published yet');
       expect(empty.textContent).toContain(CTA);
       expect(empty.textContent).toContain('loads only part of the catalog');
     });
@@ -286,6 +294,7 @@ describe('partial-ranking disclosure', () => {
       await userEvent.click(screen.getByTestId('tab-mine'));
 
       const empty = await screen.findByTestId('published-empty');
+      expect(empty.textContent).toContain('Nothing published yet');
       expect(empty.textContent).toContain(CTA);
       expect(empty.textContent).not.toContain('loads only part of the catalog');
       expect(empty.textContent).not.toMatch(/you published/i);
