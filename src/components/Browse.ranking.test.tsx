@@ -271,7 +271,7 @@ describe('partial-ranking disclosure', () => {
     // action for everyone. The caveat is now appended and viewer-gated.
     const CTA = 'Publish a generator from the builder to share it in Discover.';
 
-    it('keeps the title and the CTA, and appends the caveat for a signed-in viewer', async () => {
+    it('moves the TITLE off "nothing published" and still keeps the CTA, for a signed-in viewer', async () => {
       setup(true, manyItems(15));
       await screen.findByTestId('discover-list');
       await userEvent.click(screen.getByTestId('tab-mine'));
@@ -286,6 +286,28 @@ describe('partial-ranking disclosure', () => {
       expect(empty.textContent).not.toContain('Nothing published yet');
       expect(empty.textContent).toContain(CTA);
       expect(empty.textContent).toContain('loads only part of the catalog');
+    });
+
+    it('🔴 an UNTRUNCATED board says "nothing published yet" with NO caveat', async () => {
+      // 🔴 The state nothing in the repo constructed. This round added a second
+      // `viewerId && discoverTruncated` predicate (on the title) and no state to
+      // exercise it, so BOTH predicates could be simplified to `viewerId != null`
+      // and the suite stayed green — measured, two surviving mutants.
+      //
+      // What that ships: a signed-in viewer on a board with no cursor (whole
+      // catalog loaded, under 50 rows) who has published nothing is told
+      // "Nothing published in the loaded page" — a hedge pointing at pages that
+      // do not exist. The mirror image of the contradiction the previous round
+      // fixed, and green all the way.
+      setup(false, manyItems(15));
+      await screen.findByTestId('discover-list');
+      await userEvent.click(screen.getByTestId('tab-mine'));
+
+      const empty = await screen.findByTestId('published-empty');
+      expect(empty.textContent).toContain('Nothing published yet');
+      expect(empty.textContent).not.toContain('Nothing published in the loaded page');
+      expect(empty.textContent).toContain(CTA);
+      expect(empty.textContent).not.toContain('loads only part of the catalog');
     });
 
     it('🔴 says NOTHING about a publishing history to a signed-out visitor', async () => {

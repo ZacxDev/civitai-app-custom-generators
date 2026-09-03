@@ -34,7 +34,6 @@ import { SafeImage } from './SafeImage.js';
 type Tab = 'discover' | 'mine';
 type SortMode = 'new' | 'top';
 
-/** How many items to reveal per "Show more" page. */
 /** Rows revealed per "Show more" click.
  *  🔴 EXPORTED so tests can land exactly ON the boundary rather than duplicating
  *  the number. A test that hardcodes 12 stops testing the boundary the moment
@@ -468,13 +467,19 @@ export function Browse(props: BrowseProps) {
                   truncated board the viewer's own generators past that page are
                   missing here — and if all of them are, this panel would claim
                   they published nothing.
-                  🔴 The caveat is APPENDED, never substituted: it is an extra
-                  sentence, so the panel keeps its title and its only call to
-                  action. And it is gated on `viewerId` — `myPublished` is empty
+                  🔴 BOTH halves move together, and both are gated on the SAME
+                  pair. The title stops asserting "nothing" (it would be false
+                  for someone with 30 published generators) and the body KEEPS
+                  its call to action, appending the caveat rather than replacing
+                  it. Earlier rounds traded one for the other in each direction;
+                  neither trade was necessary.
+                  🔴 The `viewerId` half is not decoration: `myPublished` is empty
                   for a signed-out viewer for a reason that has nothing to do
                   with truncation, and telling someone with no account that
-                  "anything you published earlier may not appear" is addressed
-                  to a history they do not have. */}
+                  "anything you published earlier may not appear" addresses a
+                  history they do not have. Dropping EITHER condition from EITHER
+                  branch is a live defect — the untruncated case would hedge at a
+                  page that does not exist — so both are pinned. */}
               {myPublished.length === 0 && (
                 <EmptyState
                   data-testid="published-empty"
