@@ -383,9 +383,14 @@ export function Browse(props: BrowseProps) {
             {filteredDiscover.length > discoverVisible && (
               <Group justify="center">
                 <Button variant="light" size="sm" data-testid="discover-show-more" onClick={() => setDiscoverVisible((n) => n + PAGE_SIZE)}>
-                  {/* No exact total on a truncated board: the remainder is
-                      of the LOADED rows, not of the catalog. */}
-                  Show more{discoverTruncated ? '' : ` (${filteredDiscover.length - discoverVisible})`}
+                  {/* 🔴 The number is how many rows this click reveals — true as
+                      scoped, and never a claim about the catalog. Dropping it
+                      entirely (an earlier fix) removed a real progress signal
+                      and left the viewer paging blind; SCOPING it keeps the
+                      information without the implicature. */}
+                  Show more{discoverTruncated
+                    ? ` (${filteredDiscover.length - discoverVisible} loaded)`
+                    : ` (${filteredDiscover.length - discoverVisible})`}
                 </Button>
               </Group>
             )}
@@ -453,17 +458,24 @@ export function Browse(props: BrowseProps) {
 
             <Stack gap={10}>
               <div style={{ fontSize: 13, color: c.muted, fontWeight: 600 }}>Published by me</div>
-              {/* 🔴 `myPublished` is filtered out of the SAME single page, so on
-                  a truncated board the viewer's own generators past that page
-                  are missing here — and if all of them are, this panel claims
-                  they published nothing. Say which of the two it is. */}
+              {/* 🔴 `myPublished` is filtered out of the SAME single page, so on a
+                  truncated board the viewer's own generators past that page are
+                  missing here — and if all of them are, this panel would claim
+                  they published nothing.
+                  🔴 The caveat is APPENDED, never substituted: it is an extra
+                  sentence, so the panel keeps its title and its only call to
+                  action. And it is gated on `viewerId` — `myPublished` is empty
+                  for a signed-out viewer for a reason that has nothing to do
+                  with truncation, and telling someone with no account that
+                  "anything you published earlier may not appear" is addressed
+                  to a history they do not have. */}
               {myPublished.length === 0 && (
                 <EmptyState
                   data-testid="published-empty"
-                  title={discoverTruncated ? 'Nothing published in the loaded page' : 'Nothing published yet'}
+                  title="Nothing published yet"
                   body={
-                    discoverTruncated
-                      ? 'The catalog has more generators than this app loads at once, so anything you published earlier may not appear here.'
+                    viewerId != null && discoverTruncated
+                      ? 'Publish a generator from the builder to share it in Discover. Note this app loads only part of the catalog at once, so anything you published earlier may not be listed here.'
                       : 'Publish a generator from the builder to share it in Discover.'
                   }
                 />

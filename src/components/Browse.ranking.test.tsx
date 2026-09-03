@@ -12,8 +12,12 @@
 //   - Search is worse in kind: a query that misses row 51 renders as "no such
 //     generator exists", which is a wrong answer rather than a short one.
 //
-// "Newest" is deliberately NOT covered. Showing the 50 newest under a control
-// labelled "Newest" is exactly what it claims, so a notice there would be noise.
+// 🔴 "Newest" IS covered, and an earlier version of this header said the
+// opposite. Its ORDERING is truthful as labelled — the 50 newest under a control
+// called "Newest" is exactly what it claims — but its END OF LIST is not: with
+// every loaded row on screen and no "Show more", the absent button reads as the
+// end of the catalog. That is the one false claim the tab still makes, so the
+// notice covers it there too.
 
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -40,8 +44,21 @@ function item(key: string, title: string, count: number): SharedListItem {
   };
 }
 
-function setup(hasMore: boolean) {
-  const shared = fakeShared([item('a', 'Alpha gen', 5), item('b', 'Beta gen', 2)], { hasMore });
+/** 🔴 PAGE_SIZE is 12 (Browse.tsx). A fixture with fewer rows than that makes
+ *  `allLoadedShown` a CONSTANT TRUE, which collapses the render guard to
+ *  `discoverTruncated && true` — and an audit measured exactly that: deleting
+ *  either arm of the disjunction, or the whole disjunction, SURVIVED a green
+ *  suite. `rows` exists so the not-yet-paged-to-the-end state is constructible. */
+const PAGE_SIZE = 12;
+
+function manyItems(n: number) {
+  // Descending vote counts so "Popular" order is deterministic and distinct
+  // from insertion order.
+  return Array.from({ length: n }, (_, i) => item(`k${i}`, `Gen ${i}`, n - i));
+}
+
+function setup(hasMore: boolean, rows?: SharedListItem[]) {
+  const shared = fakeShared(rows ?? [item('a', 'Alpha gen', 5), item('b', 'Beta gen', 2)], { hasMore });
   const wf = mockWorkflow();
   const deps: Partial<AppDeps> = {
     resolveResources: async () => [],
@@ -55,6 +72,29 @@ function setup(hasMore: boolean) {
   render(
     <Harness viewer={{ id: VIEWER_ID, username: 'me' }} theme="dark" consentGranted showLog={false}>
       <App deps={deps} />
+    </Harness>,
+  );
+  return shared;
+}
+
+/** Same harness, no viewer — `null` is the anon path; `undefined` would give the
+ *  mock host's default dev-viewer and silently make this a signed-IN case. */
+function setupAnon(hasMore: boolean, rows?: SharedListItem[]) {
+  const shared = fakeShared(rows ?? [], { hasMore });
+  const wf = mockWorkflow();
+  render(
+    <Harness viewer={null} theme="dark" consentGranted showLog={false}>
+      <App
+        deps={{
+          resolveResources: async () => [],
+          shared: shared.shared,
+          updateSharedGenerator: shared.update,
+          drafts: memoryDraftStore(),
+          estimate: wf.estimate,
+          submit: wf.submit,
+          poll: wf.poll,
+        }}
+      />
     </Harness>,
   );
   return shared;
@@ -145,6 +185,111 @@ describe('partial-ranking disclosure', () => {
     await userEvent.type(screen.getByTestId('discover-search'), 'Alpha');
     await waitFor(() => expect(screen.getByTestId('discover-search')).toHaveValue('Alpha'));
     expect(screen.queryByTestId(NOTICE)).toBeNull();
+  });
+
+  describe('with MORE loaded rows than fit on screen (the guard is not constant here)', () => {
+    // 15 rows against PAGE_SIZE 12 → 12 visible, `allLoadedShown` FALSE. This is
+    // the state the feature exists for, and the one no earlier fixture built.
+    const ROWS = 15;
+
+    it('🔴 stays SILENT on Newest until the viewer pages to the end', async () => {
+      setup(true, manyItems(ROWS));
+      await screen.findByTestId('discover-list');
+
+      // Not yet at the end: Newest makes no false end-of-list claim, so nothing
+      // to disclose. This is what pins the `allLoadedShown` arm — a mutant that
+      // hardcodes it true fires the notice here.
+      expect(screen.queryByTestId(NOTICE)).toBeNull();
+      expect(screen.getByTestId('discover-show-more')).toBeTruthy();
+
+      await userEvent.click(screen.getByTestId('discover-show-more'));
+      await waitFor(() => expect(screen.queryByTestId('discover-show-more')).toBeNull());
+      expect(notice()).toBe(COPY.endOfList);
+    });
+
+    it('🔴 the POPULAR arm fires while rows are still unpaged', async () => {
+      // `allLoadedShown` is false here, so only the `sort === 'top'` arm can be
+      // producing this notice. Deleting that arm used to survive.
+      setup(true, manyItems(ROWS));
+      await screen.findByTestId('discover-list');
+      expect(screen.queryByTestId(NOTICE)).toBeNull();
+
+      await userEvent.click(popular());
+      await waitFor(() => expect(notice()).toBe(COPY.top));
+    });
+
+    it('🔴 the SEARCH arm fires while rows are still unpaged', async () => {
+      // Same isolation for the query arm: a filter that keeps more rows than fit,
+      // so `allLoadedShown` stays false and only the query arm can fire.
+      setup(true, manyItems(ROWS));
+      await screen.findByTestId('discover-list');
+      expect(screen.queryByTestId(NOTICE)).toBeNull();
+
+      await userEvent.type(screen.getByTestId('discover-search'), 'Gen');
+      await waitFor(() => expect(notice()).toBe(COPY.search));
+    });
+
+    it('the Show more count is SCOPED to the loaded rows, not the catalog', async () => {
+      setup(true, manyItems(ROWS));
+      await screen.findByTestId('discover-list');
+      // Never a bare total on a truncated board — the number must say what it counts.
+      expect(screen.getByTestId('discover-show-more').textContent).toBe(
+        `Show more (${ROWS - PAGE_SIZE} loaded)`,
+      );
+    });
+
+    it('🔴 fires at the EXACT boundary — every loaded row shown, no Show more', async () => {
+      // 🔴 length === discoverVisible exactly. `allLoadedShown` uses `<=`, and a
+      // fixture that never LANDS on the boundary cannot see a `<=` -> `<`
+      // mutant: with 15 rows the comparison is 15<=24, true either way. At
+      // exactly PAGE_SIZE the two spellings disagree, which is the only place
+      // they can. Measured: this case is what kills that mutant.
+      setup(true, manyItems(PAGE_SIZE));
+      await screen.findByTestId('discover-list');
+
+      expect(screen.queryByTestId('discover-show-more')).toBeNull();
+      await waitFor(() => expect(notice()).toBe(COPY.endOfList));
+    });
+
+    it('NEGATIVE CONTROL: an untruncated board keeps the plain count and never discloses', async () => {
+      setup(false, manyItems(ROWS));
+      await screen.findByTestId('discover-list');
+      expect(screen.getByTestId('discover-show-more').textContent).toBe(`Show more (${ROWS - PAGE_SIZE})`);
+      await userEvent.click(screen.getByTestId('discover-show-more'));
+      await waitFor(() => expect(screen.queryByTestId('discover-show-more')).toBeNull());
+      expect(screen.queryByTestId(NOTICE)).toBeNull();
+    });
+  });
+
+  describe('the "Published by me" caveat', () => {
+    // 🔴 An earlier fix SUBSTITUTED the empty-state copy on a truncated board.
+    // That told a signed-OUT visitor — whose `myPublished` is empty for reasons
+    // having nothing to do with truncation — that "anything you published
+    // earlier may not appear here", and it deleted the panel's only call to
+    // action for everyone. The caveat is now appended and viewer-gated.
+    const CTA = 'Publish a generator from the builder to share it in Discover.';
+
+    it('keeps the title and the CTA, and appends the caveat for a signed-in viewer', async () => {
+      setup(true, manyItems(15));
+      await screen.findByTestId('discover-list');
+      await userEvent.click(screen.getByTestId('tab-mine'));
+
+      const empty = await screen.findByTestId('published-empty');
+      expect(empty.textContent).toContain('Nothing published yet');
+      expect(empty.textContent).toContain(CTA);
+      expect(empty.textContent).toContain('loads only part of the catalog');
+    });
+
+    it('🔴 says NOTHING about a publishing history to a signed-out visitor', async () => {
+      setupAnon(true, manyItems(15));
+      await screen.findByTestId('discover-list');
+      await userEvent.click(screen.getByTestId('tab-mine'));
+
+      const empty = await screen.findByTestId('published-empty');
+      expect(empty.textContent).toContain(CTA);
+      expect(empty.textContent).not.toContain('loads only part of the catalog');
+      expect(empty.textContent).not.toMatch(/you published/i);
+    });
   });
 
   it('🔴 the four messages are DISTINCT — a swap must not pass', () => {
