@@ -42,6 +42,7 @@ import { Loader } from '@civitai/blocks-react/ui';
 
 import { AI_WRITE_BUDGETED, hasGenerateScope } from './scopes.js';
 import { palette, pageStyle, contentStyle, metaText } from './theme.js';
+import { paintTheme } from './bootTheme.js';
 import type { BackgroundScanResult, GeneratorConfig } from './types.js';
 import { newGenerator, newId } from './lib/generator.js';
 import {
@@ -615,7 +616,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   // ---- render ----
   if (!ready) {
     return (
-      <div ref={rootRef} data-theme={theme} style={pageStyle(c)}>
+      <div ref={rootRef} data-theme={paintTheme(ready, theme)} style={pageStyle(c)}>
         <div
           style={{ margin: 'auto', display: 'grid', justifyItems: 'center', gap: 12 }}
           data-testid="app-loading"
@@ -630,7 +631,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   }
 
   return (
-    <div ref={rootRef} data-theme={theme} style={pageStyle(c)}>
+    <div ref={rootRef} data-theme={paintTheme(ready, theme)} style={pageStyle(c)}>
       <div style={contentStyle}>
         {view === 'browse' && (
           <Browse
