@@ -321,6 +321,24 @@ describe('partial-ranking disclosure', () => {
       expect(empty.textContent).not.toContain('loads only part of the catalog');
       expect(empty.textContent).not.toMatch(/you published/i);
     });
+
+    it('a signed-out visitor on an UNTRUNCATED board — the fourth cell', async () => {
+      // 🔴 Completes the viewerId x discoverTruncated enumeration. With only the
+      // other three cells built, the surviving mutation class is exactly XNOR —
+      // the one two-variable function that agrees with AND everywhere the suite
+      // looks and differs here — and rewriting either predicate that way left
+      // 274/274 green. No plausible simplification produces XNOR, so this closes
+      // a completeness gap rather than a live exposure; it is cheap, and the
+      // enumeration is worth being able to state as complete.
+      setupAnon(false, manyItems(15));
+      await screen.findByTestId('discover-list');
+      await userEvent.click(screen.getByTestId('tab-mine'));
+
+      const empty = await screen.findByTestId('published-empty');
+      expect(empty.textContent).toContain('Nothing published yet');
+      expect(empty.textContent).toContain(CTA);
+      expect(empty.textContent).not.toContain('loads only part of the catalog');
+    });
   });
 
   it('🔴 the four messages are DISTINCT — a swap must not pass', () => {
