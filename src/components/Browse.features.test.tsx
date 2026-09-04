@@ -44,6 +44,7 @@ function renderBrowse(over: Partial<BrowseProps> = {}) {
     onVote: vi.fn(async () => 1),
     onFork: vi.fn(),
     onShare: vi.fn(async () => true),
+    onReport: vi.fn(async () => {}),
     coverUrlFor: () => null,
     onRetry: vi.fn(),
     ...over,

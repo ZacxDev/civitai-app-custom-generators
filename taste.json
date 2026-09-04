@@ -1,0 +1,75 @@
+{
+  "slug": "custom-generators",
+  "_": "The app-taste ledger. Written by the pass, read by the next one. It records what was DECIDED and what was NOT shipped — not a changelog.",
+
+  "brandDepth": "accent",
+  "brandDepthWhy": "src/theme.ts consumes --civitai-* host tokens and holds ZERO hardcoded colors, so light/dark correctness stays with the platform. Moving to 'skin' would transfer that debt here and make the rubric's dual-theme assertions mandatory; nothing in this pass needed an app-owned palette.",
+  "hue": null,
+  "heroPrompt": null,
+  "heroSeed": null,
+  "heroNote": "Phase 1 was NOT run — no hue change, no hero generated, no Buzz spent. `civitai generate` is irreversible spend, so it stays an explicit operator decision rather than a side effect of a pass that had other business.",
+
+  "sdkVersionAtPass": {
+    "@civitai/app-sdk": "^0.35.0",
+    "@civitai/blocks-react": "^0.46.0",
+    "@civitai/components": "^0.4.1",
+    "@civitai/components-react": "^0.4.1",
+    "@civitai/theme": "^0.3.1"
+  },
+
+  "phase0": {
+    "measuredAt": "2026-09-04",
+    "liveVersion": "0.6.3",
+    "liveSourceCommit": "42f542eb17407a52a43f28e97c44266b25a211f7",
+    "datasetSize": 5,
+    "datasetNote": "5 published generators against `shared.list({ limit: 50 })`. THE CAP DOES NOT BIND and is nowhere near binding — so the one-page ranking/search disclosure shipped in #13 currently describes a condition that cannot occur. Correct and pre-emptive, but it means ranking/IA is not where this app's value sits today. Re-measure before designing anything around the cap.",
+    "baselineHealth": "0 a11y violations, 0 console messages, 0 failed requests (explainer state, --evidence at 0.6.3)",
+    "baselineArtifacts": "/tmp/taste-before-cg — explainer state ONLY; the other three states were not reached, see deferred[0]"
+  },
+
+  "decisions": [
+    {
+      "fork": "Hand-roll a report control, or consume the shared one?",
+      "chose": "Consume `ReportButton` from `@civitai/blocks-react/ui`.",
+      "forcedBy": "The rule of three already fired and promoted it (civitai-app-starters#289, published 0.46.0). This app was the third case that justified the promotion, so hand-rolling a fourth copy is the exact drift the promotion existed to stop."
+    },
+    {
+      "fork": "Bump only `blocks-react`, or all the design-system pins?",
+      "chose": "All of them together: blocks-react ^0.46.0, components(-react) ^0.4.1, theme ^0.3.1.",
+      "forcedBy": "constraints 7c. blocks-react@0.46.0 exact-pins theme@0.3.1 + components@0.4.1 while components-react@0.3.1 exact-pins theme@0.2.1 + components@0.3.1 — bumping one installs TWO copies, and the later-injected stylesheet wins at equal specificity, which makes a brand repoint silently inert. Verified after install: 0 nested @civitai copies, `npm ls` all `deduped`."
+    },
+    {
+      "fork": "Who is offered Report?",
+      "chose": "Signed-in viewers, on rows they do NOT author. Both halves gate independently.",
+      "forcedBy": "constraints 6 + 7. `report` rejects for an anonymous viewer, so offering it signed-out is offering an error; and an author already has a real Remove under the Mine tab, so offering escalation there is noise. Each half is mutation-tested separately — dropping either one turns exactly its own test red."
+    },
+    {
+      "fork": "Wire the shared control's `reported` prop?",
+      "chose": "No — leave the settled state local-only, as it was.",
+      "forcedBy": "constraints 5/6: `SharedListItem` carries `viewerVoted` but has NO report equivalent, so the only source would be an app-owned per-viewer ledger this app does not keep. Supplying a value we cannot derive would be worse than omitting it. See deferred[1] for what closes this."
+    },
+    {
+      "fork": "Report as an overflow-menu item, or an inline control?",
+      "chose": "Inline, LAST in the card's action group.",
+      "forcedBy": "The shared component renders a Button and cannot be a menu item. Placing it last keeps escalation visually subordinate to vote/share/fork, which is the honest hierarchy: it is the least-used action and the one with the heaviest consequence."
+    }
+  ],
+
+  "deferred": [
+    {
+      "ask": "Phase 7 re-shoot, and converting the capture recipe off its 15 positional `nth-child` selectors.",
+      "why": "The phase-0 baseline capture REFUSED framing: `full_frame` — content fills 53.4% x 100.0% of the usable band. The refusal itself says no band setting can fix a genuinely full-bleed axis and the gate is right to refuse. This app therefore needs a declared anchored crop, which is the open design call tracked as rank 5 of the app-taste-rollout handoff. Only 1 of the recipe's 4 states (explainer) was captured.",
+      "closingCondition": "Rank 5 decides the full-bleed shoot route; then the recipe carries a `crop.rect` with `yFrom: 'appFrame'` and testid-based selectors, and `capture.sh <recipe> --evidence` exits 0 for all four states (explainer, discover, generator, mine). Checked by: that command's exit code."
+    },
+    {
+      "ask": "Persist per-viewer report state so the settled control survives a remount.",
+      "why": "Without it, a `list()` refresh, tab switch or virtualized scroll resets the control to 'Report' and the same viewer can file the same row twice. `report()` is not documented idempotent the way `vote` is, so that is a duplicate report rather than a no-op.",
+      "closingCondition": "Either `SharedListItem` gains a viewer-report field (platform work), or this app records its own per-viewer ledger and passes it as the `reported` prop at the Browse call site. Checked by: `reported` being supplied at that call site in src/components/Browse.tsx."
+    },
+    {
+      "ask": "Phases 1-4 (brand/hero, information architecture, interaction, identity).",
+      "why": "Not attempted. Phase 0 measured the app as already clean — 0 a11y violations, 0 console errors, 0 failed requests — and the dataset (5 rows) is far from the point where IA or ranking pays. Running them now would be styling for its own sake.",
+      "closingCondition": "A later pass re-runs phase 0 and finds either a binding dataset (rows approaching the 50-row page) or a non-empty defect set in the --evidence capture. Checked by: the phase0 block of a future entry in this file showing datasetSize >= 40 or baselineHealth non-zero."
+    }
+  ]
+}

@@ -30,6 +30,7 @@ import { EXAMPLE_SHARED_ITEMS } from '../lib/examples.js';
 import { EmptyState } from './EmptyState.js';
 import { IntroPanel } from './IntroPanel.js';
 import { SafeImage } from './SafeImage.js';
+import { ReportButton } from '@civitai/blocks-react/ui';
 
 type Tab = 'discover' | 'mine';
 type SortMode = 'new' | 'top';
@@ -68,6 +69,15 @@ export interface BrowseProps {
   onDeletePublished: (item: SharedListItem) => void | Promise<void>;
   /** Toggle this viewer's up-vote; resolves with the authoritative post-vote count. */
   onVote: (item: SharedListItem, nextVoted: boolean) => Promise<number>;
+  /**
+   * File a published generator for PLATFORM moderator review.
+   *
+   * 🔴 ESCALATION, NOT REMOVAL — `report` files the row and does not hide
+   * it; a moderator decides. Offered only on a row the SIGNED-IN viewer does
+   * not own: `report` rejects for an anonymous viewer, and an author already
+   * has a real Remove, so offering it in either case is offering an error.
+   */
+  onReport: (item: SharedListItem) => Promise<void>;
   /** Fork a published generator into the viewer's own draft. */
   onFork: (item: SharedListItem) => void;
   /** Copy a shareable deeplink; resolves `true` on a successful copy. */
@@ -95,7 +105,7 @@ interface VoteState {
 }
 
 export function Browse(props: BrowseProps) {
-  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, coverUrlFor, onRetry } = props;
+  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, onRetry } = props;
   const [tab, setTab] = useState<Tab>('discover');
   // Motion gate for the chrome Browse owns directly (draft cards). Cards rendered
   // by PublishedCard/IntroPanel read it themselves.
@@ -381,6 +391,14 @@ export function Browse(props: BrowseProps) {
                   onFork={() => onFork(item)}
                   onShare={() => onShare(item)}
                   onOpen={() => onOpenPublished(item)}
+                  onReport={
+                    // Signed-in AND not the author. Both halves are load-bearing:
+                    // the host rejects `report` for an anonymous viewer, and the
+                    // author's own row already offers Remove under the Mine tab.
+                    viewerId != null && item.authorUserId !== viewerId
+                      ? () => onReport(item)
+                      : undefined
+                  }
                 />
               );
             })}
@@ -600,6 +618,7 @@ function PublishedCard({
   onShare,
   onOpen,
   onDelete,
+  onReport,
 }: {
   item: SharedListItem;
   c: Palette;
@@ -610,6 +629,12 @@ function PublishedCard({
   voteCount: number;
   voted: boolean;
   onVote: () => void;
+  /**
+   * When present, renders the Report control. Presence IS the gate: Browse
+   * passes it only for a signed-in non-author, so this component never has to
+   * re-derive who may report.
+   */
+  onReport?: () => Promise<void>;
   /** When present, renders a "Make a copy" (fork) affordance (discover cards). */
   onFork?: () => void;
   /** Copy a shareable deeplink; resolves `true` on a successful copy. */
@@ -710,6 +735,13 @@ function PublishedCard({
                   Make a copy
                 </Button>
               </Tooltip>
+            )}
+            {onReport && (
+              // Last in the group on purpose: escalation is not a primary
+              // action. The control owns its own two-step confirm and its own
+              // copy — which is the point of sharing it, so do not restate
+              // the wording here.
+              <ReportButton noun="generator" onReport={onReport} data-testid="published-report" />
             )}
             {onDelete && (
               <Button size="sm" variant="subtle" color="error" data-testid="published-delete" onClick={onDelete}>

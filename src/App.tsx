@@ -534,6 +534,23 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     return count;
   }, [viewer]);
 
+  // File a published generator for PLATFORM moderator review.
+  //
+  // 🔴 THIS DOES NOT HIDE THE ROW, and nothing here should imply it does.
+  // `report` escalates to Civitai moderators, who decide; the row stays on the
+  // board meanwhile. We have no owner-side suppression to offer instead —
+  // `update`/`withdraw` are author-scoped and reject for anyone but the author —
+  // so escalation is genuinely the strongest action available here.
+  //
+  // 🔴 Rejections PROPAGATE on purpose. The shared ReportButton keeps itself
+  // armed and shows its own failure line when this rejects; swallowing the error
+  // would settle the control to "Reported for review" for a report that was
+  // never filed.
+  const handleReport = useCallback(async (item: SharedListItem): Promise<void> => {
+    await depsRef.current.shared.report(item.key);
+    depsRef.current.analytics.track(ANALYTICS_EVENTS.REPORTED, { key: item.key });
+  }, []);
+
   // "Make a copy" of a published generator into the viewer's own draft so they
   // can remix it. Reuses the same parse path that opens a generator, then drops
   // the publishedKey (a fork is a brand-new, unpublished draft) and opens the
@@ -653,6 +670,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             onVote={handleVote}
             onFork={handleFork}
             onShare={handleShare}
+            onReport={handleReport}
             coverUrlFor={coverUrlFor}
             onRetry={reload}
           />

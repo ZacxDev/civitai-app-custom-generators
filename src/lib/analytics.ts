@@ -18,6 +18,8 @@ export const ANALYTICS_EVENTS = {
   VOTED: 'generator_voted',
   /** A published generator was forked into the viewer's own draft. */
   FORKED: 'generator_forked',
+  /** A published generator was filed for PLATFORM moderator review. */
+  REPORTED: 'generator_reported',
   /** A shareable deeplink was copied. */
   SHARED: 'generator_shared',
   /** The app opened a generator from a `?g=` deeplink. */
