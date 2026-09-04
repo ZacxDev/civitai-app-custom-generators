@@ -1,7 +1,7 @@
 {
   "$schema": "https://civitai.com/schemas/app-block/v1.json",
   "blockId": "custom-generators",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "name": "Custom Generators",
   "tagline": "Build the button. Share the button.",
   "description": "Custom Generators turns a set of generation settings into buttons anyone can press.\n\nBuild one in the builder: give it a name, a cover image, and as many buttons as you like. Each button is a saved preset — a checkpoint, up to five weighted LoRAs, a prompt template, and optional params like steps, CFG, size and quantity. Put `{prompt}` anywhere in a template and a prompt box appears for whoever runs it; set a button to Image → Image and they get a source-image upload too. A live preview sits beside the editor, so you see exactly what runners will see.\n\nSave it as a draft, or publish it and it lands in Discover for everyone. Browse what other people have built: search, sort by newest or popular, upvote, copy a share link, or hit Make a copy to fork someone's generator into your own editable draft. Anything you publish, you can withdraw again.\n\nRunning a generator spends your Buzz, and it always asks first. Press a button and you get a cost estimate for that exact generation, then a Confirm step before a single Buzz leaves your balance. If the estimate is more than you have, Confirm is blocked and you are offered a top-up instead of a failed generation.",
