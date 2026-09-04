@@ -34,8 +34,12 @@ import { SafeImage } from './SafeImage.js';
 type Tab = 'discover' | 'mine';
 type SortMode = 'new' | 'top';
 
-/** How many items to reveal per "Show more" page. */
-const PAGE_SIZE = 12;
+/** Rows revealed per "Show more" click.
+ *  🔴 EXPORTED so tests can land exactly ON the boundary rather than duplicating
+ *  the number. A test that hardcodes 12 stops testing the boundary the moment
+ *  this changes, silently — measured: with the literal drifted, a `<=` -> `<`
+ *  mutant survives a fully green file. */
+export const PAGE_SIZE = 12;
 
 const TABS: Tab[] = ['discover', 'mine'];
 
@@ -44,6 +48,12 @@ export interface BrowseProps {
   loading: boolean;
   error: string | null;
   discover: SharedListItem[];
+  /**
+   * The `discover` rows are ONE PAGE of a longer board. When true, "Popular" is
+   * a ranking over that page and search is a filter over it — both honest only
+   * to the depth read, so the UI says so. See the notice in the Discover panel.
+   */
+  discoverTruncated: boolean;
   myDrafts: StoredDraft[];
   myPublished: SharedListItem[];
   viewerId: number | null;
@@ -85,7 +95,7 @@ interface VoteState {
 }
 
 export function Browse(props: BrowseProps) {
-  const { c, loading, error, discover, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, coverUrlFor, onRetry } = props;
+  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, coverUrlFor, onRetry } = props;
   const [tab, setTab] = useState<Tab>('discover');
   // Motion gate for the chrome Browse owns directly (draft cards). Cards rendered
   // by PublishedCard/IntroPanel read it themselves.
@@ -194,6 +204,10 @@ export function Browse(props: BrowseProps) {
     return base;
   }, [discover, query, sort, voteOverlay]);
   const visibleDiscover = filteredDiscover.slice(0, discoverVisible);
+  /** Every loaded row is on screen, so the absence of a "Show more" reads as
+   *  "that is the whole catalog" — which is false on a truncated board, and is
+   *  the one way the Newest tab lies. */
+  const allLoadedShown = filteredDiscover.length <= discoverVisible;
   const visibleDrafts = myDrafts.slice(0, draftsVisible);
 
   return (
@@ -297,6 +311,34 @@ export function Browse(props: BrowseProps) {
               />
             </Group>
 
+            {/* 🔴 EVERY claim this panel makes about the catalog is really a
+                claim about ONE PAGE of it. `list` is newest-first with no rank
+                parameter, so:
+                  - "Popular" ranks only what was loaded — a generator with more
+                    votes can sit past the page and never appear;
+                  - a search that misses such a row renders "No matches", i.e.
+                    "no such generator exists" — a WRONG answer, not a short one;
+                  - reaching the end of the loaded rows looks like the end of the
+                    catalog, on every tab including Newest.
+                🔴 The search case is the worst of the three, so when a search is
+                active its wording WINS — an earlier version let the "Popular"
+                wording win whenever both applied, which disclosed the lesser
+                problem in exactly the state the worse one was live. */}
+            {discoverTruncated && (sort === 'top' || query.trim().length > 0 || allLoadedShown) && (
+              <span
+                data-testid="discover-partial-notice"
+                role="status"
+                style={{ ...metaText }}
+              >
+                {query.trim().length > 0
+                  ? sort === 'top'
+                    ? 'Searching and ranking only the generators loaded so far, not the whole catalog.'
+                    : 'Searching the generators loaded so far, not the whole catalog.'
+                  : sort === 'top'
+                    ? 'Ordered by votes across the generators loaded so far, not the whole catalog.'
+                    : 'Showing the generators loaded so far — the catalog has more.'}
+              </span>
+            )}
             {loading && (
               <Group gap={8} data-testid="discover-loading" role="status" aria-live="polite">
                 <Loader size="sm" />
@@ -345,7 +387,15 @@ export function Browse(props: BrowseProps) {
             {filteredDiscover.length > discoverVisible && (
               <Group justify="center">
                 <Button variant="light" size="sm" data-testid="discover-show-more" onClick={() => setDiscoverVisible((n) => n + PAGE_SIZE)}>
-                  Show more ({filteredDiscover.length - discoverVisible})
+                  {/* 🔴 The number is how many LOADED rows remain unshown — not
+                      how many this click reveals (a click reveals at most
+                      PAGE_SIZE), and never a claim about the catalog. Dropping
+                      it entirely (an earlier fix) removed a real progress signal
+                      and left the viewer paging blind; SCOPING it keeps the
+                      information without the implicature. */}
+                  Show more{discoverTruncated
+                    ? ` (${filteredDiscover.length - discoverVisible} loaded)`
+                    : ` (${filteredDiscover.length - discoverVisible})`}
                 </Button>
               </Group>
             )}
@@ -413,11 +463,36 @@ export function Browse(props: BrowseProps) {
 
             <Stack gap={10}>
               <div style={{ fontSize: 13, color: c.muted, fontWeight: 600 }}>Published by me</div>
+              {/* 🔴 `myPublished` is filtered out of the SAME single page, so on a
+                  truncated board the viewer's own generators past that page are
+                  missing here — and if all of them are, this panel would claim
+                  they published nothing.
+                  🔴 BOTH halves move together, and both are gated on the SAME
+                  pair. The title stops asserting "nothing" (it would be false
+                  for someone with 30 published generators) and the body KEEPS
+                  its call to action, appending the caveat rather than replacing
+                  it. Earlier rounds traded one for the other in each direction;
+                  neither trade was necessary.
+                  🔴 The `viewerId` half is not decoration: `myPublished` is empty
+                  for a signed-out viewer for a reason that has nothing to do
+                  with truncation, and telling someone with no account that
+                  "anything you published earlier may not appear" addresses a
+                  history they do not have. Dropping EITHER condition from EITHER
+                  branch is a live defect — the untruncated case would hedge at a
+                  page that does not exist — so both are pinned. */}
               {myPublished.length === 0 && (
                 <EmptyState
                   data-testid="published-empty"
-                  title="Nothing published yet"
-                  body="Publish a generator from the builder to share it in Discover."
+                  title={
+                    viewerId != null && discoverTruncated
+                      ? 'Nothing published in the loaded page'
+                      : 'Nothing published yet'
+                  }
+                  body={
+                    viewerId != null && discoverTruncated
+                      ? 'Publish a generator from the builder to share it in Discover. Note this app loads only part of the catalog at once, so anything you published earlier may not be listed here.'
+                      : 'Publish a generator from the builder to share it in Discover.'
+                  }
                 />
               )}
               {myPublished.map((item, i) => {

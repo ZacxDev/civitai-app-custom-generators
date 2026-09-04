@@ -104,7 +104,19 @@ export function memoryDraftStore(): DraftStore {
 }
 
 /** In-memory app-scoped shared store that records appends + in-place updates. */
-export function fakeShared(seed: SharedListItem[] = [], opts: { failWithdraw?: string } = {}) {
+export function fakeShared(
+  seed: SharedListItem[] = [],
+  opts: {
+    failWithdraw?: string;
+    /**
+     * Make `list()` hand back a `nextCursor`, i.e. the board has MORE rows than
+     * this page. The app reads ONE page and then ranks/filters inside it, so
+     * this is the only way to express the case where "top" is a ranking over a
+     * recency-limited window rather than over the board.
+     */
+    hasMore?: boolean;
+  } = {},
+) {
   const items: SharedListItem[] = [...seed];
   const appended: SharedAppendValue[] = [];
   const updated: Array<{ key: string; value: SharedAppendValue }> = [];
@@ -120,7 +132,7 @@ export function fakeShared(seed: SharedListItem[] = [], opts: { failWithdraw?: s
   const reported: Array<{ key: string; reason?: string }> = [];
   const shared: UseSharedStorage = {
     async list() {
-      return { items: [...items] };
+      return { items: [...items], ...(opts.hasMore ? { nextCursor: 'more' } : {}) };
     },
     async get(key) {
       return items.find((i) => i.key === key) ?? null;
