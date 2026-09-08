@@ -142,17 +142,20 @@ every id at estimate/submit.
 
 ## Develop
 
+The toolchain is pinned by a nix flake — `direnv allow` (or `nix develop`) puts
+node and pnpm on PATH; `.nvmrc` is the single authority for the node major.
+
 ```bash
-npm install
-npm run dev:harness   # mock host (createMockHost) serves the FULL protocol offline
-npm run test          # vitest: node (pure) + jsdom (component/e2e) projects
-npm run typecheck
-npm run build
+pnpm install --frozen-lockfile
+pnpm run dev:harness  # mock host (createMockHost) serves the FULL protocol offline
+pnpm test             # vitest: node (pure) + jsdom (component/e2e) projects
+pnpm run typecheck
+pnpm run build
 ```
 
 ## Tests
 
-`npm run test` → **168 tests, 2 projects**:
+`pnpm test` → **308 tests, 2 projects**:
 
 - **node** (pure): `lib/generator` (prompt composition, weight clamp, picker
   seeding, submit-body construction incl. img2img/sharedContentKey/overrides,
@@ -185,13 +188,13 @@ hand-rolled interims are gone.
 🔴 **They need a SINGLE resolved `@civitai/components`.** Both
 `@civitai/blocks-react`'s `injectBlocksStyles()` and `@civitai/components-react`'s
 `useComponentStyles()` inject through the same `style[data-civitai-components]`
-marker, so whichever runs first wins and the second no-ops. When npm nests an
-older copy under `blocks-react` (the case in
+marker, so whichever runs first wins and the second no-ops. When the installer
+nests an older copy under `blocks-react` (the case in
 `civitai/civitai-app-starters#247`), the older, smaller stylesheet is the one
 that lands and Tooltip/Toast/Image render **unstyled** — a tooltip becomes
 visible layout text with no console error. Keep `@civitai/components` deduped to
-ONE version: `npm ls @civitai/components` must print a single resolution with no
-nested copy.
+ONE version: `pnpm why @civitai/components` must print a single resolution with
+no nested copy.
 
 ## Not verified without a live host
 

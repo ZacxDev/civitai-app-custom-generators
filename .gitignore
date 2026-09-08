@@ -5,7 +5,7 @@ dist
 # Local env files — never commit these. Only `.env.example` and
 # `.env.production` are tracked: `.env.production` holds no secret (just the
 # civitai parent origin the SDK transport accepts BLOCK_INIT from) and the
-# platform runs `npm run build` against the published bundle, so it has to be
+# platform runs `pnpm run build` against the published bundle, so it has to be
 # in the tree for the production build to pick the origin up.
 .env
 .env.development

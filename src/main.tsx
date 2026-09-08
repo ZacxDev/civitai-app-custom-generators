@@ -45,7 +45,7 @@ injectBlocksStyles();
 // that impossible. Idempotent, so the hook's call is a no-op.
 injectMotionStyles();
 
-// `npm run dev:harness` sets VITE_DEV_HARNESS=true to mount the local mock host
+// `pnpm run dev:harness` sets VITE_DEV_HARNESS=true to mount the local mock host
 // (the published `@civitai/blocks-react/testing` Harness / createMockHost) that
 // answers the FULL block protocol — BLOCK_INIT, viewer/consent, resource
 // picker, image upload, workflow money path, and shared/KV storage. So unlike
