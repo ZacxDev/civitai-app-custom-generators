@@ -228,10 +228,12 @@ describe('Runner — KEEP: the app terminal', () => {
    * re-uploads it to the image store and creates a durable `Image` row (civitai
    * `blocks.router` → `persistBlockWorkflowOutputImage`, once per selected
    * output, with no dedupe) — while `onKeepRun` is a KV write that can fail on
-   * its own, and does so PERMANENTLY once the viewer is at the per-user row or
-   * byte ceiling (`USER_ROW_LIMIT` 1,000 / `USER_QUOTA_BYTES` 2 MiB, shared with
-   * this app's drafts) because the gallery is add-only. Both under one `try` made
-   * "Try keeping again" an unbounded duplicate-publish loop.
+   * its own, and does so on every press once the viewer reaches the per-user row
+   * or byte ceiling (`USER_ROW_LIMIT` 1,000 / `USER_QUOTA_BYTES` 2 MiB, per
+   * `(app_block_id, user_id)` and therefore shared with this app's drafts),
+   * because the gallery is add-only. Both under one `try` made "Try keeping
+   * again" an unbounded duplicate-publish loop. The fixture below fails the write
+   * directly: the ceiling is why that matters, not what is under test.
    */
   it('does NOT re-publish when only the app-side record failed', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

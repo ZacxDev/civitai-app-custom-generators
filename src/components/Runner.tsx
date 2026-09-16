@@ -485,11 +485,20 @@ export function Runner(props: RunnerProps) {
    * `publishGenerationOutputs` has no idempotency: every call mints fresh rows
    * (see `QueueItem.publishedImageIds`). Running both under one `try` meant a
    * failed KV write showed *"These images weren't kept"* over rows that plainly
-   * existed, and "Try keeping again" re-published them. It is not a rare arm: the
-   * viewer's KV is capped (`USER_QUOTA_BYTES` 2 MiB / `USER_ROW_LIMIT` 1,000,
-   * shared with this app's drafts) and the gallery is add-only, so a viewer at
-   * the ceiling fails the write EVERY time — an unbounded duplicate-publish loop
-   * driven by a button that says the opposite of what happened.
+   * existed, and "Try keeping again" re-published them.
+   *
+   * The arm is reachable rather than theoretical. The per-user ceilings are
+   * `USER_QUOTA_BYTES` 2 MiB and `USER_ROW_LIMIT` 1,000, enforced per
+   * `(app_block_id, user_id)` (civitai `apps.router` `storage.set`, against the
+   * `user_quota` relation) — so they are shared with this app's drafts, the row
+   * limit is tested on INSERT, which every kept run is, and the gallery is
+   * add-only. A viewer who reaches either ceiling then fails this write on every
+   * press: an unbounded duplicate-publish loop driven by a button saying the
+   * opposite of what happened. ⚠️ Bounded honestly: that router has a documented
+   * fallback which leaves the per-user gate INERT for an app whose `user_quota`
+   * rows have not been backfilled, so "every press" is a claim about apps where
+   * the gate is live. Nothing below depends on it — a KV write can fail for its
+   * own reasons, and the publish it follows must not be repeated either way.
    */
   async function keepItem(item: RunnerItem) {
     if (!keepOutputs || !item.workflowId) return;
