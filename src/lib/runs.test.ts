@@ -185,13 +185,30 @@ describe('the gallery reads the viewer NEWEST runs, and reports what it left out
         };
       },
     };
-    await saveKeptRun(inner, run({ id: 'only' }));
 
     const page = await listKeptRuns(endless);
+
+    // 🔴 THE ONE PROBE-SENSITIVE ASSERTION IN THIS TEST, and the file should say
+    // which it is. `calls` pins the BOUND (8 enumerating pages + 1 exhaustion
+    // probe: delete the probe and this reads 8). `truncated` pins nothing about
+    // the probe — `1,600 enumerated keys > a 200-row horizon` carries it on its
+    // own, whatever `more` comes back as. `incomplete` is the only one that
+    // moves with the probe's answer, so it is the assertion that makes this a
+    // test about the bound rather than about the horizon.
     expect(calls).toBe(KEPT_LIST_MAX_PAGES + 1);
-    expect(page.truncated).toBe(true);
-    // The walk really was cut short, so the stronger flag is set too.
     expect(page.incomplete).toBe(true);
+    expect(page.truncated).toBe(true);
+
+    // 🔴 PINNED BECAUSE IT IS SURPRISING, not because the feature needs it: this
+    // fixture is KEYS-ONLY. `endless.list` synthesises `kept:pN_i` keys that
+    // `inner` was never asked to hold, so every `get` behind them resolves
+    // `null` and the hydrated set is empty. An earlier version of this test
+    // seeded one real run into `inner` and asserted nothing about it — the
+    // replacement fixture had made that line dead (deleting it changed no
+    // result), and a reader would reasonably have assumed the grid held a row.
+    // The bound is a property of the KEY walk, which is why the test still says
+    // what it claims to say with nothing hydrated.
+    expect(page.runs).toHaveLength(0);
   });
 
   /**

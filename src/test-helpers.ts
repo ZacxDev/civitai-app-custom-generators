@@ -137,18 +137,31 @@ function decodeStoreCursor(cursor: string): string {
   return Buffer.from(cursor, 'base64').toString('utf8');
 }
 
-/** In-memory app-scoped shared store that records appends + in-place updates. */
+/**
+ * In-memory app-scoped shared store that records appends + in-place updates.
+ *
+ * 🔴 `list` HONOURS `limit` AND `cursor`, AND THAT IS LOAD-BEARING. It used to
+ * return every seeded row whatever was asked for, and to emit `nextCursor` from
+ * a boolean option — so the board's horizon was a flag a test set rather than a
+ * property of the store, and `App`'s read could not be observed to page at all.
+ * That is exactly the "a fake that ignores the contract can only confirm what
+ * the fake believes" trap {@link memoryDraftStore} was fixed for, one file over
+ * and still open. It now mirrors civitai's `apps.shared.router` `list`
+ * (re-derived at `5549de73`): at most `limit` rows, keyset-forward from
+ * `cursor`, and `nextCursor` emitted **iff the page filled** — meaning "there
+ * may be more", never "there is more".
+ *
+ * ⚠️ One deliberate divergence, named so nobody reads more fidelity into this
+ * than it has: the host orders `ORDER BY s.key DESC` and this keeps the seeded
+ * ARRAY order (newest first, which is what `append` maintains by unshifting).
+ * Fixtures here carry meaning in their order — vote ranks, search matches — and
+ * re-sorting them by key string would reshuffle every one of them for a property
+ * no test asserts.
+ */
 export function fakeShared(
   seed: SharedListItem[] = [],
-  opts: {
+  cfg: {
     failWithdraw?: string;
-    /**
-     * Make `list()` hand back a `nextCursor`, i.e. the board has MORE rows than
-     * this page. The app reads ONE page and then ranks/filters inside it, so
-     * this is the only way to express the case where "top" is a ranking over a
-     * recency-limited window rather than over the board.
-     */
-    hasMore?: boolean;
   } = {},
 ) {
   const items: SharedListItem[] = [...seed];
@@ -165,8 +178,19 @@ export function fakeShared(
   /** Keys passed to `report`, with their reason — for asserting the abuse seam. */
   const reported: Array<{ key: string; reason?: string }> = [];
   const shared: UseSharedStorage = {
-    async list() {
-      return { items: [...items], ...(opts.hasMore ? { nextCursor: 'more' } : {}) };
+    async list(opts) {
+      const limit = opts?.limit ?? 50;
+      const after = opts?.cursor ? decodeStoreCursor(opts.cursor) : null;
+      const start = after == null ? 0 : items.findIndex((i) => i.key === after) + 1;
+      const page = items.slice(start, start + limit);
+      return {
+        items: page,
+        // iff the page FILLED — the host's rule, and the one this app must not
+        // read as "there is another row".
+        ...(page.length === limit && page.length > 0
+          ? { nextCursor: encodeStoreCursor(page[page.length - 1]!.key) }
+          : {}),
+      };
     },
     async get(key) {
       return items.find((i) => i.key === key) ?? null;
@@ -195,7 +219,7 @@ export function fakeShared(
     },
     async withdraw(key) {
       withdrawn.push(key);
-      if (opts.failWithdraw) throw new Error(opts.failWithdraw);
+      if (cfg.failWithdraw) throw new Error(cfg.failWithdraw);
       const idx = items.findIndex((i) => i.key === key);
       const deleted = idx >= 0;
       if (deleted) items.splice(idx, 1); // mirror the host: the row is gone

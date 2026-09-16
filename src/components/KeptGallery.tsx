@@ -104,24 +104,50 @@ export const INCOMPLETE_NOTICE =
  * Blocked / NotFound all hide"* — narrower than the line beneath it, and NOT the
  * enum. Read the enum, not that comment.
  *
- * 🔴 `Rescan` IS THE ONE THAT CHANGES WHAT THIS COMPONENT CAN PROMISE, because
- * it CAN be entered from `Scanned` — not only from `Scanned`, which is the
- * weaker and sufficient claim: the moderator tool's stuck sweep moves `Pending`
- * rows there too (`apps/moderator/.../ingestion.service.ts` `rescanStuckImages`,
- * whose `stuckWhere()` selects `ingestion = 'Pending'`). What matters here is
- * the `Scanned` route, because a rescan follows a completed scan and the image
- * keeps its earlier verdict (civitai's own words in
- * `src/components/Image/Remix/__tests__/remix.utils.test.ts`, which also notes a
- * re-ingestion sweep can put a large slice of the catalogue there at once). The
- * gate has no carve-out for it. So a kept cell that has been rendering fine for
- * weeks can go `hidden` long after the keep, with nothing on this side having
- * changed — and it is `Pending`, not cause (1) as a whole, that is "where a
- * just-kept image lands and resolves itself". {@link GALLERY_RECHECK_MS} is
- * sized for that Pending case and reaches no other: it fires once, on the mount
- * that saw the `hidden`, so a cell that flips to `Rescan` between mounts simply
- * renders the notice until the next scan completes. That is the honest shape of
- * the design, and the fact a maintainer needs when judging whether one re-read
- * is the right amount.
+ * 🔴 `Rescan` IS THE ONE THAT CHANGES WHAT THIS COMPONENT CAN PROMISE, AND THE
+ * EVIDENCE FOR IT IS NOW A WRITER RATHER THAN AN INFERENCE. A round-4 audit
+ * could not demonstrate a `Scanned` → `Rescan` writer and asked for this
+ * paragraph to be weakened to "inferred"; re-derived by complete enumeration of
+ * every `Rescan` write to `Image.ingestion` at civitai `5549de73`, it should be
+ * STRENGTHENED instead. Four writers exist. `rescanArticle`
+ * (`src/server/services/article.service.ts:2474-2486`, under a section header
+ * reading *"Re-queue already-processed images for rescan"*) and
+ * `rescanArticleImage` (`:2606-2614`) both filter candidates on
+ * `ingestion !== Pending && !nsfwLevelLocked` and then set
+ * `ingestion: Rescan` — so `Scanned` is not merely permitted, it is the
+ * dominant member of the written set. `reprocess-exempt-blocked-images.ts:55`
+ * writes it with an id-only `WHERE` and no prior-`ingestion` predicate at all.
+ * Only the moderator stuck sweep is restricted (`rescanStuckImages`, whose
+ * `stuckWhere()` selects `ingestion = 'Pending'`), which is why the weaker
+ * "not ONLY from `Scanned`" clause stays. Corroborating, and independent: the
+ * outbox trigger fires on
+ * `OLD.ingestion != 'Rescan' AND NEW.ingestion = 'Rescan'` for any prior status
+ * (`apps/event-engine/scripts/sql/outbox-triggers.sql:146`), and the scan-result
+ * handler's `image.ingestion !== 'Rescan'` guard
+ * (`src/pages/api/webhooks/image-scan-result.ts:1265`) exists to preserve a
+ * `scannedAt` a `Rescan` row already carries.
+ *
+ * ⚠️ WHAT THAT DOES AND DOES NOT REACH, because the difference decides how
+ * often this matters. Every demonstrated `Scanned` → `Rescan` writer selects
+ * its rows through an **article** — an `ImageConnection` of type `Article`, or
+ * an `Article.coverId` — or, for the admin backfill, through
+ * `blockedFor = 'AiNotVerified'` on a profile/cover image. No writer at that ref
+ * moves a bare generation-output image out of `Scanned`; the `image.rescan`
+ * tRPC procedure, which sounds like it would, stamps `scanRequestedAt` and
+ * never touches `ingestion`. So a kept cell goes `hidden` long after the keep
+ * only once that image has been attached to an article — reachable, since these
+ * are the viewer's own images and an article cover is an ordinary thing to make
+ * one, but not something that happens to an untouched gallery. The gate has no
+ * carve-out either way.
+ *
+ * What follows for this component is unchanged by that narrowing: it is
+ * `Pending`, not cause (1) as a whole, that is "where a just-kept image lands
+ * and resolves itself". {@link GALLERY_RECHECK_MS} is sized for that Pending
+ * case and reaches no other: it fires once, on the mount that saw the `hidden`,
+ * so a cell that flips to `Rescan` between mounts simply renders the notice
+ * until the next scan completes. That is the honest shape of the design, and
+ * the fact a maintainer needs when judging whether one re-read is the right
+ * amount.
  *
  * ⚠️ The SENTENCE below does not enumerate any of this, and that is the
  * deliberate choice rather than an oversight: it names the two causes that

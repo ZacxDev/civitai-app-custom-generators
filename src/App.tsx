@@ -157,7 +157,60 @@ export interface AppDeps {
   /** Test seams for the poll loop. */
   pollIntervalMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * How many Discover rows the board RENDERS; defaults to
+   * {@link DISCOVER_LIST_LIMIT} (test seam).
+   *
+   * It exists because the truthfulness of {@link DISCOVER_LIST_LIMIT}'s
+   * disclosure is a property of the boundary, and at the production value the
+   * only constructible truncated board holds exactly 50 loaded rows — which
+   * `PAGE_SIZE` (12) never divides, so a test cannot land `allLoadedShown` on
+   * its own `<=` boundary while the board is truncated. Lowering the limit is
+   * what keeps those fixtures on their boundaries; it changes no production
+   * behaviour, because production never sets it.
+   */
+  discoverPageLimit?: number;
 }
+
+/**
+ * Discover rows the board reads and renders in one shot.
+ *
+ * 🔴 THE READ ASKS FOR ONE MORE THAN THIS, AND THE EXTRA ROW IS THE WHOLE POINT.
+ * `discoverTruncated` drives four viewer-facing sentences that each assert the
+ * catalog has rows this app did not load, so it has to be a FACT rather than an
+ * inference — and the obvious inference is wrong. civitai's `apps.shared.router`
+ * `list` emits `nextCursor` **iff the page filled** (`rows.length ===
+ * input.limit`, re-derived at `5549de73`), so a board holding exactly this
+ * many non-hidden `shared_kv` rows hands back a cursor for a board with nothing
+ * behind it: `Boolean(nextCursor)` then told a viewer *"this app loads only part
+ * of the catalog at once"* over a catalog it had loaded whole. That is verbatim
+ * the class `lib/runs.ts`'s own docblock declares a rule against — A CURSOR IS
+ * NOT EVIDENCE OF A NEXT ROW — and it was live on this path.
+ *
+ * So the read asks for `DISCOVER_LIST_LIMIT + 1`, renders the first
+ * `DISCOVER_LIST_LIMIT`, and reads truncation off the ROW COUNT it got back.
+ * 49 rows → 49 rendered, silent. 50 → 50 rendered, silent, and the board really
+ * is whole. 51 → 50 rendered, disclosed, and there really is a row it did not
+ * show.
+ *
+ * ⚠️ WHY NOT THE {@link listKeptRuns} PROBE, WHICH IS THE SAME FIX ONE FILE
+ * OVER. That path enumerates KEYS across up to 8 pages, so there is no single
+ * read to widen and it settles the ambiguity with one extra 1-row `list` —
+ * costing a round trip only for a viewer holding more than 1,600 keys. This path
+ * is ONE read, and its page fills on any board with 50+ published generators,
+ * i.e. the ordinary state of a healthy board on every Browse open and every
+ * retry. A probe here would be a per-open round trip where over-fetching is a
+ * per-open extra ROW. The over-fetch is also ATOMIC — one statement, one
+ * snapshot — where a probe answers about a later instant. Same standard (make
+ * the claim true, do not hedge it), cheaper instrument.
+ *
+ * Bounded by the platform: `apps.shared.list` validates `limit` as
+ * `.int().min(1).max(100)` and both block hosts clamp to the same `[1, 100]`
+ * before it (`PageBlockHost.tsx`, `IframeHost.tsx`), so 51 passes through
+ * unchanged and there is headroom to raise this to 99 before the +1 is clamped
+ * away — the one change that would silently restore the defect.
+ */
+export const DISCOVER_LIST_LIMIT = 50;
 
 export interface AppProps {
   /** Override any hook-backed dependency (component + e2e test seam). */
@@ -331,15 +384,20 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       setLoading(true);
       setError(null);
       try {
+        // 🔴 ONE MORE THAN WE RENDER — see DISCOVER_LIST_LIMIT. The extra row is
+        // the evidence; `nextCursor` is deliberately not read here at all,
+        // because it answers "did the page fill", not "is there another row".
+        const pageLimit = depsRef.current.discoverPageLimit ?? DISCOVER_LIST_LIMIT;
         const [sharedRes, drafts] = await Promise.all([
-          depsRef.current.shared.list({ limit: 50 }),
+          depsRef.current.shared.list({ limit: pageLimit + 1 }),
           viewer ? listDrafts(depsRef.current.drafts) : Promise.resolve<StoredDraft[]>([]),
         ]);
         if (cancelled) return;
-        setShared(sharedRes.items);
-        // `list` is newest-first and takes no rank parameter, so a cursor here
-        // means the rows NOT read may outrank or match anything that was.
-        setDiscoverTruncated(Boolean(sharedRes.nextCursor));
+        setShared(sharedRes.items.slice(0, pageLimit));
+        // `list` is newest-first and takes no rank parameter, so a row we did NOT
+        // render may outrank or match anything that was. A row came back past the
+        // horizon ⇒ that is a definite statement, not a hedge off a cursor.
+        setDiscoverTruncated(sharedRes.items.length > pageLimit);
         setMyDrafts(drafts);
       } catch (e) {
         if (!cancelled) setError(errMsg(e));

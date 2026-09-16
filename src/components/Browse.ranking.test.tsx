@@ -1,10 +1,12 @@
 // 🔴 "Top" is a ranking over ONE PAGE, and the app must say so when there is
 // more board than page.
 //
-// `App` reads `shared.list({ limit: 50 })` — a single page, no cursor loop —
-// and Browse then sorts that page by vote count for the "Top" tab and filters
-// it for search. There is no server-side sort (`list` is newest-first and takes
-// no rank parameter), so both operations are honest only to the depth read:
+// `App` reads ONE page — `shared.list({ limit: DISCOVER_LIST_LIMIT + 1 })`, the
+// extra row being how it learns whether a row exists past the horizon — and
+// Browse then sorts the rendered 50 by vote count for the "Top" tab and filters
+// them for search. There is no server-side sort (`list` is newest-first and
+// takes no rank parameter), so both operations are honest only to the depth
+// read:
 //
 //   - "Top" over the 50 NEWEST is not the top of the board. A generator with
 //     more votes than anything on screen sits at row 51 and can never appear,
@@ -26,7 +28,7 @@ import { describe, expect, it } from 'vitest';
 import { Harness } from '@civitai/blocks-react/testing';
 import type { SharedListItem } from '@civitai/blocks-react';
 
-import { App, type AppDeps } from '../App.js';
+import { App, DISCOVER_LIST_LIMIT, type AppDeps } from '../App.js';
 // 🔴 The REAL constant, not a copy. Duplicating it let the boundary case drift
 // off the boundary and keep passing — measured, a `<=` -> `<` mutant then
 // survived a green file.
@@ -59,8 +61,40 @@ function manyItems(n: number) {
   return Array.from({ length: n }, (_, i) => item(`k${i}`, `Gen ${i}`, n - i));
 }
 
+/**
+ * 🔴 A TRUNCATED BOARD IS NOW A PROPERTY OF THE STORE, NOT A FLAG. `App` reads
+ * `DISCOVER_LIST_LIMIT + 1` rows and sets `discoverTruncated` from the ROW COUNT
+ * it got back, because a cursor is emitted iff the page filled and therefore
+ * cannot tell "exactly 50 rows" from "more than 50" (see `App.tsx`). So
+ * `fakeShared` no longer takes a `hasMore` boolean and none can be
+ * reintroduced: to make the board truncated, the store has to actually hold a
+ * row past the horizon.
+ *
+ * `discoverPageLimit` shrinks that horizon to the fixture's own size so every
+ * `it()` below still renders exactly the rows it was written for. Without it a
+ * truncated board always loads exactly 50 rows, and `PAGE_SIZE` (12) does not
+ * divide 50 — which would put `allLoadedShown` permanently off its `<=`
+ * boundary and silently retire the mutant the last case in this file exists to
+ * kill.
+ */
+function withHorizon(base: SharedListItem[], hasMore: boolean) {
+  const pageLimit = Math.max(1, base.length);
+  if (!hasMore) return { rows: base, pageLimit };
+  // Exactly enough rows past the horizon for the over-fetch to see one. They sit
+  // at the END of the store, so `slice(0, pageLimit)` renders `base` verbatim.
+  const extra = pageLimit + 1 - base.length;
+  return {
+    rows: [...base, ...Array.from({ length: extra }, (_, i) => item(`overflow-${i}`, `Past the horizon ${i}`, 0))],
+    pageLimit,
+  };
+}
+
 function setup(hasMore: boolean, rows?: SharedListItem[]) {
-  const shared = fakeShared(rows ?? [item('a', 'Alpha gen', 5), item('b', 'Beta gen', 2)], { hasMore });
+  const { rows: seed, pageLimit } = withHorizon(
+    rows ?? [item('a', 'Alpha gen', 5), item('b', 'Beta gen', 2)],
+    hasMore,
+  );
+  const shared = fakeShared(seed);
   const wf = mockWorkflow();
   const deps: Partial<AppDeps> = {
     resolveResources: async () => [],
@@ -70,6 +104,7 @@ function setup(hasMore: boolean, rows?: SharedListItem[]) {
     estimate: wf.estimate,
     submit: wf.submit,
     poll: wf.poll,
+    discoverPageLimit: pageLimit,
   };
   render(
     <Harness viewer={{ id: VIEWER_ID, username: 'me' }} theme="dark" consentGranted showLog={false}>
@@ -82,7 +117,8 @@ function setup(hasMore: boolean, rows?: SharedListItem[]) {
 /** Same harness, no viewer — `null` is the anon path; `undefined` would give the
  *  mock host's default dev-viewer and silently make this a signed-IN case. */
 function setupAnon(hasMore: boolean, rows?: SharedListItem[]) {
-  const shared = fakeShared(rows ?? [], { hasMore });
+  const { rows: seed, pageLimit } = withHorizon(rows ?? [], hasMore);
+  const shared = fakeShared(seed);
   const wf = mockWorkflow();
   render(
     <Harness viewer={null} theme="dark" consentGranted showLog={false}>
@@ -95,6 +131,7 @@ function setupAnon(hasMore: boolean, rows?: SharedListItem[]) {
           estimate: wf.estimate,
           submit: wf.submit,
           poll: wf.poll,
+          discoverPageLimit: pageLimit,
         }}
       />
     </Harness>,
@@ -338,6 +375,91 @@ describe('partial-ranking disclosure', () => {
       expect(empty.textContent).toContain('Nothing published yet');
       expect(empty.textContent).toContain(CTA);
       expect(empty.textContent).not.toContain('loads only part of the catalog');
+    });
+  });
+
+  /**
+   * 🔴 THE HORIZON ITSELF, AT THE PRODUCTION LIMIT AND ON ITS OWN BOUNDARY.
+   * Every case above shrinks the horizon with `discoverPageLimit` so its fixture
+   * keeps its shape; these three do NOT — they seed real rows against the real
+   * {@link DISCOVER_LIST_LIMIT}, because the defect being pinned lives exactly
+   * at that constant and nowhere else.
+   *
+   * The defect: `setDiscoverTruncated(Boolean(sharedRes.nextCursor))`. civitai's
+   * `apps.shared.router` `list` emits `nextCursor` **iff the page filled**
+   * (`rows.length === input.limit`, re-derived at `5549de73`), so a board
+   * holding exactly 50 non-hidden rows filled the page, handed back a cursor for
+   * a board with nothing behind it, and the app told the viewer *"this app loads
+   * only part of the catalog at once, so anything you published earlier may not
+   * be listed here"* over a catalog it had loaded whole. Verbatim the class
+   * `lib/runs.ts` declares a rule against — A CURSOR IS NOT EVIDENCE OF A NEXT
+   * ROW — shipped alongside that rule.
+   *
+   * 🔴 ONE ASSERTION PINS BOTH FACTS, WHICH IS WHY IT IS A WHOLE STRING. "Show
+   * more (N)" carries the LOADED row count, and the `loaded` suffix is rendered
+   * only when `discoverTruncated` — so `(37)` / `(38)` / `(38 loaded)` says both
+   * how many rows came back and what the app concluded from them. A flag-only
+   * assertion would pass for a read that loaded the wrong set.
+   *
+   * Only the middle case is regression coverage. 49 and 51 pass at `aba7765`
+   * too and are labelled controls: they are what makes the middle case a
+   * boundary rather than a constant.
+   */
+  describe('the Discover horizon, at the real DISCOVER_LIST_LIMIT', () => {
+    /** No `discoverPageLimit` — the production constant is the thing under test. */
+    function setupAtLimit(rowCount: number) {
+      const shared = fakeShared(manyItems(rowCount));
+      const wf = mockWorkflow();
+      render(
+        <Harness viewer={{ id: VIEWER_ID, username: 'me' }} theme="dark" consentGranted showLog={false}>
+          <App
+            deps={{
+              resolveResources: async () => [],
+              shared: shared.shared,
+              updateSharedGenerator: shared.update,
+              drafts: memoryDraftStore(),
+              estimate: wf.estimate,
+              submit: wf.submit,
+              poll: wf.poll,
+            }}
+          />
+        </Harness>,
+      );
+    }
+
+    const showMore = () => screen.getByTestId('discover-show-more').textContent;
+
+    it('CONTROL: one row UNDER the horizon — whole board, and it says nothing', async () => {
+      setupAtLimit(DISCOVER_LIST_LIMIT - 1);
+      await screen.findByTestId('discover-list');
+
+      await userEvent.click(popular());
+      await waitFor(() => expect(popular()).toBeChecked());
+      expect(screen.queryByTestId(NOTICE)).toBeNull();
+      expect(showMore()).toBe(`Show more (${DISCOVER_LIST_LIMIT - 1 - PAGE_SIZE})`);
+    });
+
+    it('🔴 EXACTLY at the horizon the board is WHOLE, and the app must not say otherwise', async () => {
+      setupAtLimit(DISCOVER_LIST_LIMIT);
+      await screen.findByTestId('discover-list');
+
+      // Popular is the arm that fires regardless of how far the viewer has
+      // paged, so this isolates the flag from `allLoadedShown`.
+      await userEvent.click(popular());
+      await waitFor(() => expect(popular()).toBeChecked());
+      expect(screen.queryByTestId(NOTICE)).toBeNull();
+      // …and the whole board really did load: every row is here, unscoped.
+      expect(showMore()).toBe(`Show more (${DISCOVER_LIST_LIMIT - PAGE_SIZE})`);
+    });
+
+    it('CONTROL: one row OVER the horizon — a row was left behind, and it says so', async () => {
+      setupAtLimit(DISCOVER_LIST_LIMIT + 1);
+      await screen.findByTestId('discover-list');
+
+      await userEvent.click(popular());
+      await waitFor(() => expect(notice()).toBe(COPY.top));
+      // The over-fetched row is NOT rendered — the count is the horizon, scoped.
+      expect(showMore()).toBe(`Show more (${DISCOVER_LIST_LIMIT - PAGE_SIZE} loaded)`);
     });
   });
 
