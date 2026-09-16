@@ -24,7 +24,11 @@
 // a11y: `Modal` owns Escape, the overlay click, focus trapping and returning
 // focus to the trigger, so none of that is re-implemented here. What IS added is
 // arrow-key paging across a multi-image run, because a lightbox that can only be
-// paged with the mouse is a lightbox half the audience cannot page.
+// paged with the mouse is a lightbox half the audience cannot page — but ONLY for
+// a caller that supplies paging handlers. The kept-image caller cannot: it holds
+// one cell and one url, and the sibling images' urls live in the gallery's gated
+// state. So that view states its position and renders no controls, rather than
+// two dead buttons (see `pageable`).
 
 import { useCallback, useEffect } from 'react';
 
@@ -88,15 +92,27 @@ export function ResultLightbox({
   kept = false,
   onOpenGenerator,
 }: ResultLightboxProps) {
-  const paged = total > 1;
+  /** This image is one of several — worth SAYING, whether or not it can be paged. */
+  const multi = total > 1;
+  /**
+   * 🔴 PAGING IS A CAPABILITY OF THE CALLER, NOT A PROPERTY OF THE RUN. `total > 1`
+   * alone rendered a Prev/Next row for the KEPT lightbox, whose caller supplies
+   * neither handler — two permanently-disabled buttons and a keydown listener
+   * that could never fire, under a position line promising four images. A caller
+   * that CAN page always supplies at least one handler (the other is absent only
+   * at an end of the run, where a disabled control is the correct answer), so the
+   * presence of either is the honest test.
+   */
+  const pageable = multi && (onPrev != null || onNext != null);
 
   // Arrow-key paging. Registered on the document because `Modal` owns the focus
   // trap and the focused element inside it is whatever the user last touched —
   // binding to a panel ref would miss keys pressed while a Button holds focus.
-  // Only while `opened`, so a closed lightbox never listens.
+  // Only while `opened` AND pageable, so neither a closed nor an unpageable
+  // lightbox listens for keys it cannot act on.
   const onKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      if (!paged) return;
+      if (!pageable) return;
       if (e.key === 'ArrowLeft' && onPrev) {
         e.preventDefault();
         onPrev();
@@ -105,14 +121,14 @@ export function ResultLightbox({
         onNext();
       }
     },
-    [paged, onPrev, onNext],
+    [pageable, onPrev, onNext],
   );
 
   useEffect(() => {
-    if (!opened) return;
+    if (!opened || !pageable) return;
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [opened, onKeyDown]);
+  }, [opened, pageable, onKeyDown]);
 
   return (
     <Modal opened={opened} onClose={onClose} title={buttonLabel} size="lg">
@@ -155,29 +171,40 @@ export function ResultLightbox({
           </div>
         )}
 
-        {paged && (
+        {/* Position is a fact about the run and is stated whenever there is more
+            than one image; the CONTROLS appear only where they can do something.
+            An `<span/>` holds the slot so the position line stays centred. */}
+        {multi && (
           <Group justify="space-between" align="center">
-            <Button
-              size="sm"
-              variant="subtle"
-              data-testid="lightbox-prev"
-              disabled={!onPrev}
-              onClick={onPrev}
-            >
-              ← Previous
-            </Button>
+            {pageable ? (
+              <Button
+                size="sm"
+                variant="subtle"
+                data-testid="lightbox-prev"
+                disabled={!onPrev}
+                onClick={onPrev}
+              >
+                ← Previous
+              </Button>
+            ) : (
+              <span />
+            )}
             <span style={metaText} data-testid="lightbox-position">
               {index} of {total}
             </span>
-            <Button
-              size="sm"
-              variant="subtle"
-              data-testid="lightbox-next"
-              disabled={!onNext}
-              onClick={onNext}
-            >
-              Next →
-            </Button>
+            {pageable ? (
+              <Button
+                size="sm"
+                variant="subtle"
+                data-testid="lightbox-next"
+                disabled={!onNext}
+                onClick={onNext}
+              >
+                Next →
+              </Button>
+            ) : (
+              <span />
+            )}
           </Group>
         )}
 

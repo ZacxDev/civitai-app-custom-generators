@@ -222,6 +222,85 @@ describe('Runner — KEEP: the app terminal', () => {
     expect(screen.getByTestId('result-rerun')).toBeInTheDocument();
   });
 
+  /**
+   * 🔴 A FAILED RECORD IS NOT A FAILED PUBLISH, AND THE RETRY MUST NOT REPUBLISH.
+   * `keepOutputs` is a real publish — the host fetches each output server-side,
+   * re-uploads it to the image store and creates a durable `Image` row (civitai
+   * `blocks.router` → `persistBlockWorkflowOutputImage`, once per selected
+   * output, with no dedupe) — while `onKeepRun` is a KV write that can fail on
+   * its own, and does so PERMANENTLY once the viewer is at the per-user row or
+   * byte ceiling (`USER_ROW_LIMIT` 1,000 / `USER_QUOTA_BYTES` 2 MiB, shared with
+   * this app's drafts) because the gallery is add-only. Both under one `try` made
+   * "Try keeping again" an unbounded duplicate-publish loop.
+   */
+  it('does NOT re-publish when only the app-side record failed', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const keepOutputs = keepFn(async () => [4242]);
+    const onKeepRun = vi.fn(async (_run: KeptRun) => {
+      throw new Error('quota exceeded');
+    });
+    renderRunner({ keepOutputs, onKeepRun });
+    await generate();
+
+    await userEvent.click(screen.getByTestId('result-keep'));
+    await screen.findByTestId('result-keep-failed');
+    expect(keepOutputs).toHaveBeenCalledTimes(1);
+    expect(onKeepRun).toHaveBeenCalledTimes(1);
+
+    // The retry re-attempts the WRITE and nothing else — the rows already exist.
+    await userEvent.click(screen.getByTestId('result-keep'));
+    await waitFor(() => expect(onKeepRun).toHaveBeenCalledTimes(2));
+    expect(keepOutputs).toHaveBeenCalledTimes(1);
+    // …and the ids it records are the ones the first publish returned.
+    expect(onKeepRun.mock.calls[1][0].imageIds).toEqual([4242]);
+    warn.mockRestore();
+  });
+
+  it('says what actually happened when the record failed over a real publish', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const keepOutputs = keepFn(async () => [4242]);
+    const onKeepRun = vi.fn(async (_run: KeptRun) => {
+      throw new Error('quota exceeded');
+    });
+    renderRunner({ keepOutputs, onKeepRun });
+    await generate();
+    await userEvent.click(screen.getByTestId('result-keep'));
+
+    const notice = await screen.findByTestId('result-keep-failed');
+    // 🔴 The rows exist. "These images weren't kept" was false in this branch,
+    // and it is the sentence that sent people back through a paid publish.
+    expect(notice).toHaveTextContent(
+      'Civitai saved these images, but this app couldn’t add them to your gallery. Trying again won’t create duplicates.',
+    );
+    expect(notice.textContent).not.toContain('weren’t kept');
+    warn.mockRestore();
+  });
+
+  /**
+   * NEGATIVE CONTROL for the pair above: when the PUBLISH is what failed, nothing
+   * durable was created, so the retry must go all the way through it again and
+   * the original copy is the correct one.
+   */
+  it('NEGATIVE CONTROL: a failed publish IS retried in full', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const keepOutputs = keepFn(async () => {
+      throw new Error('rate limited');
+    });
+    const onKeepRun = keepRunFn();
+    renderRunner({ keepOutputs, onKeepRun });
+    await generate();
+
+    await userEvent.click(screen.getByTestId('result-keep'));
+    expect(await screen.findByTestId('result-keep-failed')).toHaveTextContent(
+      'These images weren’t kept. Nothing was charged — you can try again.',
+    );
+
+    await userEvent.click(screen.getByTestId('result-keep'));
+    await waitFor(() => expect(keepOutputs).toHaveBeenCalledTimes(2));
+    expect(onKeepRun).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it('a re-run does not inherit the original run KEPT state', async () => {
     const keepOutputs = keepFn(async () => [1]);
     renderRunner({ keepOutputs, onKeepRun: vi.fn(async () => {}) });
@@ -358,7 +437,15 @@ describe('Runner — kept gallery for this generator', () => {
     const visible = cells.find((el) => el.getAttribute('data-image-id') === '501')!;
 
     await waitFor(() => expect(hidden).toHaveAttribute('data-state', 'hidden'));
-    expect(within(hidden).getByTestId('kept-cell-placeholder')).toHaveTextContent(/browsing level/i);
+    // 🔴 The literal, not a substring. `/browsing level/i` matched the sentence
+    // that named the browsing level as the ONLY cause, which is wrong on the
+    // dominant path (a just-published image is `Pending`, therefore `hidden`) —
+    // so the loose matcher entrenched the defect it looked like it covered. The
+    // wording itself is pinned in `KeptGallery.test.tsx`; this asserts the
+    // moderation BEHAVIOUR still holds around it.
+    expect(within(hidden).getByTestId('kept-cell-placeholder')).toHaveTextContent(
+      'Still being checked, or above your browsing level',
+    );
     expect(within(hidden).queryByRole('img')).not.toBeInTheDocument();
     expect(hidden).toBeDisabled();
 
@@ -390,6 +477,52 @@ describe('Runner — kept gallery for this generator', () => {
     renderRunner({ keptRuns: [], getImages });
     await screen.findByTestId('runner');
     expect(screen.queryByTestId('runner-kept')).not.toBeInTheDocument();
+  });
+
+  /**
+   * 🔴 THE GLOBAL HORIZON IS NOT A FACT ABOUT THIS GRID, AND NO TEST COVERED IT
+   * HERE AT ALL. The Runner renders `KeptGallery` over `runsForGenerator(...)` —
+   * typically one or two runs — and used to pass the App's store-wide truncation
+   * flag straight through, so the notice announced "Showing 200 kept runs" above
+   * two images. The flag is no longer threaded; this pins that, by passing the
+   * prop the old wiring would have forwarded.
+   */
+  it('never renders the store-wide truncation notice over one generator runs', async () => {
+    // The prop the old wiring forwarded. It is no longer on `RunnerProps`, so the
+    // cast is the point of the test: were it re-introduced and threaded through,
+    // this fails.
+    const legacyTruncated = { keptTruncated: true } as unknown as Partial<
+      Parameters<typeof Runner>[0]
+    >;
+    renderRunner({ keptRuns: kept, getImages, ...legacyTruncated });
+    await screen.findByTestId('runner-kept');
+    await screen.findAllByTestId('kept-cell');
+    expect(screen.queryByTestId('runner-kept-gallery-truncated')).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('Older keeps aren’t shown here');
+    expect(document.body.textContent).not.toContain('Showing 200 kept runs');
+  });
+
+  /**
+   * 🔴 A CONTROL THAT CANNOT WORK IS WORSE THAN AN ABSENT ONE. The kept lightbox
+   * gets one cell and one url — its siblings' urls live in the gallery's gated
+   * state — so it supplies neither `onPrev` nor `onNext`, and the old `total > 1`
+   * test rendered two permanently-disabled buttons plus a keydown listener that
+   * could never fire. The position line stays: it is true.
+   */
+  it('states position but offers no paging for a kept run it cannot page', async () => {
+    renderRunner({ keptRuns: kept, getImages });
+    await screen.findByTestId('runner-kept');
+    const cells = await screen.findAllByTestId('kept-cell');
+    const visible = cells.find((el) => el.getAttribute('data-image-id') === '501')!;
+    await waitFor(() => expect(visible).toBeEnabled());
+    await userEvent.click(visible);
+
+    const box = await screen.findByTestId('result-lightbox');
+    // Two images in the run, so the position is worth stating…
+    expect(within(box).getByTestId('lightbox-position')).toHaveTextContent('1 of 2');
+    // …and there is nothing that pretends to page between them.
+    expect(within(box).queryByTestId('lightbox-prev')).not.toBeInTheDocument();
+    expect(within(box).queryByTestId('lightbox-next')).not.toBeInTheDocument();
   });
 
   it('opens a kept image full size, attributed to the generator that made it', async () => {

@@ -44,22 +44,42 @@ import type { DraftStore } from './drafts.js';
 export const KEPT_PREFIX = 'kept:';
 
 /**
- * How many kept runs a single `list()` enumerates. The per-viewer KV is paginated
- * and this app does not page the gallery, so this is a real horizon — and
- * {@link listKeptRuns} reports whether it was reached so the gallery can SAY so
- * rather than silently presenting a prefix as the whole set. Same honesty rule
- * the Discover board already applies to its own one-page read.
+ * Rows one `list()` call may return. 🔴 The host's own hard maximum, not a
+ * preference: `storage.list` validates `limit` with `.int().min(1).max(200)`
+ * (civitai `apps.router`), so a larger value is REJECTED, never clamped.
+ */
+export const KEPT_PAGE_LIMIT = 200;
+
+/**
+ * Hard bound on the forward key walk in {@link listKeptKeys}, so a pathological
+ * store can never turn a gallery open into an unbounded request loop.
  *
- * 🔴 THE PAGE IS KEY-ORDERED, NOT RECENCY-ORDERED, AND THAT IS THE OPPOSITE OF
- * WHAT IT LOOKS LIKE. The host lists `ORDER BY key` ascending and pages forward
- * with `key > cursor` (apps router `storage.list`), and `newId('kept')` puts
- * `Date.now().toString(36)` first in the id — a fixed-width base-36 stamp until
- * ~2059 — so key order IS chronological order, ascending. The one page this app
- * reads is therefore the viewer's **oldest** {@link KEPT_LIST_LIMIT} runs; the
- * `keptAt` sort in {@link listKeptRuns} orders WITHIN that page and cannot
- * recover what the page left out. Past the horizon it is the newest keeps that
- * go missing, which is why the notice must not promise "the newest N" — an
- * earlier version of this docblock did, and nothing in the code supplied it.
+ * Sized against the host's own ceiling rather than a feeling: per-user KV is
+ * capped at `USER_ROW_LIMIT = 1_000` rows for an (app, user) pair (civitai
+ * `apps.router`), and kept runs share that budget with this app's drafts — so a
+ * viewer can hold at most 1,000 `kept:` keys, i.e. 5 full pages. 8 leaves room
+ * for the ceiling to move without this becoming the thing that truncates.
+ */
+export const KEPT_LIST_MAX_PAGES = 8;
+
+/**
+ * How many kept runs the gallery actually hydrates and renders — the viewer's
+ * **newest** this many. Distinct from {@link KEPT_PAGE_LIMIT}: the walk
+ * enumerates KEYS across pages (cheap, `list` returns key + `updatedAt` only),
+ * and only this many VALUES are then fetched, so widening the horizon does not
+ * cost a `get` per extra row.
+ *
+ * 🔴 KEY ORDER IS CHRONOLOGICAL ORDER, AND THAT IS WHAT MAKES "NEWEST" REACHABLE.
+ * The host lists `ORDER BY key` ascending and pages forward with `key > cursor`
+ * (apps router `storage.list`), and `newId('kept')` puts `Date.now().toString(36)`
+ * first in the id — a fixed-width base-36 stamp until ~2059 — so the walk ends at
+ * the viewer's most recent keep and {@link listKeptRuns} takes the TAIL.
+ *
+ * ⚠️ An earlier version of this module read ONE page and therefore showed the
+ * viewer's **oldest** runs, dropping the very keep they had just made; and the
+ * PR that shipped it asserted "no forward-only paging recovers them", which was
+ * false — forward paging is exactly what recovers them, at the cost of a bounded
+ * number of extra `list` round trips. Both claims are retracted, not softened.
  */
 export const KEPT_LIST_LIMIT = 200;
 
@@ -123,22 +143,55 @@ export async function saveKeptRun(store: DraftStore, run: KeptRun): Promise<void
 }
 
 /**
- * One page of kept runs, plus whether the store had more to give.
+ * The kept runs the gallery got, plus whether any were left behind.
  *
- * `truncated` is the host's own signal, not a guess: `list()` returns a
- * `nextCursor` if and only if the page FILLED (apps router `storage.list`), so a
- * cursor means "there may be more", never "there is definitely more" — a store
- * holding exactly {@link KEPT_LIST_LIMIT} runs also fills its page. The UI copy
- * is worded for that: it hedges rather than asserting a count the app cannot see.
+ * 🔴 `truncated` is now a DEFINITE statement, where the one-page version could
+ * only hedge. Enumerating every key tells us exactly how many runs exist, so
+ * `true` means "there are kept runs this app did not load" — not "the page
+ * filled, which may or may not mean more exist". The one residual hedge is the
+ * {@link KEPT_LIST_MAX_PAGES} bound: if the walk stops there, more keys may
+ * remain unseen. Both readings license the same sentence in the UI, which is why
+ * the notice no longer has to hedge.
  */
 export interface KeptRunPage {
   runs: KeptRun[];
-  /** The page filled, so runs past {@link KEPT_LIST_LIMIT} may exist unread. */
+  /** Kept runs exist that are NOT in {@link KeptRunPage.runs}. */
   truncated: boolean;
 }
 
 /**
- * One page of the kept runs this viewer holds, newest-kept first WITHIN the page.
+ * Walk the viewer's `kept:` KEYS forward to the end of the store.
+ *
+ * Keys only — `store.list` returns key + `updatedAt`, never values — so this is
+ * cheap enough to run to completion, and the expensive per-row `get` is spent
+ * only on the tail {@link listKeptRuns} keeps.
+ *
+ * `more` is true only when the walk hit {@link KEPT_LIST_MAX_PAGES} with the host
+ * still offering a cursor, i.e. the enumeration itself was cut short.
+ */
+async function listKeptKeys(store: DraftStore): Promise<{ keys: string[]; more: boolean }> {
+  const keys: string[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < KEPT_LIST_MAX_PAGES; page++) {
+    const res = await store.list({ prefix: KEPT_PREFIX, limit: KEPT_PAGE_LIMIT, cursor });
+    for (const k of res.keys) keys.push(k.key);
+    // 🔴 No cursor ⇒ the host has nothing further for this prefix. That is the
+    // ONLY clean exit: a short page also ends the walk, because the host emits a
+    // cursor if and only if the page filled.
+    if (res.nextCursor == null) return { keys, more: false };
+    cursor = res.nextCursor;
+  }
+  return { keys, more: true };
+}
+
+/**
+ * The viewer's most recent {@link KEPT_LIST_LIMIT} kept runs, newest-kept first.
+ *
+ * 🔴 THE TAIL, NOT THE HEAD. Key order is chronological (see
+ * {@link KEPT_LIST_LIMIT}), so the newest runs are at the END of the walk. Taking
+ * the tail is what makes the app's own copy true: press Keep and the run you just
+ * made is in the gallery, which was NOT the case while this read took the first
+ * page and called it the set.
  *
  * 🔴 Malformed rows are dropped silently and the rest are returned. A single bad
  * blob must not empty the gallery — the failure mode of the alternative is "all
@@ -151,11 +204,12 @@ export interface KeptRunPage {
  * anything yet", the one sentence this module exists to prevent.
  */
 export async function listKeptRuns(store: DraftStore): Promise<KeptRunPage> {
-  const { keys, nextCursor } = await store.list({ prefix: KEPT_PREFIX, limit: KEPT_LIST_LIMIT });
-  const rows = await Promise.all(keys.map((k) => store.get<unknown>(k.key)));
+  const { keys, more } = await listKeptKeys(store);
+  const newest = keys.slice(-KEPT_LIST_LIMIT);
+  const rows = await Promise.all(newest.map((key) => store.get<unknown>(key)));
   return {
     runs: rows.filter(isKeptRun).sort((a, b) => b.keptAt - a.keptAt),
-    truncated: nextCursor != null,
+    truncated: more || keys.length > newest.length,
   };
 }
 

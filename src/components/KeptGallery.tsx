@@ -17,9 +17,11 @@
 // 🔴 THREE OUTCOMES, ALL RENDERED, NONE COLLAPSED. The gate returns `visible`
 // (url) or `hidden` (NO url), and OMITS ids it cannot resolve at all — so the
 // returned array may be SHORTER than the request and a missing entry is not the
-// same fact as a hidden one. `hidden` means "you may not see this"; omitted means
-// "this is gone". Rendering either as a broken `<img>` would be a moderation
-// failure in the first case and a lie in the second.
+// same fact as a hidden one. `hidden` means "not being served to you right now"
+// — which covers a still-scanning image as well as one above this viewer's
+// ceiling, and the gate does not say which (see {@link HIDDEN_CELL_NOTICE});
+// omitted means "this is gone". Rendering either as a broken `<img>` would be a
+// moderation failure in the first case and a lie in the second.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -27,13 +29,7 @@ import type { BlockGatedImage } from '@civitai/app-sdk/blocks';
 import { Alert, Button, Group, Stack } from '@civitai/blocks-react/ui';
 import { Image } from '@civitai/components-react';
 
-import {
-  KEPT_LIST_LIMIT,
-  chunkImageIds,
-  keptImageFeed,
-  type KeptImageCell,
-  type KeptRun,
-} from '../lib/runs.js';
+import { chunkImageIds, keptImageFeed, type KeptImageCell, type KeptRun } from '../lib/runs.js';
 import { CLASS_LIFT, motionClass, useMotion } from '../motion.js';
 import { elevate, metaText, radius, type Palette } from '../theme.js';
 import { EmptyState } from './EmptyState.js';
@@ -42,21 +38,55 @@ import { EmptyState } from './EmptyState.js';
 export const GALLERY_PAGE_SIZE = 12;
 
 /**
- * 🔴 SAID, NOT IMPLIED. The store read is ONE page (see `lib/runs.ts`), so a
- * viewer past the horizon is looking at a prefix of what they kept — and because
- * that page is KEY-ordered, i.e. oldest-first, the runs it drops are their most
- * RECENT ones. An unlabelled grid is then an authoritative wrong answer about
- * their own history, the same failure the Discover board discloses for its own
- * one-page read.
+ * 🔴 NO NUMBER, DELIBERATELY. This notice used to open *"Showing 200 kept
+ * runs"* — a hardcoded constant rendered over whatever the grid actually had.
+ * In the Runner, where the same component renders one generator's runs, that
+ * told a viewer with two kept runs they were looking at two hundred; in Browse
+ * it overstated whenever malformed rows were dropped. A count the component has
+ * not derived from what it rendered is a claim it cannot keep, so there is none:
+ * what remains is the one fact `truncated` actually carries.
  *
- * Every word is bounded by what the code can see. It does not say "the newest N"
- * (the page is the oldest N), and it does not assert more exist: the host emits
- * its `nextCursor` whenever the page FILLED, so a viewer holding exactly
- * {@link KEPT_LIST_LIMIT} runs trips this with nothing missing. "May not be
- * here" is true in both readings; "are missing" would not be.
+ * Bounded by what the code can see. `lib/runs.ts` walks the viewer's keys to the
+ * end of the store and hydrates the TAIL, so "your most recent ones" is what the
+ * grid holds, and `truncated` means kept runs exist outside it (see
+ * `KeptRunPage` in `lib/runs.ts`).
  */
 export const TRUNCATION_NOTICE =
-  `Showing ${KEPT_LIST_LIMIT} kept runs — this app reads one page at a time, so your most recent keeps may not be here.`;
+  'Older keeps aren’t shown here — this app loads your most recent ones.';
+
+/**
+ * What a cell says when the gate returned `hidden`.
+ *
+ * 🔴 THE DOMINANT CAUSE IS THE SCAN, NOT THE BROWSING LEVEL, AND THIS LINE USED
+ * TO NAME ONLY THE BROWSING LEVEL. `publishGenerationOutputs` creates each row
+ * with `createImage` DEFAULT ingestion, which Prisma defaults to `Pending`, and
+ * the gate (`block-gated-images.logic.ts`) returns `hidden` for anything not
+ * terminally `Scanned` — with NO owner bypass, in its own words *"an
+ * unscanned/flagged image is `hidden` for EVERYONE (including its author)"*. So
+ * on the ordinary path — press Keep, the gallery mounts below the result and
+ * reads within the same second — the viewer's own just-paid-for images come back
+ * `hidden`, and *"Not shown at your browsing level"* told them Civitai had
+ * withheld their own work from them.
+ *
+ * Both causes are named because the gate genuinely collapses them: `hidden`
+ * carries no reason, so the component cannot know which one applies and must not
+ * pick. The scan is named first because it is the one that resolves itself.
+ */
+export const HIDDEN_CELL_NOTICE = 'Still being checked, or above your browsing level';
+
+/**
+ * How long after a `hidden` verdict the gallery re-reads those ids once.
+ *
+ * 🔴 A HEURISTIC, NOT A MEASURED SCAN TIME. Nobody here has measured how long
+ * `Pending` → `Scanned` takes, and this number is not a claim about it: it buys
+ * one extra chance for a freshly-kept image to appear without the viewer having
+ * to leave and come back. When the scan is slower, the cell keeps saying what it
+ * says — which is true either way — and the next mount re-reads.
+ *
+ * Exactly ONE re-read per id, tracked in a ref, so a permanently-hidden image
+ * (above the viewer's ceiling, flagged) can never become a polling loop.
+ */
+export const GALLERY_RECHECK_MS = 20_000;
 
 /** What the gate said about one id, or `'missing'` when it said nothing at all. */
 export type GatedState = BlockGatedImage | { imageId: number; status: 'missing' };
@@ -75,12 +105,19 @@ export interface KeptGalleryProps {
   /** Show each cell's "Made with <generator>" caption (off inside one generator). */
   withAttribution?: boolean;
   /**
-   * The store read hit its page limit, so `runs` is a prefix of what the viewer
-   * kept. Renders {@link TRUNCATION_NOTICE}; see its docblock for why the wording
-   * hedges. Passing it is how the caller keeps the grid from asserting that this
-   * is everything.
+   * Kept runs exist that are not in `runs`. Renders {@link TRUNCATION_NOTICE}.
+   *
+   * 🔴 ONLY MEANINGFUL WHEN `runs` IS THE WHOLE LOADED SET. The flag is global
+   * (it describes the viewer's store), so a caller that has FILTERED `runs` —
+   * the Runner, which scopes to one generator — must not pass it: the notice
+   * would be a global fact rendered as if it described the grid beneath it.
    */
   truncated?: boolean;
+  /**
+   * Delay before the single re-read of `hidden` ids. See
+   * {@link GALLERY_RECHECK_MS} — it is a heuristic, and tests set it to 0.
+   */
+  recheckDelayMs?: number;
   'data-testid'?: string;
 }
 
@@ -94,6 +131,7 @@ export function KeptGallery({
   onOpenCell,
   withAttribution = false,
   truncated = false,
+  recheckDelayMs = GALLERY_RECHECK_MS,
   'data-testid': testId = 'kept-gallery',
 }: KeptGalleryProps) {
   const motion = useMotion();
@@ -101,11 +139,15 @@ export function KeptGallery({
   const [visibleCount, setVisibleCount] = useState(GALLERY_PAGE_SIZE);
   const [gated, setGated] = useState<Record<number, GatedState>>({});
   const [readError, setReadError] = useState<string | null>(null);
+  /** Bumped to re-run the read effect after a recheck or a manual retry. */
+  const [readTick, setReadTick] = useState(0);
 
   // Ids already requested, so a re-render (or a newly-kept run appended to the
   // list) re-reads only what is genuinely new. A ref rather than state: it must
   // not itself re-trigger the effect it guards.
   const requested = useRef<Set<number>>(new Set());
+  /** Ids whose one automatic re-read has been spent. See GALLERY_RECHECK_MS. */
+  const rechecked = useRef<Set<number>>(new Set());
 
   const wantedIds = useMemo(
     () => feed.slice(0, visibleCount).map((cell) => cell.imageId),
@@ -117,6 +159,8 @@ export function KeptGallery({
     if (missing.length === 0) return;
     for (const id of missing) requested.current.add(id);
     let cancelled = false;
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     (async () => {
       // 🔴 Seed EVERY requested id as `missing` first. The gate OMITS ids it
       // cannot resolve, so an id that never comes back would otherwise sit
@@ -132,27 +176,59 @@ export function KeptGallery({
           for (const img of images) next[img.imageId] = img;
         }
         if (!cancelled) setReadError(null);
-      } catch (e) {
+      } catch {
         // 🔴 Surfaced, not swallowed. A failed gated read leaves the seeded
         // `missing` states, which render as placeholders — indistinguishable
-        // from "these images are gone" unless the failure is stated.
-        if (!cancelled) {
-          setReadError('Couldn’t load your kept images just now.');
-          // Allow a retry to re-request these ids.
-          for (const id of missing) requested.current.delete(id);
-        }
+        // from "these images are gone" unless the failure is stated. The ids go
+        // back in the pool so the Try again control below can re-ask for them.
+        if (!cancelled) setReadError('Couldn’t load your kept images just now.');
+        for (const id of missing) requested.current.delete(id);
       }
+      settled = true;
       if (!cancelled) setGated((prev) => ({ ...prev, ...next }));
+
+      // ONE delayed re-read for ids the gate withheld. A just-published image is
+      // `Pending` ingestion and therefore `hidden`; this is the only way it
+      // becomes visible without the viewer leaving and coming back.
+      const stillHidden = missing.filter(
+        (id) => next[id]?.status === 'hidden' && !rechecked.current.has(id),
+      );
+      if (!cancelled && stillHidden.length > 0) {
+        timer = setTimeout(() => {
+          for (const id of stillHidden) {
+            rechecked.current.add(id);
+            requested.current.delete(id);
+          }
+          setReadTick((n) => n + 1);
+        }, recheckDelayMs);
+      }
     })();
     return () => {
       cancelled = true;
+      if (timer) clearTimeout(timer);
+      // 🔴 THE FIX FOR A REPRODUCED STRAND. Ids enter `requested` BEFORE the
+      // await and a cancelled batch's result is dropped, so without this line a
+      // read torn down mid-flight left its cells at "Loading…" for the life of
+      // the mount: the result was thrown away and the ids still looked fetched,
+      // so nothing could ever ask again. The trigger was ordinary — `App` built
+      // the Runner's `runs` array inline in JSX, minting a new identity every
+      // render. Releasing them costs one repeat read of a batch already in
+      // flight; stranding them costs the image.
+      if (!settled) for (const id of missing) requested.current.delete(id);
     };
-  }, [wantedIds, getImages]);
+  }, [wantedIds, getImages, readTick, recheckDelayMs]);
+
+  /** Re-ask the gate for everything on screen. Wired to the failed-read Alert. */
+  const retryRead = () => {
+    requested.current.clear();
+    setReadError(null);
+    setReadTick((n) => n + 1);
+  };
 
   // 🔴 Rendered ALONGSIDE whatever the grid shows, never instead of it — and in
-  // the empty branch too. A page that filled with rows this app cannot parse
-  // yields an empty feed with more still unread, and "nothing kept yet" is the
-  // worst available reading of that state.
+  // the empty branch too. `truncated` with an empty feed means every hydrated row
+  // was unparseable while runs the app never loaded still exist, and "nothing
+  // kept yet" is the worst available reading of that state.
   const notice = truncated ? (
     <span style={metaText} role="status" data-testid={`${testId}-truncated`}>
       {TRUNCATION_NOTICE}
@@ -175,7 +251,14 @@ export function KeptGallery({
       {notice}
       {readError && (
         <Alert color="warning" data-testid={`${testId}-error`}>
-          {readError}
+          <Stack gap={8}>
+            <span>{readError}</span>
+            <Group>
+              <Button size="sm" variant="light" data-testid={`${testId}-retry`} onClick={retryRead}>
+                Try again
+              </Button>
+            </Group>
+          </Stack>
         </Alert>
       )}
       <div
@@ -243,7 +326,7 @@ export function KeptGallery({
                     {!resolved
                       ? 'Loading…'
                       : state.status === 'hidden'
-                        ? 'Not shown at your browsing level'
+                        ? HIDDEN_CELL_NOTICE
                         : 'No longer available'}
                   </span>
                 )}

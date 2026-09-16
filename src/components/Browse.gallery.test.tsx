@@ -20,8 +20,7 @@ import { Harness } from '@civitai/blocks-react/testing';
 import { App, type AppDeps } from '../App.js';
 import { buildPublishPayload, newButton, newGenerator } from '../lib/generator.js';
 import type { DraftStore } from '../lib/drafts.js';
-import { KEPT_PREFIX, listKeptRuns } from '../lib/runs.js';
-import { TRUNCATION_NOTICE } from './KeptGallery.js';
+import { KEPT_LIST_LIMIT, KEPT_PREFIX, listKeptRuns, saveKeptRun } from '../lib/runs.js';
 import { fakeShared, immediateSleep, memoryDraftStore, mockWorkflow } from '../test-helpers.js';
 import type { SharedListItem } from '@civitai/blocks-react';
 
@@ -275,46 +274,71 @@ describe('a failed kept-runs read', () => {
 });
 
 /**
- * 🔴 THE ONE-PAGE HORIZON, DISCLOSED. `listKeptRuns` reads a single KV page, so
- * past `KEPT_LIST_LIMIT` the grid is a prefix of the viewer's history presented
- * as the whole of it — and because the page is key-ordered it is their most
- * RECENT keeps that are missing. `runs.test.ts` drives the real fill condition
- * against the host's list contract; this asserts the signal survives the whole
- * chain (`listKeptRuns` → `App` → `Browse` → `KeptGallery`) and reaches a
- * viewer, which no unit test can see.
+ * 🔴 THE HORIZON, DRIVEN BY REAL ROWS RATHER THAN AN INJECTED SIGNAL. This block
+ * used to wrap the store so `list` always reported a `nextCursor`, which tested
+ * the wiring and nothing about the read. It now seeds the store past the horizon
+ * and lets `listKeptRuns` discover it, so the assertions below cover the walk,
+ * the flag and the copy as one chain (`listKeptRuns` → `App` → `Browse` →
+ * `KeptGallery`).
+ *
+ * The headline change it guards: the gallery holds the viewer's NEWEST runs. The
+ * one-page version held their oldest, so the keep they had just made was the
+ * first thing missing from the surface that exists to show it.
  */
-describe('the kept-runs horizon is disclosed in the gallery', () => {
-  /** The host emits `nextCursor` when its page fills; inject that signal directly. */
-  function moreToRead(inner: DraftStore): DraftStore {
-    return {
-      ...inner,
-      async list(opts) {
-        const res = await inner.list(opts);
-        return opts?.prefix === KEPT_PREFIX ? { ...res, nextCursor: 'more' } : res;
-      },
-    };
+describe('the kept-runs horizon', () => {
+  /** `n` kept runs whose keys ascend with time, as `newId('kept')` mints them. */
+  async function seedKept(store: DraftStore, n: number) {
+    for (let i = 0; i < n; i++) {
+      await saveKeptRun(store, {
+        id: `k${String(i).padStart(5, '0')}`,
+        keptAt: 1_000 + i,
+        imageIds: [10_000 + i],
+        generatorName: 'Seeded generator',
+        generatorKey: 'shared:seed',
+        buttonLabel: 'Seeded',
+      });
+    }
   }
 
-  it('says so when the store had more than one page', async () => {
-    setup({ drafts: moreToRead(memoryDraftStore()) });
-    await runAndKeep();
-    await userEvent.click(screen.getByTestId('runner-back'));
-    await screen.findByTestId('browse');
+  it('discloses that older keeps are not shown, alongside the grid', async () => {
+    const drafts = memoryDraftStore();
+    await seedKept(drafts, KEPT_LIST_LIMIT + 1);
+    setup({ drafts });
     await userEvent.click(await screen.findByTestId('tab-kept'));
 
     const notice = await screen.findByTestId('browse-kept-gallery-truncated');
-    expect(notice).toHaveTextContent(TRUNCATION_NOTICE);
+    // The literal, so a reword has to come back through this test.
+    expect(notice).toHaveTextContent(
+      'Older keeps aren’t shown here — this app loads your most recent ones.',
+    );
     // 🔴 Alongside the grid, never instead of it — a disclosure that hides the
     // images is a worse answer than the one it replaced.
-    expect(await screen.findByTestId('kept-cell')).toBeInTheDocument();
+    expect((await screen.findAllByTestId('kept-cell')).length).toBeGreaterThan(0);
   });
 
-  it('NEGATIVE CONTROL: a single-page store discloses nothing', async () => {
-    setup();
-    await runAndKeep();
-    await userEvent.click(screen.getByTestId('runner-back'));
+  /**
+   * 🔴 WHICH runs survived the horizon, end to end. `k00000` is the oldest and
+   * `k00200` the newest; a read that took the first page instead of the last
+   * would show exactly the opposite pair.
+   */
+  it('shows the newest kept run and not the oldest', async () => {
+    const drafts = memoryDraftStore();
+    await seedKept(drafts, KEPT_LIST_LIMIT + 1);
+    const { getImages } = setup({ drafts });
     await userEvent.click(await screen.findByTestId('tab-kept'));
-    await screen.findByTestId('kept-cell');
+    await screen.findAllByTestId('kept-cell');
+
+    const asked = getImages.mock.calls.flatMap(([ids]) => ids);
+    expect(asked).toContain(10_000 + KEPT_LIST_LIMIT); // the newest run's image
+    expect(asked).not.toContain(10_000); // the oldest run's image
+  });
+
+  it('NEGATIVE CONTROL: a store inside the horizon discloses nothing', async () => {
+    const drafts = memoryDraftStore();
+    await seedKept(drafts, KEPT_LIST_LIMIT);
+    setup({ drafts });
+    await userEvent.click(await screen.findByTestId('tab-kept'));
+    await screen.findAllByTestId('kept-cell');
     expect(screen.queryByTestId('browse-kept-gallery-truncated')).not.toBeInTheDocument();
   });
 });

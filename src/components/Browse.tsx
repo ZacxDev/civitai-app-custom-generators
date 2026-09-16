@@ -120,8 +120,12 @@ export interface BrowseProps {
    */
   keptRuns?: KeptRun[];
   /**
-   * `keptRuns` is a PREFIX — the store read hit its one-page horizon. Threaded to
-   * the gallery so it discloses that instead of presenting the page as the set.
+   * Kept runs exist outside `keptRuns` — the read hydrates the viewer's newest
+   * `KEPT_LIST_LIMIT`, so what is outside is their oldest. Threaded to the
+   * gallery so it discloses that instead of presenting the set as complete.
+   *
+   * 🔴 Only legal because `keptRuns` here IS the loaded set. The Runner filters
+   * to one generator and therefore deliberately does not take this prop.
    */
   keptTruncated?: boolean;
   /**

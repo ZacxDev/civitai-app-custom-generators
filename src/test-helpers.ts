@@ -80,7 +80,24 @@ export function cannedPicker(map: Partial<Record<BlockResourcePickerType, BlockR
     map[resourceType] ?? null;
 }
 
-/** In-memory per-viewer KV store implementing the DraftStore contract. */
+/**
+ * In-memory per-viewer KV store built to the HOST's list contract, not to a
+ * convenient approximation of it.
+ *
+ * 🔴 THE PAGING BEHAVIOUR IS THE CONTRACT, AND A FAKE THAT IGNORES IT CAN ONLY
+ * CONFIRM WHAT THE FAKE BELIEVES. This one mirrors civitai's `apps.router`
+ * `storage.list` exactly:
+ *   - `ORDER BY key` ascending, paging forward with `key > cursor`;
+ *   - `cursor` / `nextCursor` are the base64 of a key;
+ *   - `nextCursor` is emitted IF AND ONLY IF the page filled
+ *     (`rows.length === limit`), so it means "there may be more", never "there
+ *     is more".
+ *
+ * This used to ignore `limit` and `cursor` entirely and never emit a cursor — so
+ * every DOM/integration test ran against a store with no horizon at all, and the
+ * multi-page walk in `lib/runs.ts` was unobservable from them. `lib/runs.test.ts`
+ * carried its own faithful copy; there is now one.
+ */
 export function memoryDraftStore(): DraftStore {
   const map = new Map<string, unknown>();
   return {
@@ -98,9 +115,26 @@ export function memoryDraftStore(): DraftStore {
     },
     async list(opts) {
       const prefix = opts?.prefix ?? '';
-      return { keys: [...map.keys()].filter((k) => k.startsWith(prefix)).map((key) => ({ key })) };
+      const after = opts?.cursor ? decodeStoreCursor(opts.cursor) : '';
+      const limit = opts?.limit ?? 1000;
+      const all = [...map.keys()].filter((k) => k.startsWith(prefix) && k > after).sort();
+      const page = all.slice(0, limit);
+      return {
+        keys: page.map((key) => ({ key })),
+        nextCursor:
+          page.length === limit ? encodeStoreCursor(page[page.length - 1] as string) : undefined,
+      };
     },
   };
+}
+
+/** base64 of a key, the shape the host's `storage.list` emits as `nextCursor`. */
+function encodeStoreCursor(key: string): string {
+  return Buffer.from(key, 'utf8').toString('base64');
+}
+
+function decodeStoreCursor(cursor: string): string {
+  return Buffer.from(cursor, 'base64').toString('utf8');
 }
 
 /** In-memory app-scoped shared store that records appends + in-place updates. */

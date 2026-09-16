@@ -143,14 +143,25 @@ export interface RunnerProps {
   keepOutputs?: (args: { workflowId: string; imageIndexes?: number[]; title?: string }) => Promise<number[]>;
   /** Persist a kept run to the viewer's own storage (the App owns the store). */
   onKeepRun?: (run: KeptRun) => Promise<void>;
-  /** Kept runs already recorded FOR THIS GENERATOR, newest-kept first. */
-  keptRuns?: KeptRun[];
   /**
-   * The underlying store read hit its one-page horizon, so this generator's runs
-   * were filtered out of a PREFIX of the viewer's history. The count below and
-   * the grid are both short in that case, and the gallery says so.
+   * Kept runs already recorded FOR THIS GENERATOR, newest-kept first.
+   *
+   * 🔴 A FILTERED SUBSET, WHICH IS WHY THERE IS NO `keptTruncated` HERE. This
+   * component used to take the App's global truncation flag and hand it to
+   * `KeptGallery`, which rendered *"Showing 200 kept runs"* over a grid holding
+   * one or two — a global fact presented as a statement about the images beneath
+   * it. The flag describes the viewer's whole store and nothing this grid shows,
+   * so it is not threaded through.
+   *
+   * The residual gap, named rather than implied: a viewer holding more than
+   * `KEPT_LIST_LIMIT` kept runs may have runs of THIS generator outside the
+   * loaded set, and this section does not say so. It closes when the Runner can
+   * count this generator's runs independently of the loaded page — either a
+   * per-generator key prefix or a store-side count — and the check is mechanical:
+   * `runner-kept-count` is derived from something other than `keptRuns.length`,
+   * or it is not.
    */
-  keptTruncated?: boolean;
+  keptRuns?: KeptRun[];
   /**
    * Per-viewer gated image read, for rendering the kept gallery. Required
    * alongside `keptRuns` — ids without a resolver render nothing.
@@ -164,7 +175,7 @@ export interface RunnerProps {
 }
 
 export function Runner(props: RunnerProps) {
-  const { config, sharedContentKey, headerUrl, c, canGenerate, buzzBalance, onRequestConsent, uploadSourceImage, estimate, submit, poll, onBack, onTopUp, onBalanceRefresh, onOpenInGenerator, onCopyImageLink, keepOutputs, onKeepRun, keptRuns, keptTruncated = false, getImages, rehydrateNotice, preview = false } = props;
+  const { config, sharedContentKey, headerUrl, c, canGenerate, buzzBalance, onRequestConsent, uploadSourceImage, estimate, submit, poll, onBack, onTopUp, onBalanceRefresh, onOpenInGenerator, onCopyImageLink, keepOutputs, onKeepRun, keptRuns, getImages, rehydrateNotice, preview = false } = props;
   const analytics = props.analytics ?? noopAnalytics;
   const motion = useMotion();
 
@@ -467,6 +478,18 @@ export function Runner(props: RunnerProps) {
    * logged and never rendered — and it cannot distinguish a declined consent from
    * a real error anyway (see `KeepStatus`), which is the second reason the copy
    * stays neutral.
+   *
+   * 🔴 TWO STEPS, TWO OUTCOMES, AND THE RETRY MUST NOT REPEAT THE FIRST ONE.
+   * `keepOutputs` is a real publish — a server-side fetch, an S3 re-upload and a
+   * durable `Image` row per output — while `onKeepRun` is a KV write, and
+   * `publishGenerationOutputs` has no idempotency: every call mints fresh rows
+   * (see `QueueItem.publishedImageIds`). Running both under one `try` meant a
+   * failed KV write showed *"These images weren't kept"* over rows that plainly
+   * existed, and "Try keeping again" re-published them. It is not a rare arm: the
+   * viewer's KV is capped (`USER_QUOTA_BYTES` 2 MiB / `USER_ROW_LIMIT` 1,000,
+   * shared with this app's drafts) and the gallery is add-only, so a viewer at
+   * the ceiling fails the write EVERY time — an unbounded duplicate-publish loop
+   * driven by a button that says the opposite of what happened.
    */
   async function keepItem(item: RunnerItem) {
     if (!keepOutputs || !item.workflowId) return;
@@ -481,43 +504,72 @@ export function Runner(props: RunnerProps) {
       const { [item.id]: _drop, ...rest } = e;
       return rest;
     });
-    try {
-      const imageIds = await keepOutputs({
-        workflowId: item.workflowId,
-        title: config.name || undefined,
-      });
-      // A host that consents but resolves nothing is not a success. Treat an
-      // empty id list as a failure rather than writing a kept run with no images
-      // (which `isKeptRun` would reject on read anyway, silently emptying the
-      // gallery the viewer was just told they had added to).
-      if (!Array.isArray(imageIds) || imageIds.length === 0) {
-        throw new Error('publish resolved no image ids');
+
+    // ── Step 1: PUBLISH, unless a previous attempt already did. ──────────────
+    let imageIds = item.publishedImageIds;
+    if (!imageIds) {
+      try {
+        const published = await keepOutputs({
+          workflowId: item.workflowId,
+          title: config.name || undefined,
+        });
+        // A host that consents but resolves nothing is not a success. Treat an
+        // empty id list as a failure rather than writing a kept run with no
+        // images (which `isKeptRun` would reject on read anyway, silently
+        // emptying the gallery the viewer was just told they had added to).
+        if (!Array.isArray(published) || published.length === 0) {
+          throw new Error('publish resolved no image ids');
+        }
+        imageIds = published;
+        // Recorded BEFORE the write is attempted: from here on the rows exist,
+        // and that fact must outlive whatever happens next.
+        patchItem(item.id, { publishedImageIds: imageIds });
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[custom-generators] keep failed (publish)', e);
+        patchItem(item.id, { keepStatus: 'failed' });
+        setKeepErrors((prev) => ({
+          ...prev,
+          [item.id]: 'These images weren’t kept. Nothing was charged — you can try again.',
+        }));
+        return;
       }
-      const run: KeptRun = {
-        id: newId('kept'),
-        keptAt: Date.now(),
-        imageIds,
-        generatorName: config.name || 'Untitled generator',
-        generatorKey: sharedContentKey,
-        buttonLabel: item.buttonLabel,
-        prompt: item.promptUsed,
-      };
+    }
+
+    // ── Step 2: RECORD it app-side. A failure here loses no images. ──────────
+    const run: KeptRun = {
+      id: newId('kept'),
+      keptAt: Date.now(),
+      imageIds,
+      generatorName: config.name || 'Untitled generator',
+      generatorKey: sharedContentKey,
+      buttonLabel: item.buttonLabel,
+      prompt: item.promptUsed,
+    };
+    try {
       await onKeepRun?.(run);
-      patchItem(item.id, { keepStatus: 'kept', keptImageIds: imageIds });
-      analytics.track(ANALYTICS_EVENTS.GENERATION_KEPT, {
-        images: imageIds.length,
-        buttonLabel: item.buttonLabel,
-        sharedContentKey,
-      });
     } catch (e) {
       // eslint-disable-next-line no-console
-      console.warn('[custom-generators] keep failed', e);
+      console.warn('[custom-generators] keep failed (record)', e);
       patchItem(item.id, { keepStatus: 'failed' });
       setKeepErrors((prev) => ({
         ...prev,
-        [item.id]: 'These images weren’t kept. Nothing was charged — you can try again.',
+        // 🔴 A DIFFERENT SENTENCE, BECAUSE A DIFFERENT THING HAPPENED. The images
+        // were published and are the viewer's; only this app's gallery entry is
+        // missing. Saying "these images weren't kept" here was false, and it sent
+        // people back through a publish they had already paid for.
+        [item.id]:
+          'Civitai saved these images, but this app couldn’t add them to your gallery. Trying again won’t create duplicates.',
       }));
+      return;
     }
+
+    patchItem(item.id, { keepStatus: 'kept', keptImageIds: imageIds });
+    analytics.track(ANALYTICS_EVENTS.GENERATION_KEPT, {
+      images: imageIds.length,
+      buttonLabel: item.buttonLabel,
+      sharedContentKey,
+    });
   }
 
   /** Open the payoff view on one of a queue item's result images. */
@@ -1105,7 +1157,6 @@ export function Runner(props: RunnerProps) {
               runs={keptRuns}
               c={c}
               getImages={getImages}
-              truncated={keptTruncated}
               emptyTitle="Nothing kept yet"
               emptyBody="Keep a generation and it will be here next time."
               onOpenCell={openKeptLightbox}

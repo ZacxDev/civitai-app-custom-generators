@@ -144,14 +144,15 @@ export type QueueStatus =
  * moment its images exist, and only then can it be kept.
  *
  * 🔴 `failed` here covers a DECLINED consent as well as a real error, and that
- * conflation is the platform's, not this app's: the `PUBLISH_GENERATION_OUTPUTS`
- * bridge replies with either image ids or a free-text `error`, with **no decline
- * variant** — unlike the sibling create-post bridge, which carries an explicit
- * `declined`. So a viewer who simply dismissed the host's consent confirm is
- * indistinguishable, at this seam, from one who hit a rate limit. That is why the
- * failed-keep copy is neutral and offers a retry rather than announcing an error:
- * telling someone their deliberate "no" was a failure is the one reading that is
- * certainly wrong.
+ * conflation is the platform's, not this app's. The `PUBLISH_GENERATION_OUTPUTS`
+ * request is answered by exactly one reply type, `PUBLISH_RESULT`, whose payload
+ * is `{ requestId, result?: { imageIds }, error?: string }` — an id list or a
+ * free-text string, with no third discriminator (`@civitai/app-sdk@0.35.0`,
+ * `dist/blocks/messages.d.ts`). So a viewer who simply dismissed the host's
+ * consent confirm is indistinguishable, at this seam, from one who hit a rate
+ * limit. That is why the failed-keep copy is neutral and offers a retry rather
+ * than announcing an error: telling someone their deliberate "no" was a failure
+ * is the one reading that is certainly wrong.
  */
 export type KeepStatus = 'idle' | 'keeping' | 'kept' | 'failed';
 
@@ -168,4 +169,17 @@ export interface QueueItem {
   keepStatus?: KeepStatus;
   /** Durable civitai `Image` ids, once kept. */
   keptImageIds?: number[];
+  /**
+   * Ids a SUCCESSFUL publish returned, held from the moment the bridge resolves —
+   * before, and independently of, the app-side record being written.
+   *
+   * 🔴 THIS FIELD IS AN IDEMPOTENCY KEY, NOT A DUPLICATE OF {@link
+   * QueueItem.keptImageIds}. `blocks.publishGenerationOutputs` mints a FRESH
+   * `Image` row per selected output on every call (civitai `blocks.router`, the
+   * per-output `persistBlockWorkflowOutputImage` loop) — there is no dedupe — so
+   * a retry that re-publishes duplicates durable rows and re-spends the
+   * image-weighted publish rate budget. Present ⇒ the publish already happened
+   * and a retry must only re-attempt the storage write.
+   */
+  publishedImageIds?: number[];
 }

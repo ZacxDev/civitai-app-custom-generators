@@ -286,8 +286,9 @@ export function App({ deps: depsOverride }: AppProps = {}) {
    */
   const [keptRuns, setKeptRuns] = useState<KeptRun[]>([]);
   /**
-   * The kept-runs read hit its one-page horizon (see `lib/runs.ts`), so
-   * `keptRuns` is a prefix of the viewer's history rather than the whole of it.
+   * Kept runs exist that `keptRuns` does not contain (see `lib/runs.ts`). The
+   * read walks the viewer's keys to the end and hydrates the newest
+   * `KEPT_LIST_LIMIT` of them, so what is missing here is their OLDEST runs.
    */
   const [keptTruncated, setKeptTruncated] = useState(false);
   /**
@@ -430,6 +431,23 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       cancelled = true;
     };
   }, [shared, coverUrls]);
+
+  /**
+   * This generator's kept runs, for the Runner's "Kept from this generator".
+   *
+   * 🔴 MEMOISED BECAUSE ITS IDENTITY IS LOAD-BEARING, NOT FOR SPEED. This was
+   * called inline in the Runner's JSX, so every App render minted a new array —
+   * a new `runs` prop, a new `feed`, a new `wantedIds`, and therefore a re-run of
+   * `KeptGallery`'s read effect whose cleanup cancelled whatever gated read was
+   * in flight. Paired with that component's own bug (ids marked requested before
+   * the await, the result dropped on cancel) it stranded cells at "Loading…"
+   * permanently. Both halves are fixed; this is the half that stops the cancel
+   * happening at all.
+   */
+  const runnerKeptRuns = useMemo(
+    () => runsForGenerator(keptRuns, running?.sharedContentKey),
+    [keptRuns, running?.sharedContentKey],
+  );
 
   // Card cover lookup passed to Browse: the resolved moderated url, or null.
   const coverUrlFor = useCallback(
@@ -842,9 +860,10 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             onKeepRun={handleKeepRun}
             // Scoped to THIS generator: "kept from this generator" is a claim
             // about provenance, so an unpublished draft (no shared key) correctly
-            // shows none rather than borrowing another generator's images.
-            keptRuns={runsForGenerator(keptRuns, running.sharedContentKey)}
-            keptTruncated={keptTruncated}
+            // shows none rather than borrowing another generator's images. The
+            // global `keptTruncated` is deliberately NOT passed — see the prop's
+            // docblock in `components/Runner.tsx`.
+            keptRuns={runnerKeptRuns}
             getImages={deps.getImages}
             analytics={deps.analytics}
             rehydrateNotice={rehydrateNotice}
