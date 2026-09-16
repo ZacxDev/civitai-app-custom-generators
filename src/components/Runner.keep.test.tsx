@@ -228,12 +228,22 @@ describe('Runner — KEEP: the app terminal', () => {
    * re-uploads it to the image store and creates a durable `Image` row (civitai
    * `blocks.router` → `persistBlockWorkflowOutputImage`, once per selected
    * output, with no dedupe) — while `onKeepRun` is a KV write that can fail on
-   * its own, and does so on every press once the viewer reaches the per-user row
-   * or byte ceiling (`USER_ROW_LIMIT` 1,000 / `USER_QUOTA_BYTES` 2 MiB, per
-   * `(app_block_id, user_id)` and therefore shared with this app's drafts),
-   * because the gallery is add-only. Both under one `try` made "Try keeping
-   * again" an unbounded duplicate-publish loop. The fixture below fails the write
-   * directly: the ceiling is why that matters, not what is under test.
+   * its own. Where the per-user gate is LIVE it does so on every press once the
+   * viewer reaches the per-user row or byte ceiling (`USER_ROW_LIMIT` 1,000 /
+   * `USER_QUOTA_BYTES` 2 MiB, per `(app_block_id, user_id)` and therefore shared
+   * with this app's drafts), because the gallery is add-only. Both under one
+   * `try` made "Try keeping again" an unbounded duplicate-publish loop.
+   *
+   * ⚠️ Bounded the same way as the payload twin in `components/Runner.tsx`
+   * `keepItem`, and for the same reason: that gate has a documented INERT state
+   * — `storage.set` reads the per-user counters through a LEFT JOIN on
+   * `user_quota`, catches the `42P01` on an app whose schema predates that
+   * table, reads both counters as 0 and leaves the per-user gate off rather than
+   * failing closed — so "on every press" is a claim about apps where the gate is
+   * live, not about every app. Nothing here depends on it: the fixture below
+   * fails the write DIRECTLY, because a KV write can fail for its own reasons
+   * and the publish it follows must not be repeated either way. The ceiling is
+   * why the arm is worth a test, not what the test asserts.
    */
   it('does NOT re-publish when only the app-side record failed', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

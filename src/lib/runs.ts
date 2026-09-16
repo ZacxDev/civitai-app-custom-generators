@@ -81,8 +81,26 @@ export const KEPT_PAGE_LIMIT = 200;
  * IS then the thing that truncates. That is not hidden: a walk stopped here
  * reports {@link KeptRunPage.incomplete}, and nothing downstream calls its
  * result the viewer's newest.
+ *
+ * ⚠️ This bounds the ENUMERATING pages. A walk that uses all 8 spends at most
+ * one further {@link KEPT_LIST_PROBE_LIMIT}-row `list` to tell a store that
+ * ended exactly on the boundary from one that continues past it, so the hard
+ * ceiling on `list` calls is 9 — still fixed, still independent of store size.
  */
 export const KEPT_LIST_MAX_PAGES = 8;
+
+/**
+ * Rows the exhaustion probe in `listKeptKeys` asks for. ONE is the whole point:
+ * the probe answers a yes/no — does a key exist past the last enumerated page? —
+ * and its keys are deliberately discarded rather than appended, because a walk
+ * that needed the probe is one this app has already decided not to widen.
+ *
+ * Costs a round trip ONLY when the 8th page filled, i.e. only in the state that
+ * previously reported {@link KeptRunPage.incomplete} unconditionally. The
+ * ordinary gallery open — any viewer under `KEPT_LIST_MAX_PAGES * KEPT_PAGE_LIMIT`
+ * keys — never reaches it.
+ */
+export const KEPT_LIST_PROBE_LIMIT = 1;
 
 /**
  * How many kept runs the gallery actually hydrates and renders — the **newest**
@@ -194,9 +212,17 @@ export interface KeptRunPage {
   /** Kept runs exist that are NOT in {@link KeptRunPage.runs}. */
   truncated: boolean;
   /**
-   * The key walk was cut short at {@link KEPT_LIST_MAX_PAGES}, so
-   * {@link KeptRunPage.runs} is NOT provably the viewer's most recent — the keys
-   * past the bound were never enumerated and any of them may be newer.
+   * The key walk was cut short at {@link KEPT_LIST_MAX_PAGES} **with keys still
+   * behind it**, so {@link KeptRunPage.runs} is NOT provably the viewer's most
+   * recent — those keys were never enumerated and any of them may be newer.
+   *
+   * 🔴 STOPPING AT THE BOUND IS NOT ENOUGH TO SET IT, and conflating the two is
+   * what once put a false sentence on screen: a store holding exactly
+   * `KEPT_LIST_MAX_PAGES * KEPT_PAGE_LIMIT` keys is enumerated IN FULL by a walk
+   * that uses every page, so it is `truncated` (older runs fell outside the
+   * hydration horizon) and NOT `incomplete`. The walk settles that with one
+   * extra row rather than inferring it from the host's cursor — see
+   * {@link KEPT_LIST_PROBE_LIMIT}.
    *
    * 🔴 `incomplete` implies `truncated`; the reverse does not hold.
    */
@@ -211,8 +237,18 @@ export interface KeptRunPage {
  * cheap enough to run to completion, and the expensive per-row `get` is spent
  * only on the tail {@link listKeptRuns} keeps.
  *
- * `more` is true only when the walk hit {@link KEPT_LIST_MAX_PAGES} with the host
- * still offering a cursor, i.e. the enumeration itself was cut short.
+ * `more` is true only when keys exist that this walk did NOT enumerate.
+ *
+ * 🔴 A CURSOR IS NOT EVIDENCE OF A NEXT ROW, AND READING IT AS ONE PUT A FALSE
+ * SENTENCE ON SCREEN. The host emits `nextCursor` **iff the page FILLED** —
+ * `rows.length === input.limit` in civitai `apps.router` `storage.list` — so a
+ * store holding exactly `KEPT_LIST_MAX_PAGES * KEPT_PAGE_LIMIT` keys fills the
+ * last enumerable page and hands back a cursor for a store with nothing behind
+ * it. `more = "the last page offered a cursor"` therefore reported a COMPLETE
+ * enumeration as cut short, and the gallery rendered
+ * `INCOMPLETE_NOTICE`'s *"You've kept more than this app can list"* over a grid
+ * that held the viewer's newest keep. The {@link KEPT_LIST_PROBE_LIMIT} probe
+ * below settles it by asking, rather than by inferring from the cursor.
  */
 async function listKeptKeys(store: DraftStore): Promise<{ keys: string[]; more: boolean }> {
   const keys: string[] = [];
@@ -221,12 +257,16 @@ async function listKeptKeys(store: DraftStore): Promise<{ keys: string[]; more: 
     const res = await store.list({ prefix: KEPT_PREFIX, limit: KEPT_PAGE_LIMIT, cursor });
     for (const k of res.keys) keys.push(k.key);
     // 🔴 No cursor ⇒ the host has nothing further for this prefix. That is the
-    // ONLY clean exit: a short page also ends the walk, because the host emits a
-    // cursor if and only if the page filled.
+    // ONLY clean exit inside the loop: a short page also ends the walk, because
+    // the host emits a cursor if and only if the page filled.
     if (res.nextCursor == null) return { keys, more: false };
     cursor = res.nextCursor;
   }
-  return { keys, more: true };
+  // The bound was reached with a cursor in hand — the ONE state where the cursor
+  // is ambiguous. One cheap row settles it: a key here is a key the walk did not
+  // enumerate, and no key means the store ended exactly on the boundary.
+  const probe = await store.list({ prefix: KEPT_PREFIX, limit: KEPT_LIST_PROBE_LIMIT, cursor });
+  return { keys, more: probe.keys.length > 0 };
 }
 
 /**

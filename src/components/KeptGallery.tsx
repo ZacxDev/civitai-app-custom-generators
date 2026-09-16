@@ -88,22 +88,47 @@ export const INCOMPLETE_NOTICE =
  *
  * 🔴 THE GATE HAS FOUR `hidden` CAUSES, NOT TWO, AND THIS BLOCK USED TO SAY
  * "both". Read off `classifyGatedImageForViewer` in order, an image is `hidden`
- * when: (1) `ingestion !== Scanned` — Pending, Error, Blocked or NotFound;
- * (2) `nsfwLevel === 0`, i.e. rated by nothing yet; (3) ANY moderation flag is
- * set — `needsReview`, `poi`, `minor`, `tosViolation`, `acceptableMinor` or
- * `blockedFor`; or (4) the image's level does not intersect this viewer's
- * browsing ceiling. The gate returns a bare `hidden` for all four, so the
- * component cannot know which applies and must not pick.
+ * when: (1) `ingestion !== Scanned`; (2) `nsfwLevel === 0`, i.e. rated by
+ * nothing yet; (3) ANY moderation flag is set — `needsReview`, `poi`, `minor`,
+ * `tosViolation`, `acceptableMinor` or `blockedFor`; or (4) the image's level
+ * does not intersect this viewer's browsing ceiling. The gate returns a bare
+ * `hidden` for all four, so the component cannot know which applies and must
+ * not pick.
  *
- * ⚠️ The SENTENCE below therefore does not enumerate them, and that is the
+ * 🔴 CAUSE (1) IS SIX STATES, NOT FOUR, AND THIS BLOCK NAMED FOUR. Its test is
+ * `!== Scanned` against an enum of SEVEN values, so it covers `Pending`,
+ * `Error`, `Blocked`, `NotFound`, `PendingManualAssignment` and `Rescan`
+ * (`ImageIngestionStatus`, civitai `packages/civitai-db-schema/src/enums.ts` and
+ * `prisma/schema.full.prisma`, re-derived at `b441199dc6`). The four-name list
+ * came from the gate's own inline comment, which reads *"Pending / Error /
+ * Blocked / NotFound all hide"* — narrower than the line beneath it, and NOT the
+ * enum. Read the enum, not that comment.
+ *
+ * 🔴 `Rescan` IS THE ONE THAT CHANGES WHAT THIS COMPONENT CAN PROMISE, because
+ * it is entered FROM `Scanned`: a rescan follows a completed scan and the image
+ * keeps its earlier verdict (civitai's own words in
+ * `src/components/Image/Remix/__tests__/remix.utils.test.ts`, which also notes a
+ * re-ingestion sweep can put a large slice of the catalogue there at once). The
+ * gate has no carve-out for it. So a kept cell that has been rendering fine for
+ * weeks can go `hidden` long after the keep, with nothing on this side having
+ * changed — and it is `Pending`, not cause (1) as a whole, that is "where a
+ * just-kept image lands and resolves itself". {@link GALLERY_RECHECK_MS} is
+ * sized for that Pending case and reaches no other: it fires once, on the mount
+ * that saw the `hidden`, so a cell that flips to `Rescan` between mounts simply
+ * renders the notice until the next scan completes. That is the honest shape of
+ * the design, and the fact a maintainer needs when judging whether one re-read
+ * is the right amount.
+ *
+ * ⚠️ The SENTENCE below does not enumerate any of this, and that is the
  * deliberate choice rather than an oversight: it names the two causes that
- * describe the ordinary path — (1), which is where a just-kept image lands and
- * the only one that resolves itself, and (4) — in wording soft enough not to
- * accuse the viewer of anything in the other two. A flagged image (3) renders a
- * sentence that is not literally true of it; the alternative, naming moderation
- * to every viewer whose own image tripped a flag, is worse, and a copy that
- * enumerated all four would be reciting the gate at someone waiting for a
- * picture. What is fixed here is the docblock's arithmetic, not the copy.
+ * describe the ordinary path — the `Pending` half of (1), and (4) — in wording
+ * soft enough not to accuse the viewer of anything in the rest. A flagged image
+ * (3) renders a sentence that is not literally true of it; the alternative,
+ * naming moderation to every viewer whose own image tripped a flag, is worse,
+ * and a copy that recited the gate would be reciting it at someone waiting for a
+ * picture. "Still being checked" is true of `Rescan` too, which is the reason
+ * the copy survives this correction unchanged. What is fixed here is the
+ * docblock's arithmetic, not the copy.
  */
 export const HIDDEN_CELL_NOTICE = 'Still being checked, or above your browsing level';
 
