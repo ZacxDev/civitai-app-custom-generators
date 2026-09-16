@@ -31,6 +31,7 @@ import {
   useGenerationResources,
   useImageUpload,
   useRequestConsent,
+  usePublishGenerationOutputs,
   useRequestSignIn,
   useResourcePicker,
   useSharedStorage,
@@ -59,6 +60,8 @@ import { buildShareUrl, parseDeeplinkKey, stripDeeplinkParam } from './lib/deepl
 import { setGeneratorMeta } from './lib/meta.js';
 import type { DraftStore, StoredDraft } from './lib/drafts.js';
 import { deleteDraft as deleteDraftFn, listDrafts, saveDraft as saveDraftFn } from './lib/drafts.js';
+import type { KeptRun } from './lib/runs.js';
+import { listKeptRuns, runsForGenerator, saveKeptRun } from './lib/runs.js';
 import { Browse } from './components/Browse.js';
 import { Builder } from './components/Builder.js';
 import { Runner } from './components/Runner.js';
@@ -112,6 +115,20 @@ export interface AppDeps {
   estimate: (body: WorkflowBody) => Promise<BlockWorkflowSnapshot>;
   submit: (body: WorkflowBody) => Promise<BlockWorkflowSnapshot>;
   poll: (workflowId: string) => Promise<BlockWorkflowSnapshot>;
+  /**
+   * KEEP a run's outputs — turn one of THIS app's own workflows' images into
+   * durable, server-scanned civitai `Image` rows and resolve with their ids
+   * (`usePublishGenerationOutputs().publish`). The app's terminal; see
+   * `lib/runs.ts` for why ids rather than urls are what gets stored.
+   *
+   * 🔴 Needs NO new manifest scope. The host gates this on `ai:write:budgeted`
+   * (verified in the deployed router: the same trust boundary as submit/query —
+   * "an app authorized to spend the viewer's Buzz on generation can publish the
+   * outputs it produced"), which this app already declares and already has
+   * granted in `approved_scopes`. That is what lets the whole terminal ship in a
+   * submission a moderator can approve without granting anything new.
+   */
+  keepOutputs: (args: { workflowId: string; imageIndexes?: number[]; title?: string }) => Promise<number[]>;
   shared: UseSharedStorage;
   /**
    * In-place UPDATE of an already-published shared generator (same key, no new
@@ -140,7 +157,60 @@ export interface AppDeps {
   /** Test seams for the poll loop. */
   pollIntervalMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * How many Discover rows the board RENDERS; defaults to
+   * {@link DISCOVER_LIST_LIMIT} (test seam).
+   *
+   * It exists because the truthfulness of {@link DISCOVER_LIST_LIMIT}'s
+   * disclosure is a property of the boundary, and at the production value the
+   * only constructible truncated board holds exactly 50 loaded rows — which
+   * `PAGE_SIZE` (12) never divides, so a test cannot land `allLoadedShown` on
+   * its own `<=` boundary while the board is truncated. Lowering the limit is
+   * what keeps those fixtures on their boundaries; it changes no production
+   * behaviour, because production never sets it.
+   */
+  discoverPageLimit?: number;
 }
+
+/**
+ * Discover rows the board reads and renders in one shot.
+ *
+ * 🔴 THE READ ASKS FOR ONE MORE THAN THIS, AND THE EXTRA ROW IS THE WHOLE POINT.
+ * `discoverTruncated` drives four viewer-facing sentences that each assert the
+ * catalog has rows this app did not load, so it has to be a FACT rather than an
+ * inference — and the obvious inference is wrong. civitai's `apps.shared.router`
+ * `list` emits `nextCursor` **iff the page filled** (`rows.length ===
+ * input.limit`, re-derived at `5549de73`), so a board holding exactly this
+ * many non-hidden `shared_kv` rows hands back a cursor for a board with nothing
+ * behind it: `Boolean(nextCursor)` then told a viewer *"this app loads only part
+ * of the catalog at once"* over a catalog it had loaded whole. That is verbatim
+ * the class `lib/runs.ts`'s own docblock declares a rule against — A CURSOR IS
+ * NOT EVIDENCE OF A NEXT ROW — and it was live on this path.
+ *
+ * So the read asks for `DISCOVER_LIST_LIMIT + 1`, renders the first
+ * `DISCOVER_LIST_LIMIT`, and reads truncation off the ROW COUNT it got back.
+ * 49 rows → 49 rendered, silent. 50 → 50 rendered, silent, and the board really
+ * is whole. 51 → 50 rendered, disclosed, and there really is a row it did not
+ * show.
+ *
+ * ⚠️ WHY NOT THE {@link listKeptRuns} PROBE, WHICH IS THE SAME FIX ONE FILE
+ * OVER. That path enumerates KEYS across up to 8 pages, so there is no single
+ * read to widen and it settles the ambiguity with one extra 1-row `list` —
+ * costing a round trip only for a viewer holding more than 1,600 keys. This path
+ * is ONE read, and its page fills on any board with 50+ published generators,
+ * i.e. the ordinary state of a healthy board on every Browse open and every
+ * retry. A probe here would be a per-open round trip where over-fetching is a
+ * per-open extra ROW. The over-fetch is also ATOMIC — one statement, one
+ * snapshot — where a probe answers about a later instant. Same standard (make
+ * the claim true, do not hedge it), cheaper instrument.
+ *
+ * Bounded by the platform: `apps.shared.list` validates `limit` as
+ * `.int().min(1).max(100)` and both block hosts clamp to the same `[1, 100]`
+ * before it (`PageBlockHost.tsx`, `IframeHost.tsx`), so 51 passes through
+ * unchanged and there is headroom to raise this to 99 before the +1 is clamped
+ * away — the one change that would silently restore the defect.
+ */
+export const DISCOVER_LIST_LIMIT = 50;
 
 export interface AppProps {
   /** Override any hook-backed dependency (component + e2e test seam). */
@@ -176,6 +246,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   const workflow = useBuzzWorkflow();
   const sharedHook = useSharedStorage();
   const appStorage = useAppStorage();
+  const publishOutputs = usePublishGenerationOutputs();
   const buzz = useBuzzBalance();
   const { requestConsent } = useRequestConsent();
   const { requestSignIn } = useRequestSignIn();
@@ -210,6 +281,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       estimate: workflow.estimate,
       submit: workflow.submit,
       poll: workflow.poll,
+      keepOutputs: publishOutputs.publish,
       shared: sharedHook,
       // In-place UPDATE of the viewer's own published generator (same key, no new
       // row) — the fix for "editing creates a new one". `update` takes the same
@@ -256,6 +328,40 @@ export function App({ deps: depsOverride }: AppProps = {}) {
    */
   const [discoverTruncated, setDiscoverTruncated] = useState(false);
   const [myDrafts, setMyDrafts] = useState<StoredDraft[]>([]);
+  /**
+   * The viewer's KEPT runs — the app's durable end-state (see `lib/runs.ts`).
+   *
+   * 🔴 Loaded independently of `view`, unlike the board. The Runner needs them to
+   * show "Kept from this generator", and the Runner is not the browse view — a
+   * load gated on `view === 'browse'` would leave the gallery empty exactly where
+   * the terminal is supposed to pay off, and the emptiness would look like the
+   * keep having silently failed.
+   */
+  const [keptRuns, setKeptRuns] = useState<KeptRun[]>([]);
+  /**
+   * Kept runs exist that `keptRuns` does not contain (see `lib/runs.ts`). When
+   * the key walk reaches the end of the store it hydrates the newest
+   * `KEPT_LIST_LIMIT` of them, so what is missing is their OLDEST runs — and
+   * that "when" is the whole of `keptIncomplete` below, because the sentence is
+   * false without it.
+   */
+  const [keptTruncated, setKeptTruncated] = useState(false);
+  /**
+   * The key walk did NOT reach the end of the store (`KeptRunPage.incomplete`),
+   * so the sentence above inverts: what is missing is the viewer's most RECENT
+   * runs, not their oldest. Carried separately so the gallery can say which.
+   */
+  const [keptIncomplete, setKeptIncomplete] = useState(false);
+  /**
+   * 🔴 The kept-runs read FAILED — a DIFFERENT fact from "no kept runs", and
+   * keeping them apart is the whole point of this state. This catch used to be
+   * empty on the reasoning that "the gallery renders its own empty state": it
+   * does, and that empty state says *"Nothing kept yet"*, so a viewer whose read
+   * failed was told their history was gone. `KeptGallery`'s own `readError`
+   * covers a failed `getImages`, not a failed LIST, so nothing downstream could
+   * have caught it either.
+   */
+  const [keptError, setKeptError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -278,15 +384,20 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       setLoading(true);
       setError(null);
       try {
+        // 🔴 ONE MORE THAN WE RENDER — see DISCOVER_LIST_LIMIT. The extra row is
+        // the evidence; `nextCursor` is deliberately not read here at all,
+        // because it answers "did the page fill", not "is there another row".
+        const pageLimit = depsRef.current.discoverPageLimit ?? DISCOVER_LIST_LIMIT;
         const [sharedRes, drafts] = await Promise.all([
-          depsRef.current.shared.list({ limit: 50 }),
+          depsRef.current.shared.list({ limit: pageLimit + 1 }),
           viewer ? listDrafts(depsRef.current.drafts) : Promise.resolve<StoredDraft[]>([]),
         ]);
         if (cancelled) return;
-        setShared(sharedRes.items);
-        // `list` is newest-first and takes no rank parameter, so a cursor here
-        // means the rows NOT read may outrank or match anything that was.
-        setDiscoverTruncated(Boolean(sharedRes.nextCursor));
+        setShared(sharedRes.items.slice(0, pageLimit));
+        // `list` is newest-first and takes no rank parameter, so a row we did NOT
+        // render may outrank or match anything that was. A row came back past the
+        // horizon ⇒ that is a definite statement, not a hedge off a cursor.
+        setDiscoverTruncated(sharedRes.items.length > pageLimit);
         setMyDrafts(drafts);
       } catch (e) {
         if (!cancelled) setError(errMsg(e));
@@ -303,6 +414,59 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     () => (viewer ? shared.filter((s) => s.authorUserId === viewer.id) : []),
     [shared, viewer],
   );
+
+  // Load the viewer's kept runs once the host is ready. Anonymous viewers have
+  // none by construction (per-user storage rejects an unauthenticated subject),
+  // so the read is skipped rather than made and discarded.
+  useEffect(() => {
+    if (!ready || !viewer) {
+      setKeptRuns([]);
+      setKeptTruncated(false);
+      setKeptIncomplete(false);
+      setKeptError(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const page = await listKeptRuns(depsRef.current.drafts);
+        if (!cancelled) {
+          setKeptRuns(page.runs);
+          setKeptTruncated(page.truncated);
+          setKeptIncomplete(page.incomplete);
+          setKeptError(null);
+        }
+      } catch {
+        // 🔴 Non-fatal but NOT silent. It must not take down Browse or the
+        // Runner — hence no `setError` — but the gallery cannot infer this from
+        // an empty list, so it is stated. The host's message is deliberately not
+        // rendered: it is untrusted text, and the viewer-facing fact is the same
+        // either way.
+        if (!cancelled) {
+          setKeptRuns([]);
+          setKeptTruncated(false);
+          setKeptIncomplete(false);
+          setKeptError('Couldn’t load your kept images just now.');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [ready, viewer, reloadKey]);
+
+  /**
+   * Record a kept run, then reflect it immediately.
+   *
+   * 🔴 The store write is awaited and the in-memory list is updated from the SAME
+   * record — not re-listed. A re-list here would race the KV's own read-after-write
+   * visibility and could return without the row, which the Runner would render as
+   * "your keep did not stick" one beat after telling the viewer it had.
+   */
+  const handleKeepRun = useCallback(async (run: KeptRun) => {
+    await saveKeptRun(depsRef.current.drafts, run);
+    setKeptRuns((prev) => [run, ...prev.filter((r) => r.id !== run.id)]);
+  }, []);
 
   // Resolve the MODERATED cover url for every card whose stored data carries a
   // header `imageId` not yet resolved. Batches the ids through the host
@@ -336,6 +500,23 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       cancelled = true;
     };
   }, [shared, coverUrls]);
+
+  /**
+   * This generator's kept runs, for the Runner's "Kept from this generator".
+   *
+   * 🔴 MEMOISED BECAUSE ITS IDENTITY IS LOAD-BEARING, NOT FOR SPEED. This was
+   * called inline in the Runner's JSX, so every App render minted a new array —
+   * a new `runs` prop, a new `feed`, a new `wantedIds`, and therefore a re-run of
+   * `KeptGallery`'s read effect whose cleanup cancelled whatever gated read was
+   * in flight. Paired with that component's own bug (ids marked requested before
+   * the await, the result dropped on cancel) it stranded cells at "Loading…"
+   * permanently. Both halves are fixed; this is the half that stops the cancel
+   * happening at all.
+   */
+  const runnerKeptRuns = useMemo(
+    () => runsForGenerator(keptRuns, running?.sharedContentKey),
+    [keptRuns, running?.sharedContentKey],
+  );
 
   // Card cover lookup passed to Browse: the resolved moderated url, or null.
   const coverUrlFor = useCallback(
@@ -424,6 +605,27 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       void openConfig(draft.config, draft.publishedKey, 'draft');
     },
     [openConfig],
+  );
+
+  /**
+   * Open the generator a KEPT image was made with, by its shared key.
+   *
+   * 🔴 Resolves against the loaded page only, and returns `false` when it cannot.
+   * The board read is ONE page (`limit: 50`, no server-side get-by-key for a
+   * generator row here), so a kept image whose generator sits past that page —
+   * or was withdrawn since — genuinely cannot be opened. The caller surfaces
+   * that; silently doing nothing would read as a dead button.
+   */
+  const openPublishedByKey = useCallback(
+    (key: string): boolean => {
+      const item = shared.find((s) => s.key === key);
+      if (!item) return false;
+      const config = parsePublishedGenerator(item.value);
+      if (!config) return false;
+      void openConfig(config, item.key);
+      return true;
+    },
+    [shared, openConfig],
   );
 
   const backToBrowse = useCallback(() => {
@@ -672,6 +874,12 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             onShare={handleShare}
             onReport={handleReport}
             coverUrlFor={coverUrlFor}
+            keptRuns={keptRuns}
+            keptTruncated={keptTruncated}
+            keptIncomplete={keptIncomplete}
+            keptError={keptError}
+            getImages={deps.getImages}
+            onOpenGeneratorKey={openPublishedByKey}
             onRetry={reload}
           />
         )}
@@ -718,6 +926,15 @@ export function App({ deps: depsOverride }: AppProps = {}) {
                 return false;
               }
             }}
+            keepOutputs={deps.keepOutputs}
+            onKeepRun={handleKeepRun}
+            // Scoped to THIS generator: "kept from this generator" is a claim
+            // about provenance, so an unpublished draft (no shared key) correctly
+            // shows none rather than borrowing another generator's images. The
+            // global `keptTruncated` is deliberately NOT passed — see the prop's
+            // docblock in `components/Runner.tsx`.
+            keptRuns={runnerKeptRuns}
+            getImages={deps.getImages}
             analytics={deps.analytics}
             rehydrateNotice={rehydrateNotice}
             pollIntervalMs={deps.pollIntervalMs}
