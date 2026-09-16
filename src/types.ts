@@ -138,6 +138,23 @@ export type QueueStatus =
   | 'failed'
   | 'canceled';
 
+/**
+ * Where a succeeded run is in the KEEP flow — the app's terminal (see
+ * `lib/runs.ts`). Independent of {@link QueueStatus}: a run is `succeeded` the
+ * moment its images exist, and only then can it be kept.
+ *
+ * 🔴 `failed` here covers a DECLINED consent as well as a real error, and that
+ * conflation is the platform's, not this app's: the `PUBLISH_GENERATION_OUTPUTS`
+ * bridge replies with either image ids or a free-text `error`, with **no decline
+ * variant** — unlike the sibling create-post bridge, which carries an explicit
+ * `declined`. So a viewer who simply dismissed the host's consent confirm is
+ * indistinguishable, at this seam, from one who hit a rate limit. That is why the
+ * failed-keep copy is neutral and offers a retry rather than announcing an error:
+ * telling someone their deliberate "no" was a failure is the one reading that is
+ * certainly wrong.
+ */
+export type KeepStatus = 'idle' | 'keeping' | 'kept' | 'failed';
+
 export interface QueueItem {
   id: string;
   buttonLabel: string;
@@ -147,4 +164,8 @@ export interface QueueItem {
   workflowId?: string;
   imageUrls?: string[];
   error?: string;
+  /** Keep-flow state for a succeeded run. Absent ⇒ never attempted (`idle`). */
+  keepStatus?: KeepStatus;
+  /** Durable civitai `Image` ids, once kept. */
+  keptImageIds?: number[];
 }

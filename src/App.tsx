@@ -31,6 +31,7 @@ import {
   useGenerationResources,
   useImageUpload,
   useRequestConsent,
+  usePublishGenerationOutputs,
   useRequestSignIn,
   useResourcePicker,
   useSharedStorage,
@@ -59,6 +60,8 @@ import { buildShareUrl, parseDeeplinkKey, stripDeeplinkParam } from './lib/deepl
 import { setGeneratorMeta } from './lib/meta.js';
 import type { DraftStore, StoredDraft } from './lib/drafts.js';
 import { deleteDraft as deleteDraftFn, listDrafts, saveDraft as saveDraftFn } from './lib/drafts.js';
+import type { KeptRun } from './lib/runs.js';
+import { listKeptRuns, runsForGenerator, saveKeptRun } from './lib/runs.js';
 import { Browse } from './components/Browse.js';
 import { Builder } from './components/Builder.js';
 import { Runner } from './components/Runner.js';
@@ -112,6 +115,20 @@ export interface AppDeps {
   estimate: (body: WorkflowBody) => Promise<BlockWorkflowSnapshot>;
   submit: (body: WorkflowBody) => Promise<BlockWorkflowSnapshot>;
   poll: (workflowId: string) => Promise<BlockWorkflowSnapshot>;
+  /**
+   * KEEP a run's outputs — turn one of THIS app's own workflows' images into
+   * durable, server-scanned civitai `Image` rows and resolve with their ids
+   * (`usePublishGenerationOutputs().publish`). The app's terminal; see
+   * `lib/runs.ts` for why ids rather than urls are what gets stored.
+   *
+   * 🔴 Needs NO new manifest scope. The host gates this on `ai:write:budgeted`
+   * (verified in the deployed router: the same trust boundary as submit/query —
+   * "an app authorized to spend the viewer's Buzz on generation can publish the
+   * outputs it produced"), which this app already declares and already has
+   * granted in `approved_scopes`. That is what lets the whole terminal ship in a
+   * submission a moderator can approve without granting anything new.
+   */
+  keepOutputs: (args: { workflowId: string; imageIndexes?: number[]; title?: string }) => Promise<number[]>;
   shared: UseSharedStorage;
   /**
    * In-place UPDATE of an already-published shared generator (same key, no new
@@ -176,6 +193,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   const workflow = useBuzzWorkflow();
   const sharedHook = useSharedStorage();
   const appStorage = useAppStorage();
+  const publishOutputs = usePublishGenerationOutputs();
   const buzz = useBuzzBalance();
   const { requestConsent } = useRequestConsent();
   const { requestSignIn } = useRequestSignIn();
@@ -210,6 +228,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       estimate: workflow.estimate,
       submit: workflow.submit,
       poll: workflow.poll,
+      keepOutputs: publishOutputs.publish,
       shared: sharedHook,
       // In-place UPDATE of the viewer's own published generator (same key, no new
       // row) — the fix for "editing creates a new one". `update` takes the same
@@ -256,6 +275,16 @@ export function App({ deps: depsOverride }: AppProps = {}) {
    */
   const [discoverTruncated, setDiscoverTruncated] = useState(false);
   const [myDrafts, setMyDrafts] = useState<StoredDraft[]>([]);
+  /**
+   * The viewer's KEPT runs — the app's durable end-state (see `lib/runs.ts`).
+   *
+   * 🔴 Loaded independently of `view`, unlike the board. The Runner needs them to
+   * show "Kept from this generator", and the Runner is not the browse view — a
+   * load gated on `view === 'browse'` would leave the gallery empty exactly where
+   * the terminal is supposed to pay off, and the emptiness would look like the
+   * keep having silently failed.
+   */
+  const [keptRuns, setKeptRuns] = useState<KeptRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -303,6 +332,42 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     () => (viewer ? shared.filter((s) => s.authorUserId === viewer.id) : []),
     [shared, viewer],
   );
+
+  // Load the viewer's kept runs once the host is ready. Anonymous viewers have
+  // none by construction (per-user storage rejects an unauthenticated subject),
+  // so the read is skipped rather than made and discarded.
+  useEffect(() => {
+    if (!ready || !viewer) {
+      setKeptRuns([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const runs = await listKeptRuns(depsRef.current.drafts);
+        if (!cancelled) setKeptRuns(runs);
+      } catch {
+        // Non-fatal and deliberately quiet: a failed gallery read must not take
+        // down Browse or the Runner. The gallery renders its own empty state.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [ready, viewer, reloadKey]);
+
+  /**
+   * Record a kept run, then reflect it immediately.
+   *
+   * 🔴 The store write is awaited and the in-memory list is updated from the SAME
+   * record — not re-listed. A re-list here would race the KV's own read-after-write
+   * visibility and could return without the row, which the Runner would render as
+   * "your keep did not stick" one beat after telling the viewer it had.
+   */
+  const handleKeepRun = useCallback(async (run: KeptRun) => {
+    await saveKeptRun(depsRef.current.drafts, run);
+    setKeptRuns((prev) => [run, ...prev.filter((r) => r.id !== run.id)]);
+  }, []);
 
   // Resolve the MODERATED cover url for every card whose stored data carries a
   // header `imageId` not yet resolved. Batches the ids through the host
@@ -424,6 +489,27 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       void openConfig(draft.config, draft.publishedKey, 'draft');
     },
     [openConfig],
+  );
+
+  /**
+   * Open the generator a KEPT image was made with, by its shared key.
+   *
+   * 🔴 Resolves against the loaded page only, and returns `false` when it cannot.
+   * The board read is ONE page (`limit: 50`, no server-side get-by-key for a
+   * generator row here), so a kept image whose generator sits past that page —
+   * or was withdrawn since — genuinely cannot be opened. The caller surfaces
+   * that; silently doing nothing would read as a dead button.
+   */
+  const openPublishedByKey = useCallback(
+    (key: string): boolean => {
+      const item = shared.find((s) => s.key === key);
+      if (!item) return false;
+      const config = parsePublishedGenerator(item.value);
+      if (!config) return false;
+      void openConfig(config, item.key);
+      return true;
+    },
+    [shared, openConfig],
   );
 
   const backToBrowse = useCallback(() => {
@@ -672,6 +758,9 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             onShare={handleShare}
             onReport={handleReport}
             coverUrlFor={coverUrlFor}
+            keptRuns={keptRuns}
+            getImages={deps.getImages}
+            onOpenGeneratorKey={openPublishedByKey}
             onRetry={reload}
           />
         )}
@@ -718,6 +807,13 @@ export function App({ deps: depsOverride }: AppProps = {}) {
                 return false;
               }
             }}
+            keepOutputs={deps.keepOutputs}
+            onKeepRun={handleKeepRun}
+            // Scoped to THIS generator: "kept from this generator" is a claim
+            // about provenance, so an unpublished draft (no shared key) correctly
+            // shows none rather than borrowing another generator's images.
+            keptRuns={runsForGenerator(keptRuns, running.sharedContentKey)}
+            getImages={deps.getImages}
             analytics={deps.analytics}
             rehydrateNotice={rehydrateNotice}
             pollIntervalMs={deps.pollIntervalMs}

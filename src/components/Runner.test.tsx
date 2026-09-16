@@ -389,7 +389,11 @@ describe('Runner — required exposed inputs gate the run control', () => {
     const { wf } = renderRunner(txtConfig());
     const btn = screen.getByTestId('gen-button');
     expect(btn).toBeDisabled();
-    expect(screen.getByTestId('runner-required-hint')).toHaveTextContent(/enter a prompt/i);
+    // The requirement is now stated ON the preset card, as a property of that
+    // button, and the gate itself is asserted via `data-runnable` rather than via
+    // the presence of hint copy (see `lib/preset.ts`).
+    expect(screen.getByTestId('preset-needs')).toHaveTextContent(/needs a prompt/i);
+    expect(btn).toHaveAttribute('data-runnable', 'false');
 
     // whitespace-only is still empty
     await userEvent.type(screen.getByTestId('runner-prompt'), '   ');
@@ -398,7 +402,7 @@ describe('Runner — required exposed inputs gate the run control', () => {
     await userEvent.clear(screen.getByTestId('runner-prompt'));
     await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
     expect(btn).toBeEnabled();
-    expect(screen.queryByTestId('runner-required-hint')).not.toBeInTheDocument();
+    expect(btn).toHaveAttribute('data-runnable', 'true');
 
     await userEvent.click(btn);
     await waitFor(() => expect(wf.calls.estimate).toHaveLength(1));
@@ -410,7 +414,7 @@ describe('Runner — required exposed inputs gate the run control', () => {
     expect(screen.queryByTestId('runner-prompt')).not.toBeInTheDocument();
     const btn = screen.getByTestId('gen-button');
     expect(btn).toBeDisabled();
-    expect(screen.getByTestId('runner-required-hint')).toHaveTextContent(/source image/i);
+    expect(screen.getByTestId('preset-needs')).toHaveTextContent(/needs your image/i);
 
     await userEvent.click(screen.getByTestId('upload-source'));
     await screen.findByTestId('source-thumb');
@@ -427,7 +431,7 @@ describe('Runner — required exposed inputs gate the run control', () => {
     // prompt only → still blocked on the image
     await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
     expect(btn).toBeDisabled();
-    expect(screen.getByTestId('runner-required-hint')).toHaveTextContent(/source image/i);
+    expect(screen.getByTestId('preset-needs')).toHaveTextContent(/needs a prompt and your image/i);
 
     // add the image → now runnable
     await userEvent.click(screen.getByTestId('upload-source'));
@@ -435,12 +439,77 @@ describe('Runner — required exposed inputs gate the run control', () => {
     await waitFor(() => expect(btn).toBeEnabled());
   });
 
-  it('(d) button exposing NEITHER is unaffected: runnable immediately, no hint', async () => {
+  it('(d) button exposing NEITHER is unaffected: runnable immediately, no requirement stated', async () => {
     const { wf } = renderRunner(fixedConfig());
     const btn = screen.getByTestId('gen-button');
     expect(btn).toBeEnabled();
-    expect(screen.queryByTestId('runner-required-hint')).not.toBeInTheDocument();
+    // A self-contained one-tap preset states no requirement at all, rather than
+    // an empty one.
+    expect(screen.queryByTestId('preset-needs')).not.toBeInTheDocument();
     await userEvent.click(btn);
+    await waitFor(() => expect(wf.calls.estimate).toHaveLength(1));
+  });
+
+  /**
+   * 🔴 REGRESSION — the union hint demanded inputs a button never uses.
+   *
+   * Before this pass the Runner computed ONE "what's still needed" line by
+   * merging `missingRequiredInputs` across EVERY button, so a generator holding a
+   * txt2img button and an img2img button told a viewer looking at the txt2img one
+   * to "Enter a prompt and add a source image to run". The image was not required
+   * for that button, uploading one would not have unblocked it, and the sentence
+   * was the only requirement statement on screen.
+   *
+   * This is the app's OWN demo generator's shape (`demo-data.ts`: "Cyberpunk"
+   * txt2img + "Remix a photo" img2img), i.e. the default case rather than an edge.
+   *
+   * Watched RED at 6afa211: the pre-change tree renders `runner-required-hint`
+   * reading "Enter a prompt and add a source image to run" for BOTH buttons and
+   * has no per-button statement at all.
+   */
+  it('(e) a MIXED generator never tells a txt2img button it needs an image', async () => {
+    const mixed = newGenerator({
+      name: 'Mixed',
+      buttons: [
+        newButton({
+          id: 'm1',
+          label: 'Text only',
+          workflowType: 'txt2img',
+          checkpoint: { versionId: 1001, modelId: 500, modelName: 'DreamShaper', baseModel: 'SD 1.5' },
+          promptTemplate: 'a portrait of {prompt}',
+        }),
+        newButton({
+          id: 'm2',
+          label: 'Remix',
+          workflowType: 'img2img',
+          checkpoint: { versionId: 1001, modelId: 500, modelName: 'DreamShaper', baseModel: 'SD 1.5' },
+          promptTemplate: 'restyle',
+        }),
+      ],
+    });
+    const { wf } = renderRunner(mixed);
+
+    const cards = screen.getAllByTestId('gen-button');
+    const txt = cards.find((el) => el.getAttribute('data-button-id') === 'm1')!;
+    const img = cards.find((el) => el.getAttribute('data-button-id') === 'm2')!;
+
+    // Each card states ITS OWN requirement, and they differ.
+    const needs = screen.getAllByTestId('preset-needs').map((n) => n.textContent ?? '');
+    expect(needs.some((t) => /needs a prompt$/i.test(t.replace(/^[^A-Za-z]*/, '').trim()))).toBe(true);
+    expect(needs.some((t) => /needs your image/i.test(t))).toBe(true);
+
+    // 🔴 The load-bearing assertion: with ONLY a prompt supplied, the txt2img
+    // button RUNS. Under the union hint the viewer was told an image was still
+    // required; here the gate proves it never was.
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
+    expect(txt).toHaveAttribute('data-runnable', 'true');
+    expect(txt).toBeEnabled();
+    // …and the img2img one is still correctly blocked, so this is not "the gate
+    // got looser", it is "the gate was always per-button and the COPY lied".
+    expect(img).toHaveAttribute('data-runnable', 'false');
+    expect(img).toBeDisabled();
+
+    await userEvent.click(txt);
     await waitFor(() => expect(wf.calls.estimate).toHaveLength(1));
   });
 });
@@ -571,15 +640,22 @@ describe('Runner — result actions (feature #10)', () => {
     await userEvent.click(await screen.findByTestId('queue-confirm'));
     await screen.findByTestId('queue-results');
 
-    const actions = screen.getByTestId('result-actions');
-    const copy = within(actions).getAllByTestId('result-copy-link');
-    await userEvent.click(copy[0]);
+    // 🔴 The copy control MOVED into the full view. It used to render once PER
+    // IMAGE in the result rail ("⧉ Copy link 1 / 2 / 3"), a row that grew with
+    // quantity and pushed Re-run off the end; in the lightbox exactly one image
+    // is in hand, so there is exactly one control. The behaviour asserted below
+    // is unchanged — only the path to it is.
+    await userEvent.click(screen.getAllByTestId('result-image-open')[0]);
+    const copy = await screen.findByTestId('lightbox-copy-link');
+    await userEvent.click(copy);
     // copied the image url via the host-clipboard seam, and confirmed inline
     await waitFor(() => expect(onCopyImageLink).toHaveBeenCalledWith('res.jpg'));
-    await waitFor(() => expect(copy[0]).toHaveTextContent(/link copied/i));
+    await waitFor(() => expect(screen.getByTestId('lightbox-copy-link')).toHaveTextContent(/link copied/i));
     // never a silent failure, never a raw error
     expect(screen.queryByTestId('runner-error')).not.toBeInTheDocument();
+    await userEvent.keyboard('{Escape}');
 
+    const actions = screen.getByTestId('result-actions');
     // open-in-generator delegates to the host navigation
     await userEvent.click(within(actions).getByTestId('result-open-generator'));
     expect(onOpenInGenerator).toHaveBeenCalled();
@@ -599,7 +675,8 @@ describe('Runner — result actions (feature #10)', () => {
     await userEvent.click(await screen.findByTestId('queue-confirm'));
     await screen.findByTestId('queue-results');
 
-    await userEvent.click(within(screen.getByTestId('result-actions')).getAllByTestId('result-copy-link')[0]);
+    await userEvent.click(screen.getAllByTestId('result-image-open')[0]);
+    await userEvent.click(await screen.findByTestId('lightbox-copy-link'));
     expect(await screen.findByTestId('runner-error')).toHaveTextContent(/couldn't copy the image link/i);
   });
 
@@ -609,7 +686,10 @@ describe('Runner — result actions (feature #10)', () => {
     await userEvent.click(screen.getByTestId('gen-button'));
     await userEvent.click(await screen.findByTestId('queue-confirm'));
     await screen.findByTestId('queue-results');
-    expect(screen.queryByTestId('result-copy-link')).not.toBeInTheDocument();
+    // …and it is still absent in the full view, which is where it now lives.
+    await userEvent.click(screen.getAllByTestId('result-image-open')[0]);
+    await screen.findByTestId('result-lightbox');
+    expect(screen.queryByTestId('lightbox-copy-link')).not.toBeInTheDocument();
   });
 });
 

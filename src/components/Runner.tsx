@@ -11,8 +11,9 @@
 // scans it at gen time) — distinct from the moderated cosmetic background, which
 // the Builder uploads via the DISPLAY purpose.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
+  BlockGatedImage,
   BlockGenerationSourceImageInfo,
   BlockSourceImage,
   BlockWorkflowSnapshot,
@@ -22,7 +23,9 @@ import type {
 import { Alert, Badge, Button, Card, Collapse, Group, Loader, Modal, NumberInput, Stack, TextInput } from '@civitai/blocks-react/ui';
 
 import type { GenButton, GeneratorConfig, GenButtonParams, QueueItem, QueueStatus } from '../types.js';
-import { DEFAULT_PROMPT_PLACEHOLDER, buildSubmitBody, canRunButton, exposesImage, exposesPrompt, missingRequiredInputs, type RequiredInput } from '../lib/generator.js';
+import { DEFAULT_PROMPT_PLACEHOLDER, buildSubmitBody, canRunButton, exposesImage, exposesPrompt, missingRequiredInputs, newId } from '../lib/generator.js';
+import { describeButton, missingForButtonMessage, presetNeedsLabel, presetRecipeLabel } from '../lib/preset.js';
+import type { KeptImageCell, KeptRun } from '../lib/runs.js';
 import { isTerminalSnapshot, mapSnapshotStatus, pollToTerminal, queueStatusLabel } from '../lib/workflow.js';
 import { isInsufficientBuzzError } from '../lib/buzz.js';
 import { ESTIMATE_NO_COST_MESSAGE, estimateFailureMessage, isPricedSnapshot } from '../lib/estimate.js';
@@ -30,8 +33,11 @@ import type { Analytics } from '../lib/analytics.js';
 import { ANALYTICS_EVENTS, noopAnalytics } from '../lib/analytics.js';
 import { Image } from '@civitai/components-react';
 
-import { token, radius, metaText, type Palette } from '../theme.js';
+import { CLASS_LIFT, motionClass, useMotion } from '../motion.js';
+import { token, radius, elevate, metaText, type Palette } from '../theme.js';
 import { EmptyState } from './EmptyState.js';
+import { KeptGallery } from './KeptGallery.js';
+import { ResultLightbox } from './ResultLightbox.js';
 import { SafeImage } from './SafeImage.js';
 
 interface RunnerItem extends QueueItem {
@@ -40,7 +46,16 @@ interface RunnerItem extends QueueItem {
   requested: number;
   /** Set when a terminal failure is classified as insufficient Buzz (top-up path). */
   insufficientBuzz?: boolean;
+  /** The prompt the viewer typed for this run — carried onto the kept record. */
+  promptUsed?: string;
+  /** Compact recipe line for this run's button (shown in the payoff view). */
+  recipe?: string | null;
 }
+
+/** Which image the lightbox is showing, and where it came from. */
+type LightboxTarget =
+  | { kind: 'queue'; itemId: string; index: number }
+  | { kind: 'kept'; cell: KeptImageCell; url: string | null };
 
 /** Suggested top-up amount (Buzz) when a gen can't be afforded — covers the gap + headroom. */
 function topUpSuggestion(cost: number | undefined, balance: number | null | undefined): number {
@@ -114,6 +129,27 @@ export interface RunnerProps {
    * button that silently does nothing).
    */
   onCopyImageLink?: (url: string) => Promise<boolean>;
+  /**
+   * KEEP a succeeded run's outputs — the app's terminal. Asks the host to turn
+   * the workflow's outputs into durable, server-scanned civitai `Image` rows and
+   * resolves with their ids (`usePublishGenerationOutputs().publish`).
+   *
+   * 🔴 Host-chrome shows its OWN consent confirm and this call waits on a human
+   * (a 10-minute ceiling, not the ~30s protocol default), so the UI must show a
+   * real pending state and must not block the rest of the queue while it runs.
+   *
+   * Omitted ⇒ the Keep affordance hides entirely. Never a button that cannot work.
+   */
+  keepOutputs?: (args: { workflowId: string; imageIndexes?: number[]; title?: string }) => Promise<number[]>;
+  /** Persist a kept run to the viewer's own storage (the App owns the store). */
+  onKeepRun?: (run: KeptRun) => Promise<void>;
+  /** Kept runs already recorded FOR THIS GENERATOR, newest-kept first. */
+  keptRuns?: KeptRun[];
+  /**
+   * Per-viewer gated image read, for rendering the kept gallery. Required
+   * alongside `keptRuns` — ids without a resolver render nothing.
+   */
+  getImages?: (imageIds: number[]) => Promise<BlockGatedImage[]>;
   /** Test seams. */
   pollIntervalMs?: number;
   /** Total poll-window before a still-processing gen is marked `stalled` (ms). */
@@ -122,8 +158,9 @@ export interface RunnerProps {
 }
 
 export function Runner(props: RunnerProps) {
-  const { config, sharedContentKey, headerUrl, c, canGenerate, buzzBalance, onRequestConsent, uploadSourceImage, estimate, submit, poll, onBack, onTopUp, onBalanceRefresh, onOpenInGenerator, onCopyImageLink, rehydrateNotice, preview = false } = props;
+  const { config, sharedContentKey, headerUrl, c, canGenerate, buzzBalance, onRequestConsent, uploadSourceImage, estimate, submit, poll, onBack, onTopUp, onBalanceRefresh, onOpenInGenerator, onCopyImageLink, keepOutputs, onKeepRun, keptRuns, getImages, rehydrateNotice, preview = false } = props;
   const analytics = props.analytics ?? noopAnalytics;
+  const motion = useMotion();
 
   const [promptInput, setPromptInput] = useState('');
   const [sourceImage, setSourceImage] = useState<BlockSourceImage | null>(null);
@@ -142,6 +179,12 @@ export function Runner(props: RunnerProps) {
   const [confirmLeave, setConfirmLeave] = useState(false);
   // Transient "link copied" confirmation, keyed by the copied image url.
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+  // The payoff view. `null` ⇒ closed.
+  const [lightbox, setLightbox] = useState<LightboxTarget | null>(null);
+  // Per-item keep failure copy — app-owned text only. 🔴 The host's free-text
+  // reason is server-authored and UNSANITISED (the same rule `lib/estimate.ts`
+  // already applies to `.snapshot.error`), so it is logged and never rendered.
+  const [keepErrors, setKeepErrors] = useState<Record<string, string>>({});
 
   // Keep the local balance in sync when the parent pushes a fresh value.
   useEffect(() => {
@@ -151,20 +194,32 @@ export function Runner(props: RunnerProps) {
   // Runtime inputs are INFERRED: the prompt box shows iff some button's template
   // carries a `{prompt}` token; the img2img source box shows iff some button is
   // img2img.
+  //
+  // 🔴 THE UNION IS CORRECT *HERE* AND ONLY HERE. Whether to RENDER a shared
+  // input field is genuinely a question about the whole generator — the prompt
+  // box is one box serving every button that wants one. Whether an input is
+  // REQUIRED is a question about one button, and conflating the two is the bug
+  // fixed below.
   const showPromptInput = useMemo(() => config.buttons.some(exposesPrompt), [config.buttons]);
   const showImageInput = useMemo(() => config.buttons.some(exposesImage), [config.buttons]);
   const promptPlaceholder = config.promptPlaceholder?.trim() || DEFAULT_PROMPT_PLACEHOLDER;
 
-  // Union of the required inputs still unmet across the buttons — drives the
-  // inline "what's needed to run" hint. Empty (or in preview) ⇒ no hint.
-  const requiredHint = useMemo(() => {
-    if (preview) return null;
-    const missing = new Set<RequiredInput>();
-    for (const b of config.buttons) {
-      for (const m of missingRequiredInputs(b, { promptInput, sourceImage })) missing.add(m);
-    }
-    return missing.size > 0 ? missingInputsMessage([...missing]) : null;
-  }, [preview, config.buttons, promptInput, sourceImage]);
+  // 🔴 WAS: a UNION of the unmet inputs across EVERY button, rendered as one
+  // instruction under the row. On a generator carrying a txt2img button and an
+  // img2img button, a viewer who only wanted the txt2img one was told to "Enter a
+  // prompt and add a source image to run" — an upload that button never uses and
+  // that would not have unblocked it. The hint demanded strictly more than any
+  // single button needed, which on the app's own demo generator is the default
+  // case, not an edge one.
+  //
+  // NOW: each preset states its own requirement on its own card, and the imperative
+  // form is reserved for the one button the viewer actually pressed and could not
+  // run (see `pressButton`). There is no generator-wide instruction, because there
+  // is no generator-wide requirement.
+  const presets = useMemo(
+    () => config.buttons.map((b) => ({ button: b, preset: describeButton(b) })),
+    [config.buttons],
+  );
 
   const patchItem = (id: string, patch: Partial<RunnerItem>) =>
     setItems((list) => list.map((it) => (it.id === id ? { ...it, ...patch } : it)));
@@ -204,7 +259,9 @@ export function Runner(props: RunnerProps) {
     // guard for any non-UI press path.
     const missing = missingRequiredInputs(button, { promptInput, sourceImage });
     if (missing.length > 0) {
-      setRunnerError(missingInputsMessage(missing));
+      // Per-button and NAMED — the old message was a union across every button and
+      // did not say which press it was answering.
+      setRunnerError(missingForButtonMessage(button.label?.trim() || 'This button', missing));
       return;
     }
 
@@ -223,7 +280,18 @@ export function Runner(props: RunnerProps) {
 
     const requested = requestedQuantity(body);
     const id = `q_${Date.now().toString(36)}_${items.length}`;
-    const item: RunnerItem = { id, buttonLabel: button.label, status: 'estimating', body, requested };
+    const item: RunnerItem = {
+      id,
+      buttonLabel: button.label,
+      status: 'estimating',
+      body,
+      requested,
+      // Captured AT PRESS TIME, not read back later: the shared prompt box is
+      // live, so a viewer who edits it while a run is in flight would otherwise
+      // have the wrong text attributed to an image they already paid for.
+      promptUsed: exposesPrompt(button) ? promptInput.trim() || undefined : undefined,
+      recipe: presetRecipeLabel(describeButton(button)),
+    };
     setItems((list) => [item, ...list]);
 
     try {
@@ -333,7 +401,19 @@ export function Runner(props: RunnerProps) {
   /** Re-run a completed/failed gen with the exact same inputs (a fresh queue item). */
   function rerun(item: RunnerItem) {
     const id = `q_${Date.now().toString(36)}_${items.length}`;
-    const clone: RunnerItem = { id, buttonLabel: item.buttonLabel, status: 'estimating', body: item.body, requested: item.requested };
+    // A re-run repeats the ORIGINAL inputs, so it inherits the original run's
+    // prompt + recipe — never the live prompt box, which may have moved on.
+    // Keep state is deliberately NOT inherited: this is a new generation and
+    // nothing about it has been kept yet.
+    const clone: RunnerItem = {
+      id,
+      buttonLabel: item.buttonLabel,
+      status: 'estimating',
+      body: item.body,
+      requested: item.requested,
+      promptUsed: item.promptUsed,
+      recipe: item.recipe,
+    };
     setItems((list) => [clone, ...list]);
     void (async () => {
       try {
@@ -363,6 +443,86 @@ export function Runner(props: RunnerProps) {
   }
 
   const dismissItem = (id: string) => setItems((list) => list.filter((it) => it.id !== id));
+
+  /**
+   * KEEP a succeeded run — the app's terminal.
+   *
+   * Asks the host to turn this run's outputs into durable, server-scanned civitai
+   * `Image` rows, then records the returned IDS (never urls — see `lib/runs.ts`)
+   * in the viewer's own storage so the images survive the tab.
+   *
+   * 🔴 THE RUN IS NEVER LOST TO A FAILED KEEP. On any rejection the card returns
+   * to an offerable state with a neutral message and a retry; the images are
+   * still in the queue and still in the viewer's Civitai feed. Losing the whole
+   * result to a failed optional extra is the failure mode that teaches people not
+   * to press the button.
+   *
+   * 🔴 The host's rejection text is server-authored and unsanitised, so it is
+   * logged and never rendered — and it cannot distinguish a declined consent from
+   * a real error anyway (see `KeepStatus`), which is the second reason the copy
+   * stays neutral.
+   */
+  async function keepItem(item: RunnerItem) {
+    if (!keepOutputs || !item.workflowId) return;
+    // Only a succeeded, not-already-kept, not-in-flight run may be kept. Guards
+    // the non-UI press path and makes a double click a no-op rather than a second
+    // consent dialog over the same images.
+    if (item.status !== 'succeeded') return;
+    if (item.keepStatus === 'keeping' || item.keepStatus === 'kept') return;
+
+    patchItem(item.id, { keepStatus: 'keeping' });
+    setKeepErrors((e) => {
+      const { [item.id]: _drop, ...rest } = e;
+      return rest;
+    });
+    try {
+      const imageIds = await keepOutputs({
+        workflowId: item.workflowId,
+        title: config.name || undefined,
+      });
+      // A host that consents but resolves nothing is not a success. Treat an
+      // empty id list as a failure rather than writing a kept run with no images
+      // (which `isKeptRun` would reject on read anyway, silently emptying the
+      // gallery the viewer was just told they had added to).
+      if (!Array.isArray(imageIds) || imageIds.length === 0) {
+        throw new Error('publish resolved no image ids');
+      }
+      const run: KeptRun = {
+        id: newId('kept'),
+        keptAt: Date.now(),
+        imageIds,
+        generatorName: config.name || 'Untitled generator',
+        generatorKey: sharedContentKey,
+        buttonLabel: item.buttonLabel,
+        prompt: item.promptUsed,
+      };
+      await onKeepRun?.(run);
+      patchItem(item.id, { keepStatus: 'kept', keptImageIds: imageIds });
+      analytics.track(ANALYTICS_EVENTS.GENERATION_KEPT, {
+        images: imageIds.length,
+        buttonLabel: item.buttonLabel,
+        sharedContentKey,
+      });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[custom-generators] keep failed', e);
+      patchItem(item.id, { keepStatus: 'failed' });
+      setKeepErrors((prev) => ({
+        ...prev,
+        [item.id]: 'These images weren’t kept. Nothing was charged — you can try again.',
+      }));
+    }
+  }
+
+  /** Open the payoff view on one of a queue item's result images. */
+  const openQueueLightbox = useCallback((itemId: string, index: number) => {
+    setLightbox({ kind: 'queue', itemId, index });
+  }, []);
+
+  const openKeptLightbox = useCallback((cell: KeptImageCell, url: string | null) => {
+    if (!url) return; // an unresolvable cell has nothing to enlarge
+    setLightbox({ kind: 'kept', cell, url });
+  }, []);
 
   // Any paid/in-flight generation that would be lost on a Back/reload. Drives the
   // leave-guard confirm + the native beforeunload prompt.
@@ -408,6 +568,57 @@ export function Runner(props: RunnerProps) {
       setRunnerError("Couldn't copy the image link here — you can still open this image from your Civitai feed.");
     }
   }
+
+  /**
+   * Resolve the open lightbox target into everything the payoff view renders.
+   *
+   * 🔴 DERIVED, NEVER SNAPSHOTTED INTO STATE. The target holds an item id and an
+   * index, not a copy of the item — so a run that is kept while its image is open
+   * flips the view's "Kept" badge, and a card dismissed underneath the modal
+   * resolves to `null` and closes it instead of stranding a view over an item
+   * that no longer exists.
+   */
+  const lightboxView = useMemo(() => {
+    if (!lightbox) return null;
+    if (lightbox.kind === 'queue') {
+      const item = items.find((i) => i.id === lightbox.itemId);
+      const urls = item?.imageUrls ?? [];
+      if (!item || urls.length === 0) return null;
+      const idx = Math.min(Math.max(lightbox.index, 0), urls.length - 1);
+      return {
+        src: urls[idx] as string | null,
+        buttonLabel: item.buttonLabel,
+        recipe: item.recipe ?? null,
+        prompt: item.promptUsed,
+        index: idx + 1,
+        total: urls.length,
+        kept: item.keepStatus === 'kept',
+        onPrev:
+          idx > 0 ? () => setLightbox({ kind: 'queue', itemId: item.id, index: idx - 1 }) : undefined,
+        onNext:
+          idx < urls.length - 1
+            ? () => setLightbox({ kind: 'queue', itemId: item.id, index: idx + 1 })
+            : undefined,
+      };
+    }
+    const { cell, url } = lightbox;
+    const pos = cell.run.imageIds.indexOf(cell.imageId);
+    return {
+      src: url,
+      buttonLabel: cell.run.buttonLabel,
+      // A kept run stores ids + attribution, not the button's param block, so the
+      // recipe line is genuinely unknown here. Omitted rather than reconstructed
+      // from the generator's CURRENT buttons — which may have been edited since,
+      // and would then describe this image with settings that never made it.
+      recipe: null,
+      prompt: cell.run.prompt,
+      index: pos >= 0 ? pos + 1 : 1,
+      total: cell.run.imageIds.length,
+      kept: true,
+      onPrev: undefined,
+      onNext: undefined,
+    };
+  }, [lightbox, items]);
 
   return (
     <div data-testid="runner">
@@ -520,28 +731,82 @@ export function Runner(props: RunnerProps) {
               </Stack>
             )}
 
-            {/* buttons — disabled until every runtime input the button EXPOSES is
-                satisfied (prompt non-blank / img2img source uploaded). Preview is
-                non-runnable, so it isn't input-gated: pressing surfaces a note. */}
-            <Group gap={8}>
-              {config.buttons.map((b) => (
-                <Button
-                  key={b.id}
-                  data-testid="gen-button"
-                  data-button-id={b.id}
-                  disabled={!preview && !canRunButton(b, { promptInput, sourceImage })}
-                  onClick={() => pressButton(b)}
-                >
-                  {b.label || 'Button'}
-                </Button>
-              ))}
-            </Group>
+            {/* 🔴 A BUTTON IS A PRESET — SHOW IT. These were bare labelled pills
+                ("Cyberpunk", "Remix a photo"), so a runner about to spend real
+                Buzz on a stranger's button could not tell what it would make,
+                roughly what it would cost, or what it wanted from them. Each card
+                now carries the button's own recipe, its own approximate price and
+                its OWN requirement — the last of which replaces the generator-wide
+                union hint that used to demand a source image for txt2img buttons
+                (see `lib/preset.ts`).
 
-            {!preview && requiredHint && (
-              <span data-testid="runner-required-hint" style={{ fontSize: 12, color: c.muted }}>
-                {requiredHint}
-              </span>
-            )}
+                Still disabled until every runtime input THIS button exposes is
+                satisfied, exactly as before (`canRunButton`). Preview is
+                non-runnable so it isn't input-gated: pressing surfaces a note. */}
+            <div
+              data-testid="runner-presets"
+              style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(210px,1fr))', gap: 10 }}
+            >
+              {presets.map(({ button: b, preset }) => {
+                const runnable = preview || canRunButton(b, { promptInput, sourceImage });
+                const needs = presetNeedsLabel(preset.needs);
+                const recipe = presetRecipeLabel(preset);
+                return (
+                  <button
+                    key={b.id}
+                    type="button"
+                    data-testid="gen-button"
+                    data-button-id={b.id}
+                    // The gate itself, exposed for assertion. Pins the run
+                    // condition directly rather than via a piece of hint copy —
+                    // which is what the old tests had to do, and why a reworded
+                    // hint could have quietly broken them.
+                    data-runnable={runnable ? 'true' : 'false'}
+                    disabled={!runnable}
+                    onClick={() => pressButton(b)}
+                    className={motionClass(motion, runnable ? CLASS_LIFT : undefined)}
+                    style={{
+                      all: 'unset',
+                      boxSizing: 'border-box',
+                      display: 'block',
+                      cursor: runnable ? 'pointer' : 'not-allowed',
+                      opacity: runnable ? 1 : 0.55,
+                      padding: '10px 12px',
+                      borderRadius: radius.md,
+                      border: `1px solid ${runnable ? token.primary : c.border}`,
+                      background: runnable ? token.primaryLight : elevate(2),
+                    }}
+                  >
+                    <Stack gap={4}>
+                      <span style={{ fontWeight: 600, fontSize: 14 }} data-testid="preset-label">
+                        {preset.label}
+                      </span>
+                      {recipe && (
+                        <span style={metaText} data-testid="preset-recipe">
+                          {recipe}
+                        </span>
+                      )}
+                      <Group gap={8} align="center">
+                        <span
+                          style={{ ...metaText, fontVariantNumeric: 'tabular-nums' }}
+                          data-testid="preset-cost"
+                        >
+                          ≈ {preset.approxCostBuzz} ⚡
+                        </span>
+                        {needs && (
+                          // The button's OWN requirement, as a statement about it
+                          // — never an instruction the whole screen appears to be
+                          // making.
+                          <span style={metaText} data-testid="preset-needs">
+                            · {needs}
+                          </span>
+                        )}
+                      </Group>
+                    </Stack>
+                  </button>
+                );
+              })}
+            </div>
 
             {/* advanced reveal */}
             <Collapse
@@ -567,14 +832,15 @@ export function Runner(props: RunnerProps) {
               viewer's Civitai feed — so a cleared card never means lost work. */}
           {!preview && (
             <span data-testid="runner-feed-note" style={{ fontSize: 12, color: c.muted }}>
-              Generations are saved to your Civitai feed.
+              Generations are saved to your Civitai feed. Keep the ones you like and they’ll be
+              waiting here too.
             </span>
           )}
           {items.length === 0 && (
             <EmptyState
               data-testid="queue-empty"
               title="No generations yet"
-              body="Press a generator button above to queue your first image."
+              body="Pick a preset above. Each one shows what it makes, roughly what it costs, and what it needs from you."
             />
           )}
           {items.map((it) => (
@@ -658,46 +924,105 @@ export function Runner(props: RunnerProps) {
                         token placeholder while loading, native lazy-loading, and
                         a graceful fallback overlay if a generated image URL dies
                         (vs. a broken-glyph raw <img>). */}
-                    <div data-testid="queue-results" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(120px,1fr))', gap: 8 }}>
+                    {/* 🔴 The results are now the PAYOFF, not a byproduct: each
+                        cell opens the full view (`ResultLightbox`) with the recipe
+                        that made it. Before, a 120px thumbnail was the largest a
+                        viewer could ever see an image they had just paid for —
+                        the block's sandbox grants neither `allow-downloads` nor
+                        `allow-popups`, so there was no way out of the iframe to
+                        look at it either. */}
+                    <div data-testid="queue-results" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))', gap: 8 }}>
                       {it.imageUrls.map((u, i) => (
-                        <Image
+                        <button
                           key={`${u}-${i}`}
-                          src={u}
-                          alt={`Result ${i + 1}`}
-                          data-testid="result-image"
-                          loading="lazy"
-                          fallback="Image unavailable"
-                          wrapperStyle={{ width: '100%', aspectRatio: '1 / 1', borderRadius: radius.md }}
-                        />
+                          type="button"
+                          data-testid="result-image-open"
+                          data-index={i}
+                          aria-label={`View result ${i + 1} of ${it.imageUrls!.length} full size`}
+                          className={motionClass(motion, CLASS_LIFT)}
+                          onClick={() => openQueueLightbox(it.id, i)}
+                          style={{
+                            all: 'unset',
+                            boxSizing: 'border-box',
+                            display: 'block',
+                            cursor: 'pointer',
+                            width: '100%',
+                            aspectRatio: '1 / 1',
+                            borderRadius: radius.md,
+                            overflow: 'hidden',
+                            border: `1px solid ${c.border}`,
+                          }}
+                        >
+                          <Image
+                            src={u}
+                            alt={`Result ${i + 1}`}
+                            data-testid="result-image"
+                            loading="lazy"
+                            fallback="Image unavailable"
+                            wrapperStyle={{ width: '100%', height: '100%' }}
+                          />
+                        </button>
                       ))}
                     </div>
-                    {/* Result actions: download each image, re-run the same inputs,
-                        or continue in the on-site Civitai generator. */}
-                    <Group gap={6} data-testid="result-actions">
-                      {onCopyImageLink && it.imageUrls.map((u, i) => (
-                        // Copy the image url (sandbox-legal): a file download needs
-                        // allow-downloads and opening a tab needs allow-popups —
-                        // neither is granted to an unverified block. Paste the url
-                        // into a top-level tab to open/save the image.
-                        <Button
-                          key={`cp-${u}-${i}`}
-                          size="sm"
-                          variant="subtle"
-                          data-testid="result-copy-link"
-                          onClick={() => copyImageLink(u)}
-                        >
-                          {copiedUrl === u ? '✓ Link copied' : `⧉ Copy link ${i + 1}`}
+
+                    {/* 🔴 THE OUTCOME RAIL — the app's terminal. A run used to end
+                        at a thumbnail in a queue that documented itself as
+                        in-session, so the whole loop produced nothing that
+                        outlived the tab. "Keep" turns these outputs into durable,
+                        server-scanned civitai images recorded in the viewer's own
+                        gallery below.
+
+                        Keep is the PRIMARY action and sits first; the per-image
+                        "⧉ Copy link 1 / 2 / 3" row that used to live here (one
+                        button per image, growing with quantity and burying
+                        Re-run) moved into the full view, where exactly one image
+                        is in hand. */}
+                    <Group gap={6} data-testid="result-actions" justify="space-between">
+                      <Group gap={6}>
+                        {keepOutputs && it.workflowId && (
+                          it.keepStatus === 'kept' ? (
+                            <Badge color="success" variant="light" data-testid="result-kept">
+                              ✓ Kept{it.keptImageIds ? ` (${it.keptImageIds.length})` : ''}
+                            </Badge>
+                          ) : (
+                            <Button
+                              size="sm"
+                              data-testid="result-keep"
+                              loading={it.keepStatus === 'keeping'}
+                              disabled={it.keepStatus === 'keeping'}
+                              onClick={() => keepItem(it)}
+                            >
+                              {it.keepStatus === 'failed' ? 'Try keeping again' : '★ Keep'}
+                            </Button>
+                          )
+                        )}
+                        <Button size="sm" variant="light" data-testid="result-rerun" onClick={() => rerun(it)}>
+                          Re-run
                         </Button>
-                      ))}
-                      <Button size="sm" variant="light" data-testid="result-rerun" onClick={() => rerun(it)}>
-                        Re-run
-                      </Button>
+                      </Group>
                       {onOpenInGenerator && (
                         <Button size="sm" variant="subtle" data-testid="result-open-generator" onClick={onOpenInGenerator}>
                           Open in Civitai generator
                         </Button>
                       )}
                     </Group>
+
+                    {it.keepStatus === 'keeping' && (
+                      // The host shows its own consent confirm and this call waits
+                      // on a person (up to 10 minutes), so say what is being waited
+                      // on rather than spinning anonymously.
+                      <span style={metaText} data-testid="result-keep-pending" role="status">
+                        Waiting for you to confirm in the Civitai dialog…
+                      </span>
+                    )}
+                    {keepErrors[it.id] && (
+                      // Neutral by construction: the bridge cannot tell a declined
+                      // consent from a real failure (see `KeepStatus`), and the
+                      // host's own text is unsanitised, so neither is shown.
+                      <Alert color="info" data-testid="result-keep-failed">
+                        {keepErrors[it.id]}
+                      </Alert>
+                    )}
                   </Stack>
                 )}
 
@@ -749,7 +1074,59 @@ export function Runner(props: RunnerProps) {
             </Card>
           ))}
         </Stack>
+
+        {/* 🔴 KEPT FROM THIS GENERATOR — the durable half of the terminal, and the
+            reason the queue above is allowed to stay in-session. The queue is what
+            you are doing now; this is what you have. It survives Back, a reload,
+            and the session, because it is a list of civitai image IDS in the
+            viewer's own storage rather than a list of orchestrator urls.
+
+            Rendered only when the app is actually wired for it (both a store's
+            worth of runs and a gated resolver) and never in preview, where there
+            is no viewer and nothing has been run. */}
+        {!preview && getImages && keptRuns && keptRuns.length > 0 && (
+          <Stack gap={10} data-testid="runner-kept">
+            <Group justify="space-between" align="baseline">
+              <h3 style={{ margin: 0, fontSize: 15, letterSpacing: '-0.01em' }}>Kept from this generator</h3>
+              <span style={metaText} data-testid="runner-kept-count">
+                {keptRuns.length} run{keptRuns.length === 1 ? '' : 's'}
+              </span>
+            </Group>
+            <KeptGallery
+              data-testid="runner-kept-gallery"
+              runs={keptRuns}
+              c={c}
+              getImages={getImages}
+              emptyTitle="Nothing kept yet"
+              emptyBody="Keep a generation and it will be here next time."
+              onOpenCell={openKeptLightbox}
+            />
+          </Stack>
+        )}
       </Stack>
+
+      {/* THE PAYOFF VIEW. One modal serves both sources — a fresh result in the
+          queue and a kept image in the gallery — so the app has exactly one way
+          of showing you a thing you made. */}
+      <ResultLightbox
+        opened={lightboxView != null}
+        onClose={() => setLightbox(null)}
+        c={c}
+        src={lightboxView?.src ?? null}
+        generatorName={config.name || 'Untitled generator'}
+        buttonLabel={lightboxView?.buttonLabel ?? ''}
+        recipe={lightboxView?.recipe ?? null}
+        prompt={lightboxView?.prompt}
+        index={lightboxView?.index ?? 1}
+        total={lightboxView?.total ?? 1}
+        onPrev={lightboxView?.onPrev}
+        onNext={lightboxView?.onNext}
+        kept={lightboxView?.kept}
+        onCopyLink={
+          onCopyImageLink && lightboxView?.src ? () => copyImageLink(lightboxView.src!) : undefined
+        }
+        copied={lightboxView?.src != null && copiedUrl === lightboxView.src}
+      />
 
       {/* Leave-guard: a Back press while a generation is estimating/confirming/
           submitting/processing confirms first, so paid/in-flight work isn't
@@ -827,11 +1204,7 @@ function requestedQuantity(body: WorkflowBody): number {
   return typeof q === 'number' && q > 0 ? q : 1;
 }
 
-/** Human-readable "what's still needed to run" from a button's missing inputs. */
-function missingInputsMessage(missing: RequiredInput[]): string {
-  const needsPrompt = missing.includes('prompt');
-  const needsImage = missing.includes('image');
-  if (needsPrompt && needsImage) return 'Enter a prompt and add a source image to run.';
-  if (needsImage) return 'Add a source image to run.';
-  return 'Enter a prompt to run.';
-}
+// `missingInputsMessage` lived here and is GONE, deliberately: it took a union of
+// missing inputs across every button and phrased it as one instruction, which is
+// the defect described at `lib/preset.ts`. Its per-button replacement is
+// `missingForButtonMessage`, which names the button it is answering.

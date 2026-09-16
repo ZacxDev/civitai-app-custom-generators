@@ -19,8 +19,12 @@ import { Alert, Badge, Button, Card, Group, Loader, Modal, Stack, TextInput } fr
 // blocks-react/ui pack, so they sit alongside it as one visual system.
 import { SegmentedControl, Tooltip, ToastProvider, useToast } from '@civitai/components-react';
 
+import type { BlockGatedImage } from '@civitai/app-sdk/blocks';
 import type { SharedListItem } from '@civitai/blocks-react';
 import type { StoredDraft } from '../lib/drafts.js';
+import { keptImageCount, type KeptImageCell, type KeptRun } from '../lib/runs.js';
+import { KeptGallery } from './KeptGallery.js';
+import { ResultLightbox } from './ResultLightbox.js';
 import { token, radius, metaText, type Palette } from '../theme.js';
 // Motion is opt-in per element and gated on `prefers-reduced-motion` by
 // `useMotion()` — see ../motion.ts for the single-guard rationale.
@@ -32,7 +36,7 @@ import { IntroPanel } from './IntroPanel.js';
 import { SafeImage } from './SafeImage.js';
 import { ReportButton } from '@civitai/blocks-react/ui';
 
-type Tab = 'discover' | 'mine';
+type Tab = 'discover' | 'mine' | 'kept';
 type SortMode = 'new' | 'top';
 
 /** Rows revealed per "Show more" click.
@@ -42,7 +46,23 @@ type SortMode = 'new' | 'top';
  *  mutant survives a fully green file. */
 export const PAGE_SIZE = 12;
 
-const TABS: Tab[] = ['discover', 'mine'];
+/**
+ * 🔴 `kept` is appended, not inserted. The roving-tabindex arrow navigation and
+ * every `Home`/`End` case index into THIS array, so its order is the keyboard
+ * order; putting the new tab in the middle would silently move where `End` lands
+ * for people who navigate that way.
+ *
+ * 🔴 And it is only ever RENDERED for a signed-in viewer (see `visibleTabs`) —
+ * kept runs live in per-user storage, so for an anonymous viewer the tab is not
+ * an empty gallery, it is a gallery that cannot exist.
+ */
+const TABS: Tab[] = ['discover', 'mine', 'kept'];
+
+const TAB_LABELS: Record<Tab, string> = {
+  discover: 'Discover',
+  mine: 'My generators',
+  kept: 'My gallery',
+};
 
 export interface BrowseProps {
   c: Palette;
@@ -89,6 +109,21 @@ export interface BrowseProps {
    * the viewer's ceiling / unresolved / no cover) ⇒ no cover image.
    */
   coverUrlFor: (item: SharedListItem) => string | null;
+  /**
+   * The viewer's KEPT runs — durable civitai image ids they chose to keep, across
+   * every generator. Drives the "My gallery" tab, which is the app's answer to
+   * "why would I come back?": before this, nothing a viewer made here outlived
+   * the tab it was made in.
+   */
+  keptRuns?: KeptRun[];
+  /** Per-viewer gated image read for the gallery. Required alongside `keptRuns`. */
+  getImages?: (imageIds: number[]) => Promise<BlockGatedImage[]>;
+  /**
+   * Open the generator a kept image came from. Returns `false` when the key is
+   * not on the loaded page (or was withdrawn), so the gallery can say so instead
+   * of presenting a control that does nothing.
+   */
+  onOpenGeneratorKey?: (key: string) => boolean;
   onRetry: () => void;
 }
 
@@ -105,7 +140,7 @@ interface VoteState {
 }
 
 export function Browse(props: BrowseProps) {
-  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, onRetry } = props;
+  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, getImages, onOpenGeneratorKey, onRetry } = props;
   const [tab, setTab] = useState<Tab>('discover');
   // Motion gate for the chrome Browse owns directly (draft cards). Cards rendered
   // by PublishedCard/IntroPanel read it themselves.
@@ -138,6 +173,29 @@ export function Browse(props: BrowseProps) {
   const voteSeq = useRef<Record<string, number>>({});
 
   const tablistRef = useRef<HTMLDivElement>(null);
+
+  // The gallery tab exists only when there is a viewer to own it AND the app is
+  // wired for the gated read. `visibleTabs` — not `TABS` — is what the keyboard
+  // navigation walks, so arrow keys can never land on a tab that is not rendered.
+  const galleryAvailable = viewerId != null && !!getImages && !!keptRuns;
+  const visibleTabs = useMemo(
+    () => (galleryAvailable ? TABS : TABS.filter((t) => t !== 'kept')),
+    [galleryAvailable],
+  );
+  // A viewer who signs out while on the gallery must not be left on a panel that
+  // no longer renders — that would show the tablist with nothing under it.
+  useEffect(() => {
+    if (!visibleTabs.includes(tab)) setTab('discover');
+  }, [visibleTabs, tab]);
+
+  const keptCells = keptRuns ?? [];
+  const keptTotal = keptImageCount(keptCells);
+  // The payoff view, shared with the Runner so the app has ONE way of showing a
+  // result full size.
+  const [keptLightbox, setKeptLightbox] = useState<{ cell: KeptImageCell; url: string } | null>(null);
+  // Set when a kept image's generator is not on the loaded page — see
+  // `onOpenGeneratorKey`'s contract.
+  const [openGeneratorError, setOpenGeneratorError] = useState<string | null>(null);
 
   // Reset the discover page window when the query/sort changes so the first
   // page of the new result set is shown.
@@ -189,12 +247,18 @@ export function Browse(props: BrowseProps) {
 
   // Roving-tabindex + arrow-key navigation for the tablist (ARIA pattern).
   function onTabKeyDown(e: ReactKeyboardEvent) {
-    const idx = TABS.indexOf(tab);
+    // 🔴 Walks `visibleTabs`, NOT `TABS`. With the gallery hidden (anonymous
+    // viewer, or an app not wired for the gated read) a `TABS`-based wrap would
+    // move focus onto a tab that is not in the DOM: `End` would select 'kept',
+    // the panel would render nothing, and the subsequent `.focus()` would find no
+    // element — a dead tablist with no error.
+    const tabs = visibleTabs;
+    const idx = tabs.indexOf(tab);
     let next: Tab | null = null;
-    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = TABS[(idx + 1) % TABS.length];
-    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = TABS[(idx - 1 + TABS.length) % TABS.length];
-    else if (e.key === 'Home') next = TABS[0];
-    else if (e.key === 'End') next = TABS[TABS.length - 1];
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = tabs[(idx + 1) % tabs.length];
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = tabs[(idx - 1 + tabs.length) % tabs.length];
+    else if (e.key === 'Home') next = tabs[0];
+    else if (e.key === 'End') next = tabs[tabs.length - 1];
     if (next) {
       e.preventDefault();
       setTab(next);
@@ -259,7 +323,7 @@ export function Browse(props: BrowseProps) {
 
       <div ref={tablistRef}>
         <Group gap={8} role="tablist" aria-label="Generator source" onKeyDown={onTabKeyDown}>
-          {TABS.map((t) => (
+          {visibleTabs.map((t) => (
             <Button
               key={t}
               id={`tab-${t}`}
@@ -272,7 +336,15 @@ export function Browse(props: BrowseProps) {
               data-testid={`tab-${t}`}
               onClick={() => setTab(t)}
             >
-              {t === 'discover' ? 'Discover' : 'My generators'}
+              {TAB_LABELS[t]}
+              {t === 'kept' && keptTotal > 0 && (
+                <>
+                  {' '}
+                  <Badge variant="light" data-testid="tab-kept-count">
+                    {keptTotal}
+                  </Badge>
+                </>
+              )}
             </Button>
           ))}
         </Group>
@@ -535,6 +607,86 @@ export function Browse(props: BrowseProps) {
           </Stack>
         </div>
       )}
+
+      {/* 🔴 MY GALLERY — what the app gives you back. Discover is other people's
+          generators and "My generators" is the things you built; neither is the
+          thing you MADE. Before this tab, running a generator produced images
+          that lived in an in-session queue and were gone on the next Back, so
+          there was no answer to "why open this app again?". */}
+      {tab === 'kept' && galleryAvailable && (
+        <div role="tabpanel" id="panel-kept" aria-labelledby="tab-kept" tabIndex={0}>
+          <Stack gap={10} data-testid="kept-list">
+            {keptCells.length > 0 && (
+              <span style={metaText} data-testid="kept-summary">
+                {keptTotal} image{keptTotal === 1 ? '' : 's'} kept from {keptCells.length} run
+                {keptCells.length === 1 ? '' : 's'}.
+              </span>
+            )}
+            {openGeneratorError && (
+              <Alert
+                color="info"
+                data-testid="kept-open-error"
+                withCloseButton
+                onClose={() => setOpenGeneratorError(null)}
+              >
+                {openGeneratorError}
+              </Alert>
+            )}
+            <KeptGallery
+              data-testid="browse-kept-gallery"
+              runs={keptCells}
+              c={c}
+              getImages={getImages!}
+              withAttribution
+              emptyTitle="Nothing kept yet"
+              emptyBody="Run a generator and press Keep on a result — the images you keep stay here."
+              emptyAction={
+                <Button size="sm" variant="light" data-testid="kept-empty-discover" onClick={() => setTab('discover')}>
+                  Find a generator
+                </Button>
+              }
+              onOpenCell={(cell, url) => {
+                if (url) setKeptLightbox({ cell, url });
+              }}
+            />
+          </Stack>
+        </div>
+      )}
+
+      {/* The payoff view for a kept image, with the way back to the generator
+          that made it — the one place the app turns "look what I made" into
+          "make another one like it". */}
+      <ResultLightbox
+        opened={keptLightbox != null}
+        onClose={() => setKeptLightbox(null)}
+        c={c}
+        src={keptLightbox?.url ?? null}
+        generatorName={keptLightbox?.cell.run.generatorName ?? ''}
+        buttonLabel={keptLightbox?.cell.run.buttonLabel ?? ''}
+        prompt={keptLightbox?.cell.run.prompt}
+        kept
+        index={
+          keptLightbox ? keptLightbox.cell.run.imageIds.indexOf(keptLightbox.cell.imageId) + 1 || 1 : 1
+        }
+        total={keptLightbox?.cell.run.imageIds.length ?? 1}
+        onOpenGenerator={
+          keptLightbox?.cell.run.generatorKey && onOpenGeneratorKey
+            ? () => {
+                const key = keptLightbox.cell.run.generatorKey!;
+                setKeptLightbox(null);
+                // 🔴 The board read is ONE page and there is no get-a-generator-
+                // by-key seam, so this legitimately fails for a generator past
+                // that page or withdrawn since. Say which, rather than closing
+                // the view and appearing to do nothing.
+                if (!onOpenGeneratorKey(key)) {
+                  setOpenGeneratorError(
+                    'That generator isn’t in the list right now — it may have been withdrawn, or be further down the catalog than this app has loaded.',
+                  );
+                }
+              }
+            : undefined
+        }
+      />
 
       {/* Confirm-gated withdraw. `withdraw` permanently removes the shared_kv row
           (and its votes) — so gate it behind an explicit confirmation. */}

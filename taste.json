@@ -3,11 +3,11 @@
   "_": "The app-taste ledger. Written by the pass, read by the next one. It records what was DECIDED and what was NOT shipped — not a changelog.",
 
   "brandDepth": "accent",
-  "brandDepthWhy": "src/theme.ts consumes --civitai-* host tokens and holds ZERO hardcoded colors, so light/dark correctness stays with the platform. Moving to 'skin' would transfer that debt here and make the rubric's dual-theme assertions mandatory; nothing in this pass needed an app-owned palette.",
+  "brandDepthWhy": "src/theme.ts consumes --civitai-* host tokens and holds ZERO hardcoded colors, so light/dark correctness stays with the platform. Moving to 'skin' would transfer that debt here and make the rubric's dual-theme assertions mandatory; nothing in this pass needed an app-owned palette. RE-AFFIRMED at the 0.7.0 pass: the new surfaces (preset cards, the payoff view, the gallery grid) are built entirely from `token.*` / `elevate()` and the design-system Image/Modal, so they inherit the platform's theme correctness rather than re-deriving it.",
   "hue": null,
   "heroPrompt": null,
   "heroSeed": null,
-  "heroNote": "Phase 1 was NOT run — no hue change, no hero generated, no Buzz spent. `civitai generate` is irreversible spend, so it stays an explicit operator decision rather than a side effect of a pass that had other business.",
+  "heroNote": "Phase 1 was NOT run, at either pass — no hue change, no hero generated, no Buzz spent. `civitai generate` is irreversible spend, so it stays an explicit operator decision rather than a side effect of a pass that had other business.",
 
   "sdkVersionAtPass": {
     "@civitai/app-sdk": "^0.35.0",
@@ -18,13 +18,22 @@
   },
 
   "phase0": {
-    "measuredAt": "2026-09-04",
-    "liveVersion": "0.6.3",
-    "liveSourceCommit": "42f542eb17407a52a43f28e97c44266b25a211f7",
+    "measuredAt": "2026-09-16",
+    "liveVersion": "0.6.5",
+    "liveSourceCommit": "6afa211",
+    "appStatus": "DELISTED. Self-delisted by the publisher 2026-09-09 (`app_listing_moderation_events`: action=delist, reason='not ready', actor_user_id=8753561 = the publisher's own account). `/apps/run/custom-generators` 404s, so NO live capture, NO dev:live, NO real-host observation was possible at this pass.",
     "datasetSize": 5,
-    "datasetNote": "5 published generators against `shared.list({ limit: 50 })`. THE CAP DOES NOT BIND and is nowhere near binding — so the one-page ranking/search disclosure shipped in #13 currently describes a condition that cannot occur. Correct and pre-emptive, but it means ranking/IA is not where this app's value sits today. Re-measure before designing anything around the cap.",
-    "baselineHealth": "0 a11y violations, 0 console messages, 0 failed requests (explainer state, --evidence at 0.6.3)",
-    "baselineArtifacts": "/tmp/taste-before-cg — explainer state ONLY; the other three states were not reached, see deferred[0]"
+    "datasetNote": "Unchanged, and NOT re-measurable while delisted — a delisted app's board cannot grow. That is exactly why deferred[2]'s old closing condition was unreachable; see below.",
+    "baselineHealth": "0 a11y violations, 0 console messages, 0 failed requests at 0.6.3 (carried forward — not re-measured, because the capture path needs the app live).",
+    "baselineArtifacts": "/tmp/taste-before-cg (0.6.3, explainer state ONLY). At this pass the baseline was taken HEADLESSLY instead, against the app's own `pnpm dev:harness` mock host (platform-constraints §18): Browse and Runner screenshots at 6afa211, which is what produced the findings below.",
+    "headlessFindings": [
+      "Browse renders ZERO images — an app whose entire output is images presents as a text list with an optional small cover.",
+      "A generator's buttons render as bare labelled pills. A runner about to spend real Buzz on a stranger's button cannot see the checkpoint, the LoRA count, the size, the cost, or what the button needs from them.",
+      "The 'what's still needed' hint is a UNION across every button, so on the app's OWN demo generator (txt2img + img2img) a viewer looking at the txt2img button is told to 'Enter a prompt and add a source image to run'. The image is not required for that button and uploading one would not unblock it.",
+      "The payoff area is an empty dashed panel, and a finished run's images render at 120px with no way to enlarge them — the block's sandbox grants neither allow-downloads nor allow-popups, so there was no route out of the iframe to look at them either.",
+      "The result rail renders one '⧉ Copy link N' button PER IMAGE, growing with quantity and pushing Re-run off the end.",
+      "'Generations are saved to your Civitai feed.' is a text apology standing in for a destination that does not exist in the app."
+    ]
   },
 
   "decisions": [
@@ -52,24 +61,77 @@
       "fork": "Report as an overflow-menu item, or an inline control?",
       "chose": "Inline, LAST in the card's action group.",
       "forcedBy": "The shared component renders a Button and cannot be a menu item. Placing it last keeps escalation visually subordinate to vote/share/fork, which is the honest hierarchy: it is the least-used action and the one with the heaviest consequence."
+    },
+
+    {
+      "pass": "0.7.0 — the payoff pass",
+      "fork": "The design doc's §2.1 finding is that the app has NO TERMINAL, and post-from-app — which was going to be that terminal — is three platform gates dark. Ship polish without a terminal, build a different terminal, or report that the bar cannot be cleared?",
+      "chose": "Build a DIFFERENT terminal, which exists today and needs nothing new: KEEP. `usePublishGenerationOutputs().publish()` turns a run's outputs into durable, server-scanned civitai `Image` rows; the app stores their IDS in per-viewer storage and re-resolves urls through `useGatedImages()` per render. A run now ends in 'My gallery'.",
+      "forcedBy": "Measured, not assumed, and it corrects a stale platform constraint. `.claude/skills/app-taste/reference/platform-constraints.md` §18c (measured 2026-09-05 at civitai `d839654ce6`) records `blocks.publishGenerationOutputs` as gated by `assertViewerIsAppDeveloper`, i.e. app-authors only — which would have made this terminal unreachable for ordinary runners. RE-READ 2026-09-16 at `origin/release`: that gate is GONE. There is exactly ONE `await assertViewerIsAppDeveloper(...)` call site left in blocks.router.ts and it is the block-SETTINGS persist proc (which additionally requires `claims.ctx.modelId`). `publishGenerationOutputs`'s own gates are: `ai:write:budgeted` scope, an authenticated viewer, the app-blocks kill-switch, a publish rate bucket, a durable user+app+workflow ownership proof, and the orchestrator app-tag. The sibling `getMyBuzz` docblock records the change explicitly — 'Removing that gate (so the non-author cohort can use apps at all)'."
+    },
+    {
+      "pass": "0.7.0",
+      "fork": "Does the terminal need a new manifest scope — i.e. does this submission have to be judged on a permission grant as well as on UX?",
+      "chose": "NO new scope. `scopes` is byte-unchanged at 0.7.0.",
+      "forcedBy": "The host gates `publishGenerationOutputs` on `ai:write:budgeted` — the SAME trust boundary as submit/query, in the router's own words: 'an app authorized to spend the viewer's Buzz on generation can publish the outputs it produced'. That scope is already declared AND already in `app_blocks.approved_scopes` for appblk-custom-generators. The gated read (`getImagesByIds`) is authorized by any valid block token for the app and needs no scope at all — this app already calls it in production for cover images. This is the decisive advantage over the post-from-app route, which requires `posts:write:self` (a SENSITIVE scope) and therefore a grant a moderator must weigh separately."
+    },
+    {
+      "pass": "0.7.0",
+      "fork": "Store the result URLs, or the image IDs?",
+      "chose": "IDS. `KeptRun.imageIds` only; a url is re-resolved on every render through the gate.",
+      "forcedBy": "A workflow snapshot's `imageUrls` are orchestrator artifacts of one generation — persisting one is storing a url whose lifetime the app neither controls nor can observe. Worse, caching a url caches a PERMISSION: `getImages` applies the viewer's browsing-level clamp at READ time, so an id re-evaluated per render honours a moderation status that changed after the keep, and a cached url would not. This is the rule the cover-image path already follows ('🔴 the ONLY sanctioned source of a cover url'); the terminal inherits it rather than inventing an exception. Pinned by a test asserting the persisted record contains no url substring."
+    },
+    {
+      "pass": "0.7.0",
+      "fork": "Phase 4 identity — show WHO made a generator?",
+      "chose": "NO handle. Attribution is the GENERATOR's name ('Made with <generator>'), never a person's.",
+      "forcedBy": "Design-doc Q3 answered by reading the INSTALLED .d.ts at the real pin: `SharedListItem` carries `{ key, authorUserId: number, value, count, createdAt, updatedAt, viewerVoted }` — `authorUserId` is a bare number and there is no user-lookup message in the SDK (constraints §5). The two workarounds both fail here: denormalising a handle at publish time CANNOT retrofit the 5 rows already in production, and a username is user-controlled text that constraints §4 forbids putting in the opaque `data` blob. A generator name is app-owned text the app can state truthfully, so that is what the payoff view and every gallery cell carry."
+    },
+    {
+      "pass": "0.7.0",
+      "fork": "Should a KEPT run write anything to SHARED storage, so a generator's Discover card could show 'N images made with this'?",
+      "chose": "NO. Kept runs are per-viewer only.",
+      "forcedBy": "constraints §3: keys are host-minted and cannot be prefixed, so child records share the ONE paginated stream with the generators themselves. The board is read at `limit: 50`; run receipts would be unbounded and would push real generators off the first page almost immediately. The alternative — the generator's own row carrying a counter — is impossible because `update` is author-scoped and a runner is not the author. So the compounding, cross-user half of the loop is genuinely PLATFORM work and is NOT attempted here. Recorded honestly in deferred[3] rather than faked."
+    },
+    {
+      "pass": "0.7.0",
+      "fork": "How should a failed Keep be worded?",
+      "chose": "Neutral, non-error, with a retry — 'These images weren’t kept. Nothing was charged — you can try again.' The host's own text is logged, never rendered.",
+      "forcedBy": "TWO independent reasons, and the first is a platform limitation worth knowing. (a) The `PUBLISH_GENERATION_OUTPUTS` bridge replies with either image ids or a free-text `error` and has NO decline variant — unlike the sibling create-post bridge, which carries an explicit `declined`. Verified by enumerating the message constants in the installed package: PUBLISH_GENERATION_OUTPUTS / PUBLISH_RESULT / PUBLISH_ERROR, and no decline. So a viewer who simply dismissed the host consent confirm is INDISTINGUISHABLE at this seam from one who hit a rate limit, and calling their deliberate 'no' a failure is the one reading that is certainly wrong. (b) The host's rejection text is server-authored and unsanitised — the same class `lib/estimate.ts` already refuses to render for `.snapshot.error`."
+    },
+    {
+      "pass": "0.7.0",
+      "fork": "Rewrite the Browse empty states and Discover copy too (design doc §3.3 phase 2c)?",
+      "chose": "No — left alone, deliberately.",
+      "forcedBy": "The 'Published by me' and Discover empty states carry carefully-conditioned wording (viewerId × discoverTruncated) shipped in #13, with tests and in-file comments explaining each condition, and the app's real onboarding is the IntroPanel above them. Churning tested copy for its own sake is what the previous pass rightly refused to do. The empty state that WAS the problem is the Runner's, and that one is rewritten."
     }
   ],
 
   "deferred": [
     {
       "ask": "Phase 7 re-shoot, and converting the capture recipe off its 15 positional `nth-child` selectors.",
-      "why": "The phase-0 baseline capture REFUSED framing: `full_frame` — content fills 53.4% x 100.0% of the usable band. The refusal itself says no band setting can fix a genuinely full-bleed axis and the gate is right to refuse. This app therefore needs a declared anchored crop, which is the open design call tracked as rank 5 of the app-taste-rollout handoff. Only 1 of the recipe's 4 states (explainer) was captured.",
+      "why": "The phase-0 baseline capture REFUSED framing: `full_frame` — content fills 53.4% x 100.0% of the usable band. The refusal itself says no band setting can fix a genuinely full-bleed axis and the gate is right to refuse. This app therefore needs a declared anchored crop, which is the open design call tracked as rank 5 of the app-taste-rollout handoff. Only 1 of the recipe's 4 states (explainer) was captured. CARRIED FORWARD VERBATIM at 0.7.0, and now blocked a SECOND way as well: a re-shoot needs the new version LIVE, i.e. past a relist AND a moderator approval.",
       "closingCondition": "Rank 5 decides the full-bleed shoot route; then the recipe carries a `crop.rect` with `yFrom: 'appFrame'` and testid-based selectors, and `capture.sh <recipe> --evidence` exits 0 for all four states (explainer, discover, generator, mine). Checked by: that command's exit code."
     },
     {
       "ask": "Persist per-viewer report state so the settled control survives a remount.",
-      "why": "Without it, a `list()` refresh, tab switch or virtualized scroll resets the control to 'Report' and the same viewer can file the same row twice. `report()` is not documented idempotent the way `vote` is, so that is a duplicate report rather than a no-op.",
+      "why": "Without it, a `list()` refresh, tab switch or virtualized scroll resets the control to 'Report' and the same viewer can file the same row twice. `report()` is not documented idempotent the way `vote` is, so that is a duplicate report rather than a no-op. NOTE at 0.7.0: this app now HAS a per-viewer ledger pattern (`lib/runs.ts` over the same `useAppStorage` KV), so the second half of the closing condition below is now cheap to satisfy — it was not attempted here only because it is unrelated to the terminal.",
       "closingCondition": "Either `SharedListItem` gains a viewer-report field (platform work), or this app records its own per-viewer ledger and passes it as the `reported` prop at the Browse call site. Checked by: `reported` being supplied at that call site in src/components/Browse.tsx."
     },
     {
-      "ask": "Phases 1-4 (brand/hero, information architecture, interaction, identity).",
-      "why": "Not attempted. Phase 0 measured the app as already clean — 0 a11y violations, 0 console errors, 0 failed requests — and the dataset (5 rows) is far from the point where IA or ranking pays. Running them now would be styling for its own sake.",
-      "closingCondition": "A later pass re-runs phase 0 and finds either a binding dataset (rows approaching the 50-row page) or a non-empty defect set in the --evidence capture. Checked by: the phase0 block of a future entry in this file showing datasetSize >= 40 or baselineHealth non-zero."
+      "ask": "Phases 1–4 (brand/hero, information architecture, interaction, identity).",
+      "why": "🔴 SUPERSEDED at 0.7.0 — this entry's ORIGINAL reasoning was wrong in a way worth keeping on the record. It read: 'Not attempted. Phase 0 measured the app as already clean — 0 a11y violations, 0 console errors, 0 failed requests — and the dataset (5 rows) is far from the point where IA or ranking pays. Running them now would be styling for its own sake.' That inference does not follow from that evidence: phase 0's instrument measures the ABSENCE OF DEFECTS, and the operator was measuring the ABSENCE OF A REASON TO CARE. Those are different quantities, and no count of console errors can see the second. The operator delisted the app eight days later with the verdict 'app ux was lacking'. Phases 2 (information architecture), 3 (interaction) and 4 (identity) were RUN at 0.7.0 and are shipped; phase 1 (brand/hero) was deliberately NOT run and stays out — see heroNote. The general lesson, for the next pass on any app: a clean phase 0 is a reason to skip DEFECT work, never a reason to skip TASTE work.",
+      "closingCondition": "🔴 REWRITTEN — the old condition was UNREACHABLE and that is why this entry rotted. It read: 'A later pass re-runs phase 0 and finds either a binding dataset (rows approaching the 50-row page) or a non-empty defect set… Checked by: datasetSize >= 40 or baselineHealth non-zero.' A delisted app serves 404, so its board cannot grow and its capture cannot run: BOTH branches were unreachable by construction, and the entry could never have closed itself no matter how bad the UX got. The replacement is a human judgement over named evidence, because 'useful and delightful' is the operator's call and always was: the operator opens the 0.7.0 PR's before/after screenshots and the Runner + My-gallery flow, and records in the PR thread either (a) that it clears the 'useful and delightful' bar — at which point this entry is CLOSED — or (b) which specific part still does not, which becomes the next pass's brief. Checked by: the operator, in writing, on that PR."
+    },
+    {
+      "ask": "🔴 NEW at 0.7.0 — the COMPOUNDING half of the loop: a generator's Discover card showing the images people made with it, so publishing a generator pays its author in reach.",
+      "why": "This is the single biggest thing the app still cannot do, and it is not a UX choice — it is blocked. A kept image is recorded in the RUNNER's per-viewer storage, which no other viewer can read. Writing run receipts to shared storage instead is refused for a measured reason (see the decision above): host-minted keys cannot be prefixed, so receipts would share the board's single 50-row page with the generators themselves. And the generator's own row cannot carry a counter because `update` is author-scoped — the runner is not the author. So the app can close the loop for the RUNNER (done: My gallery) and cannot close it for the GENERATOR AUTHOR. Until it can, a generator author still gets no observable signal when someone runs their generator, which is the mechanism by which 5 published generators would become 50.",
+      "closingCondition": "Platform work, and NOT filed as an issue because this pass cannot name its owner. It needs ONE of: (a) a shared-storage seam that scopes child records to a parent key (constraints §3's standing gap), or (b) an app-writable, author-visible run counter on a shared row, or (c) post-from-app landing, whose host-rendered app-attribution badge gives the generator reach for free. (c) is already tracked with an owner in `claudedocs/app-blocks-post-from-app-custom-generators-scope-2026-09-15.md`. Checked by: whichever of those three ships — at which point a follow-up pass wires the Discover card and this entry closes. If none has shipped by the time a later pass re-reads this file, that IS the finding to report."
+    },
+    {
+      "ask": "🔴 NEW at 0.7.0 — anything at all about how this works against the REAL host.",
+      "why": "The app is delisted, so `/apps/run/custom-generators` 404s and `dev:live` is unavailable. Everything shipped in 0.7.0 was verified against the SDK mock host and the app's own two vitest projects. The mock is a simulation and is more permissive than production on at least one measured axis (constraints §7). Specifically unverified: that the host's publish CONSENT DIALOG reads well; that a real `publish()` returns ids for a real workflow; how the 10-minute human-interaction timeout feels in practice; whether the gated read resolves kept ids after a real keep; and the framing of any of it at a real viewport.",
+      "closingCondition": "The operator relists the app (self-serve; restores `approved` without a new review), a human runs ONE generator end to end and presses Keep, and confirms in writing that (1) the host consent dialog appeared and reads sensibly, (2) the kept image appears in My gallery after a full page reload, and (3) a deliberately-declined consent leaves the run intact with the neutral notice rather than an error. Checked by: a named human doing those three things and recording the result on the 0.7.0 PR. 🔴 This pass deliberately did NOT relist to unblock its own screenshots — relisting makes the app visible to testers again, which is precisely what the operator suspended it to prevent, so the ORDER is the operator's to choose."
     }
   ]
 }

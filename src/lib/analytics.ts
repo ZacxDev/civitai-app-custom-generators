@@ -14,6 +14,15 @@ export const ANALYTICS_EVENTS = {
   RUN_OPENED: 'generator_run_opened',
   /** A generation was confirmed + submitted (the spend point). */
   GENERATION_SUBMITTED: 'generation_submitted',
+  /**
+   * A succeeded run's outputs were KEPT — published into durable civitai `Image`
+   * rows and recorded in the viewer's own gallery. This is the app's terminal, so
+   * it is the event that answers "did the run end somewhere?": a
+   * `generation_submitted` with no matching `generation_kept` is a viewer who
+   * spent Buzz and walked away with nothing that outlived the tab, which is the
+   * behaviour this pass exists to change.
+   */
+  GENERATION_KEPT: 'generation_kept',
   /** A viewer up-voted / removed their up-vote on a published generator. */
   VOTED: 'generator_voted',
   /** A published generator was forked into the viewer's own draft. */
