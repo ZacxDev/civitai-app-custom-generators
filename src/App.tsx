@@ -286,11 +286,19 @@ export function App({ deps: depsOverride }: AppProps = {}) {
    */
   const [keptRuns, setKeptRuns] = useState<KeptRun[]>([]);
   /**
-   * Kept runs exist that `keptRuns` does not contain (see `lib/runs.ts`). The
-   * read walks the viewer's keys to the end and hydrates the newest
-   * `KEPT_LIST_LIMIT` of them, so what is missing here is their OLDEST runs.
+   * Kept runs exist that `keptRuns` does not contain (see `lib/runs.ts`). When
+   * the key walk reaches the end of the store it hydrates the newest
+   * `KEPT_LIST_LIMIT` of them, so what is missing is their OLDEST runs — and
+   * that "when" is the whole of `keptIncomplete` below, because the sentence is
+   * false without it.
    */
   const [keptTruncated, setKeptTruncated] = useState(false);
+  /**
+   * The key walk did NOT reach the end of the store (`KeptRunPage.incomplete`),
+   * so the sentence above inverts: what is missing is the viewer's most RECENT
+   * runs, not their oldest. Carried separately so the gallery can say which.
+   */
+  const [keptIncomplete, setKeptIncomplete] = useState(false);
   /**
    * 🔴 The kept-runs read FAILED — a DIFFERENT fact from "no kept runs", and
    * keeping them apart is the whole point of this state. This catch used to be
@@ -356,6 +364,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     if (!ready || !viewer) {
       setKeptRuns([]);
       setKeptTruncated(false);
+      setKeptIncomplete(false);
       setKeptError(null);
       return;
     }
@@ -366,6 +375,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         if (!cancelled) {
           setKeptRuns(page.runs);
           setKeptTruncated(page.truncated);
+          setKeptIncomplete(page.incomplete);
           setKeptError(null);
         }
       } catch {
@@ -377,6 +387,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         if (!cancelled) {
           setKeptRuns([]);
           setKeptTruncated(false);
+          setKeptIncomplete(false);
           setKeptError('Couldn’t load your kept images just now.');
         }
       }
@@ -807,6 +818,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             coverUrlFor={coverUrlFor}
             keptRuns={keptRuns}
             keptTruncated={keptTruncated}
+            keptIncomplete={keptIncomplete}
             keptError={keptError}
             getImages={deps.getImages}
             onOpenGeneratorKey={openPublishedByKey}

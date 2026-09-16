@@ -179,6 +179,34 @@ describe('a read cancelled in flight does not strand its cells', () => {
     const cell = await screen.findByTestId('kept-cell');
     await waitFor(() => expect(cell).toHaveAttribute('data-state', 'visible'));
   });
+
+  /**
+   * 🔴 THE OTHER HALF OF THAT CLEANUP LINE, WHICH NOTHING OBSERVED. The release
+   * is guarded by `!settled`: it exists to un-strand a read torn down IN FLIGHT,
+   * and must not re-open ids whose read already completed. Removing the guard —
+   * releasing unconditionally — left the whole suite green, so the narrowing
+   * clause read as coverage while having none, and the next person to "simplify"
+   * it would have had a green run agreeing with them.
+   *
+   * The identity churn here is the same one the test above reproduces; the only
+   * difference is that the read has SETTLED first, which is precisely the arm the
+   * guard selects. An unguarded release re-requests id 501 on the rerender, so
+   * the mutant differs from HEAD by exactly this call count.
+   */
+  it('does NOT re-ask for ids whose read already settled', async () => {
+    const getImages = vi.fn(async (ids: number[]) => ids.map(visible));
+    const base = props({ getImages });
+    const { rerender } = render(<KeptGallery {...base} runs={[run()]} />);
+
+    const cell = await screen.findByTestId('kept-cell');
+    await waitFor(() => expect(cell).toHaveAttribute('data-state', 'visible'));
+    expect(getImages).toHaveBeenCalledTimes(1);
+
+    // A NEW ARRAY, SAME CONTENT — the effect re-runs and its cleanup fires, but
+    // this read is done, so there is nothing to un-strand.
+    rerender(<KeptGallery {...base} runs={[run()]} />);
+    expect(getImages).toHaveBeenCalledTimes(1);
+  });
 });
 
 /**
@@ -226,5 +254,27 @@ describe('the truncation notice', () => {
     render(<KeptGallery {...props()} />);
     await screen.findByTestId('kept-cell');
     expect(screen.queryByTestId('kept-gallery-truncated')).not.toBeInTheDocument();
+  });
+
+  /**
+   * 🔴 THE SENTENCE INVERTED IN THE STATE THAT RENDERED IT. "this app loads your
+   * most recent ones" is true of a key walk that reached the end of the store.
+   * When the walk stops at `KEPT_LIST_MAX_PAGES` the app holds the tail of a
+   * PREFIX, so the keeps it is missing are the viewer's newest — and the notice
+   * above was being rendered over exactly that, telling them the opposite.
+   *
+   * Both flags are set here because both are true of that state (a cut-short
+   * walk is always also truncated), which is the case the component has to
+   * disambiguate. Whole strings, per this file's header rule.
+   */
+  it('says the opposite thing when the key walk was cut short', async () => {
+    render(<KeptGallery {...props({ truncated: true, incomplete: true })} />);
+    const notice = await screen.findByTestId('kept-gallery-truncated');
+    expect(notice).toHaveTextContent(
+      'You’ve kept more than this app can list — your newest keeps may not be shown here.',
+    );
+    expect(notice).not.toHaveTextContent(
+      'Older keeps aren’t shown here — this app loads your most recent ones.',
+    );
   });
 });

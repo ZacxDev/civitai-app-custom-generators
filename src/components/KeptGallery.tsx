@@ -17,11 +17,11 @@
 // 🔴 THREE OUTCOMES, ALL RENDERED, NONE COLLAPSED. The gate returns `visible`
 // (url) or `hidden` (NO url), and OMITS ids it cannot resolve at all — so the
 // returned array may be SHORTER than the request and a missing entry is not the
-// same fact as a hidden one. `hidden` means "not being served to you right now"
-// — which covers a still-scanning image as well as one above this viewer's
-// ceiling, and the gate does not say which (see {@link HIDDEN_CELL_NOTICE});
-// omitted means "this is gone". Rendering either as a broken `<img>` would be a
-// moderation failure in the first case and a lie in the second.
+// same fact as a hidden one. `hidden` means "not being served to you right now",
+// over FOUR distinct causes the gate deliberately does not distinguish (see
+// {@link HIDDEN_CELL_NOTICE}); omitted means "this is gone". Rendering either as
+// a broken `<img>` would be a moderation failure in the first case and a lie in
+// the second.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
@@ -46,13 +46,31 @@ export const GALLERY_PAGE_SIZE = 12;
  * not derived from what it rendered is a claim it cannot keep, so there is none:
  * what remains is the one fact `truncated` actually carries.
  *
- * Bounded by what the code can see. `lib/runs.ts` walks the viewer's keys to the
- * end of the store and hydrates the TAIL, so "your most recent ones" is what the
- * grid holds, and `truncated` means kept runs exist outside it (see
- * `KeptRunPage` in `lib/runs.ts`).
+ * Bounded by what the code can see, and the bound is load-bearing. This sentence
+ * is true of a COMPLETE key walk: `lib/runs.ts` walks the viewer's keys to the
+ * end of the store and hydrates the TAIL, so "your most recent ones" is exactly
+ * what the grid holds and what is missing is older. When the walk is cut short
+ * the claim INVERTS — what is missing is then the viewer's newest — so that
+ * state renders {@link INCOMPLETE_NOTICE} instead and this sentence is never
+ * shown over it. See `KeptRunPage.incomplete` in `lib/runs.ts`.
  */
 export const TRUNCATION_NOTICE =
   'Older keeps aren’t shown here — this app loads your most recent ones.';
+
+/**
+ * What the notice says when the key walk did not reach the end of the store —
+ * `KeptRunPage.incomplete`.
+ *
+ * 🔴 THE ONE SENTENCE {@link TRUNCATION_NOTICE} CANNOT COVER. In that state the
+ * app enumerated a prefix of the viewer's keys and hydrated the tail OF THE
+ * PREFIX, so the keeps it is missing are the most recent ones — the opposite of
+ * what the other notice asserts, rendered in the very state that would have
+ * rendered it. The host's key list is forward-only, so this is disclosed rather
+ * than fixed (see `KEPT_LIST_MAX_PAGES` in `lib/runs.ts`); disclosing it is what
+ * keeps both sentences definite instead of hedging one into covering both.
+ */
+export const INCOMPLETE_NOTICE =
+  'You’ve kept more than this app can list — your newest keeps may not be shown here.';
 
 /**
  * What a cell says when the gate returned `hidden`.
@@ -68,9 +86,24 @@ export const TRUNCATION_NOTICE =
  * `hidden`, and *"Not shown at your browsing level"* told them Civitai had
  * withheld their own work from them.
  *
- * Both causes are named because the gate genuinely collapses them: `hidden`
- * carries no reason, so the component cannot know which one applies and must not
- * pick. The scan is named first because it is the one that resolves itself.
+ * 🔴 THE GATE HAS FOUR `hidden` CAUSES, NOT TWO, AND THIS BLOCK USED TO SAY
+ * "both". Read off `classifyGatedImageForViewer` in order, an image is `hidden`
+ * when: (1) `ingestion !== Scanned` — Pending, Error, Blocked or NotFound;
+ * (2) `nsfwLevel === 0`, i.e. rated by nothing yet; (3) ANY moderation flag is
+ * set — `needsReview`, `poi`, `minor`, `tosViolation`, `acceptableMinor` or
+ * `blockedFor`; or (4) the image's level does not intersect this viewer's
+ * browsing ceiling. The gate returns a bare `hidden` for all four, so the
+ * component cannot know which applies and must not pick.
+ *
+ * ⚠️ The SENTENCE below therefore does not enumerate them, and that is the
+ * deliberate choice rather than an oversight: it names the two causes that
+ * describe the ordinary path — (1), which is where a just-kept image lands and
+ * the only one that resolves itself, and (4) — in wording soft enough not to
+ * accuse the viewer of anything in the other two. A flagged image (3) renders a
+ * sentence that is not literally true of it; the alternative, naming moderation
+ * to every viewer whose own image tripped a flag, is worse, and a copy that
+ * enumerated all four would be reciting the gate at someone waiting for a
+ * picture. What is fixed here is the docblock's arithmetic, not the copy.
  */
 export const HIDDEN_CELL_NOTICE = 'Still being checked, or above your browsing level';
 
@@ -114,6 +147,15 @@ export interface KeptGalleryProps {
    */
   truncated?: boolean;
   /**
+   * The key walk was cut short, so what is missing is the viewer's NEWEST keeps
+   * rather than their oldest (`KeptRunPage.incomplete` in `lib/runs.ts`).
+   * Selects {@link INCOMPLETE_NOTICE} over {@link TRUNCATION_NOTICE}.
+   *
+   * 🔴 Same scoping rule as `truncated`, for the same reason: it is a fact about
+   * the viewer's STORE, so a caller rendering a FILTERED `runs` must not pass it.
+   */
+  incomplete?: boolean;
+  /**
    * Delay before the single re-read of `hidden` ids. See
    * {@link GALLERY_RECHECK_MS} — it is a heuristic, and tests set it to 0.
    */
@@ -131,6 +173,7 @@ export function KeptGallery({
   onOpenCell,
   withAttribution = false,
   truncated = false,
+  incomplete = false,
   recheckDelayMs = GALLERY_RECHECK_MS,
   'data-testid': testId = 'kept-gallery',
 }: KeptGalleryProps) {
@@ -229,9 +272,12 @@ export function KeptGallery({
   // the empty branch too. `truncated` with an empty feed means every hydrated row
   // was unparseable while runs the app never loaded still exist, and "nothing
   // kept yet" is the worst available reading of that state.
+  // 🔴 `incomplete` wins where both are set, and both ARE set in that state:
+  // a cut-short walk is always also truncated (`KeptRunPage`), and only one of
+  // the two sentences is true of it.
   const notice = truncated ? (
     <span style={metaText} role="status" data-testid={`${testId}-truncated`}>
-      {TRUNCATION_NOTICE}
+      {incomplete ? INCOMPLETE_NOTICE : TRUNCATION_NOTICE}
     </span>
   ) : null;
 

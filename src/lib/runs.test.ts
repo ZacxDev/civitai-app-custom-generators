@@ -176,6 +176,53 @@ describe('the gallery reads the viewer NEWEST runs, and reports what it left out
     expect(page.truncated).toBe(true);
   });
 
+  /**
+   * 🔴 THE CUT-SHORT WALK IS NOT THE NEWEST, AND THE PAGE NOW SAYS SO. The test
+   * above seeds ONE run, so its tail is trivially correct and it can only prove
+   * the walk stops — it cannot see what the stopped walk CONTAINS. This one puts
+   * real rows past the bound.
+   *
+   * `KEPT_LIST_MAX_PAGES * KEPT_PAGE_LIMIT` keys are enumerable; seeding 100 more
+   * than that leaves the viewer's 100 most recent keeps outside the walk
+   * entirely. The tail of that prefix is therefore the newest of the OLDER part
+   * of the store — genuinely not the viewer's most recent — and `incomplete` is
+   * the fact that says so. The overshoot is deliberate: at exactly the bound the
+   * walk completes and the distinction is unreachable.
+   */
+  it('reports a cut-short walk as incomplete, because its tail is not the newest', async () => {
+    const enumerable = KEPT_LIST_MAX_PAGES * KEPT_PAGE_LIMIT;
+    const beyond = 100;
+    const store = memoryDraftStore();
+    await seed(store, enumerable + beyond);
+
+    const page = await listKeptRuns(store);
+
+    // The walk was cut short: both facts are true and they are DIFFERENT facts.
+    expect(page.incomplete).toBe(true);
+    expect(page.truncated).toBe(true);
+
+    const ids = page.runs.map((r) => r.id);
+    // What it holds is the tail of the ENUMERATED prefix…
+    expect(ids[0]).toBe(id(enumerable - 1));
+    // …and the viewer's most recent keeps were never enumerated at all. This is
+    // the honest, uncomfortable half — asserted rather than papered over.
+    expect(ids).not.toContain(id(enumerable + beyond - 1));
+  });
+
+  /**
+   * NEGATIVE CONTROL for the flag: a walk that reaches the end of the store is
+   * complete even when it left older runs outside the hydration horizon. Without
+   * this, `incomplete: true` would be indistinguishable from `incomplete:
+   * truncated`.
+   */
+  it('does not call a completed walk incomplete, even when it truncated', async () => {
+    const store = memoryDraftStore();
+    await seed(store, KEPT_LIST_LIMIT + 1);
+    const page = await listKeptRuns(store);
+    expect(page.truncated).toBe(true);
+    expect(page.incomplete).toBe(false);
+  });
+
   /** The store's own list contract — the thing the walk's exit condition reads. */
   it('asks the host for its maximum page size, never more', async () => {
     const store = memoryDraftStore();

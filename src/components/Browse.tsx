@@ -120,14 +120,25 @@ export interface BrowseProps {
    */
   keptRuns?: KeptRun[];
   /**
-   * Kept runs exist outside `keptRuns` — the read hydrates the viewer's newest
-   * `KEPT_LIST_LIMIT`, so what is outside is their oldest. Threaded to the
-   * gallery so it discloses that instead of presenting the set as complete.
+   * Kept runs exist outside `keptRuns`. A read whose key walk reached the end of
+   * the store hydrates the viewer's newest `KEPT_LIST_LIMIT`, so what is outside
+   * is their oldest — and where it did not, `keptIncomplete` below says so,
+   * because that is the state in which this sentence inverts. Threaded to the
+   * gallery so it discloses either instead of presenting the set as complete.
    *
    * 🔴 Only legal because `keptRuns` here IS the loaded set. The Runner filters
    * to one generator and therefore deliberately does not take this prop.
    */
   keptTruncated?: boolean;
+  /**
+   * The kept-runs key walk was cut short, so what the gallery is missing is the
+   * viewer's NEWEST keeps rather than their oldest (`KeptRunPage.incomplete` in
+   * `lib/runs.ts`). Picks the gallery notice that is true in that state.
+   *
+   * 🔴 Same scoping rule as `keptTruncated` — a fact about the store, so only a
+   * caller passing the UNFILTERED set may pass it.
+   */
+  keptIncomplete?: boolean;
   /**
    * The kept-runs read FAILED. 🔴 Not the same fact as "no kept runs", and the
    * difference is the whole reason this prop exists: rendering the gallery's
@@ -160,7 +171,7 @@ interface VoteState {
 }
 
 export function Browse(props: BrowseProps) {
-  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, keptTruncated = false, keptError = null, getImages, onOpenGeneratorKey, onRetry } = props;
+  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, keptTruncated = false, keptIncomplete = false, keptError = null, getImages, onOpenGeneratorKey, onRetry } = props;
   const [tab, setTab] = useState<Tab>('discover');
   // Motion gate for the chrome Browse owns directly (draft cards). Cards rendered
   // by PublishedCard/IntroPanel read it themselves.
@@ -682,6 +693,7 @@ export function Browse(props: BrowseProps) {
               getImages={getImages!}
               withAttribution
               truncated={keptTruncated}
+              incomplete={keptIncomplete}
               emptyTitle="Nothing kept yet"
               emptyBody="Run a generator and press Keep on a result — the images you keep stay here."
               emptyAction={
