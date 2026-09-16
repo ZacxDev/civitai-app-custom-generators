@@ -105,7 +105,11 @@ export const INCOMPLETE_NOTICE =
  * enum. Read the enum, not that comment.
  *
  * 🔴 `Rescan` IS THE ONE THAT CHANGES WHAT THIS COMPONENT CAN PROMISE, because
- * it is entered FROM `Scanned`: a rescan follows a completed scan and the image
+ * it CAN be entered from `Scanned` — not only from `Scanned`, which is the
+ * weaker and sufficient claim: the moderator tool's stuck sweep moves `Pending`
+ * rows there too (`apps/moderator/.../ingestion.service.ts` `rescanStuckImages`,
+ * whose `stuckWhere()` selects `ingestion = 'Pending'`). What matters here is
+ * the `Scanned` route, because a rescan follows a completed scan and the image
  * keeps its earlier verdict (civitai's own words in
  * `src/components/Image/Remix/__tests__/remix.utils.test.ts`, which also notes a
  * re-ingestion sweep can put a large slice of the catalogue there at once). The
