@@ -112,10 +112,26 @@ export interface BrowseProps {
   /**
    * The viewer's KEPT runs — durable civitai image ids they chose to keep, across
    * every generator. Drives the "My gallery" tab, which is the app's answer to
-   * "why would I come back?": before this, nothing a viewer made here outlived
-   * the tab it was made in.
+   * "why would I come back?". Not because the images would otherwise be lost —
+   * they go to the viewer's Civitai feed either way — but because the feed is an
+   * undifferentiated stream that knows nothing about this app: which generator
+   * made an image, which button, what was typed. This tab is the only place that
+   * link exists, and the only one inside the block.
    */
   keptRuns?: KeptRun[];
+  /**
+   * `keptRuns` is a PREFIX — the store read hit its one-page horizon. Threaded to
+   * the gallery so it discloses that instead of presenting the page as the set.
+   */
+  keptTruncated?: boolean;
+  /**
+   * The kept-runs read FAILED. 🔴 Not the same fact as "no kept runs", and the
+   * difference is the whole reason this prop exists: rendering the gallery's
+   * empty state over a failed read tells a viewer who has kept things that they
+   * have not, which reads as data loss caused by this app. Set ⇒ the panel says
+   * the load failed and offers `onRetry`, and the empty state is NOT shown.
+   */
+  keptError?: string | null;
   /** Per-viewer gated image read for the gallery. Required alongside `keptRuns`. */
   getImages?: (imageIds: number[]) => Promise<BlockGatedImage[]>;
   /**
@@ -140,7 +156,7 @@ interface VoteState {
 }
 
 export function Browse(props: BrowseProps) {
-  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, getImages, onOpenGeneratorKey, onRetry } = props;
+  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, keptTruncated = false, keptError = null, getImages, onOpenGeneratorKey, onRetry } = props;
   const [tab, setTab] = useState<Tab>('discover');
   // Motion gate for the chrome Browse owns directly (draft cards). Cards rendered
   // by PublishedCard/IntroPanel read it themselves.
@@ -610,9 +626,13 @@ export function Browse(props: BrowseProps) {
 
       {/* 🔴 MY GALLERY — what the app gives you back. Discover is other people's
           generators and "My generators" is the things you built; neither is the
-          thing you MADE. Before this tab, running a generator produced images
-          that lived in an in-session queue and were gone on the next Back, so
-          there was no answer to "why open this app again?". */}
+          thing you MADE. The images themselves do reach the viewer's Civitai
+          feed (every submit is tagged `'civitai'`), so this is not a rescue from
+          data loss — it is the only surface that keeps an image ATTACHED to the
+          generator that produced it, and the only end-state that lives where the
+          run happened. Before it there was no answer to "why open this app
+          again?"; the feed cannot be one, because it cannot tell you the app
+          was ever involved. */}
       {tab === 'kept' && galleryAvailable && (
         <div role="tabpanel" id="panel-kept" aria-labelledby="tab-kept" tabIndex={0}>
           <Stack gap={10} data-testid="kept-list">
@@ -632,12 +652,32 @@ export function Browse(props: BrowseProps) {
                 {openGeneratorError}
               </Alert>
             )}
+            {/* 🔴 A FAILED READ IS NOT AN EMPTY GALLERY. With no runs to show
+                the gallery would render "Nothing kept yet" — a confident claim
+                about the viewer's history built on a read that never returned —
+                so the failure REPLACES it rather than sitting above it. With
+                runs already in hand (a keep made this session) the list is real
+                but possibly short, so the alert rides above it instead. */}
+            {keptError && (
+              <Alert color="warning" data-testid="kept-load-error">
+                <Stack gap={8}>
+                  <span>{keptError}</span>
+                  <Group>
+                    <Button size="sm" variant="light" data-testid="kept-load-retry" onClick={onRetry}>
+                      Try again
+                    </Button>
+                  </Group>
+                </Stack>
+              </Alert>
+            )}
+            {!(keptError && keptCells.length === 0) && (
             <KeptGallery
               data-testid="browse-kept-gallery"
               runs={keptCells}
               c={c}
               getImages={getImages!}
               withAttribution
+              truncated={keptTruncated}
               emptyTitle="Nothing kept yet"
               emptyBody="Run a generator and press Keep on a result — the images you keep stay here."
               emptyAction={
@@ -649,6 +689,7 @@ export function Browse(props: BrowseProps) {
                 if (url) setKeptLightbox({ cell, url });
               }}
             />
+            )}
           </Stack>
         </div>
       )}

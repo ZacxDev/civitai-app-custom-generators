@@ -146,6 +146,12 @@ export interface RunnerProps {
   /** Kept runs already recorded FOR THIS GENERATOR, newest-kept first. */
   keptRuns?: KeptRun[];
   /**
+   * The underlying store read hit its one-page horizon, so this generator's runs
+   * were filtered out of a PREFIX of the viewer's history. The count below and
+   * the grid are both short in that case, and the gallery says so.
+   */
+  keptTruncated?: boolean;
+  /**
    * Per-viewer gated image read, for rendering the kept gallery. Required
    * alongside `keptRuns` — ids without a resolver render nothing.
    */
@@ -158,7 +164,7 @@ export interface RunnerProps {
 }
 
 export function Runner(props: RunnerProps) {
-  const { config, sharedContentKey, headerUrl, c, canGenerate, buzzBalance, onRequestConsent, uploadSourceImage, estimate, submit, poll, onBack, onTopUp, onBalanceRefresh, onOpenInGenerator, onCopyImageLink, keepOutputs, onKeepRun, keptRuns, getImages, rehydrateNotice, preview = false } = props;
+  const { config, sharedContentKey, headerUrl, c, canGenerate, buzzBalance, onRequestConsent, uploadSourceImage, estimate, submit, poll, onBack, onTopUp, onBalanceRefresh, onOpenInGenerator, onCopyImageLink, keepOutputs, onKeepRun, keptRuns, keptTruncated = false, getImages, rehydrateNotice, preview = false } = props;
   const analytics = props.analytics ?? noopAnalytics;
   const motion = useMotion();
 
@@ -967,10 +973,12 @@ export function Runner(props: RunnerProps) {
 
                     {/* 🔴 THE OUTCOME RAIL — the app's terminal. A run used to end
                         at a thumbnail in a queue that documented itself as
-                        in-session, so the whole loop produced nothing that
-                        outlived the tab. "Keep" turns these outputs into durable,
-                        server-scanned civitai images recorded in the viewer's own
-                        gallery below.
+                        in-session: the images still reached the viewer's Civitai
+                        feed (the note below says so, and it is true), but the app
+                        itself held nothing afterwards. "Keep" is what gives the
+                        block its own record — durable, server-scanned civitai
+                        images, attributed to this generator, in the viewer's own
+                        gallery below and reopenable from here.
 
                         Keep is the PRIMARY action and sits first; the per-image
                         "⧉ Copy link 1 / 2 / 3" row that used to live here (one
@@ -1097,6 +1105,7 @@ export function Runner(props: RunnerProps) {
               runs={keptRuns}
               c={c}
               getImages={getImages}
+              truncated={keptTruncated}
               emptyTitle="Nothing kept yet"
               emptyBody="Keep a generation and it will be here next time."
               onOpenCell={openKeptLightbox}

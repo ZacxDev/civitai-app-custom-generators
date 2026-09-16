@@ -18,9 +18,12 @@ export const ANALYTICS_EVENTS = {
    * A succeeded run's outputs were KEPT — published into durable civitai `Image`
    * rows and recorded in the viewer's own gallery. This is the app's terminal, so
    * it is the event that answers "did the run end somewhere?": a
-   * `generation_submitted` with no matching `generation_kept` is a viewer who
-   * spent Buzz and walked away with nothing that outlived the tab, which is the
-   * behaviour this pass exists to change.
+   * `generation_submitted` with no matching `generation_kept` is a viewer whose
+   * run ended nowhere IN THIS APP. Their images are not lost — every submit is
+   * tagged `'civitai'`, so they land in the site's generation feed — but the app
+   * kept no record: nothing attributed to the generator that made them, nothing
+   * to reopen from inside the block, nothing to come back here for. That is the
+   * gap this pass exists to close.
    */
   GENERATION_KEPT: 'generation_kept',
   /** A viewer up-voted / removed their up-vote on a published generator. */

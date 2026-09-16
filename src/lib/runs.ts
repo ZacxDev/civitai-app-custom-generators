@@ -2,12 +2,19 @@
 // App Blocks KV store (`useAppStorage`, scope `apps:storage:write`, already
 // granted). Sibling of `lib/drafts.ts`, same store, a different key namespace.
 //
-// 🔴 WHY THIS EXISTS — the app had no terminal. The Runner's output queue
-// documented itself as in-session ("a Back/reload clears it") and was guarded by
-// `beforeunload`, so the loop was: press a stranger's button → spend real Buzz →
-// get a 120px thumbnail → navigate away → it is gone. Nothing the viewer made
-// survived the tab. An app whose entire output evaporates has produced nothing a
-// person can come back for, and that is a usefulness defect, not a styling one.
+// 🔴 WHY THIS EXISTS — the app had no terminal OF ITS OWN. Be precise about what
+// was and was not lost, because the app's own reassurance copy is TRUE: the host
+// tags every generation submit `'civitai'` (civitai's own
+// `src/server/services/orchestrator/workflows.ts`) and the site's generation feed
+// reads back on that tag, so the images from a run do outlive the tab — on
+// civitai.com, in an undifferentiated stream, stripped of every fact this app
+// knows about them. What evaporated was everything the APP held: the Runner's
+// output queue documented itself as in-session ("a Back/reload clears it") and
+// was guarded by `beforeunload`, so pressing a stranger's button and spending
+// real Buzz left the block with no record that it had happened — no way back to
+// the image from inside the app, no link between the image and the generator
+// that made it, and nothing to come back to the app FOR. This module is the
+// app-side record: durable, attributed, and readable where the run happened.
 //
 // 🔴 WHAT MAKES THE RECORD DURABLE IS THE IMAGE ID, NOT THE URL, and the
 // distinction is the whole design. A workflow snapshot's `imageUrls` are
@@ -38,10 +45,21 @@ export const KEPT_PREFIX = 'kept:';
 
 /**
  * How many kept runs a single `list()` enumerates. The per-viewer KV is paginated
- * and this app does not page the gallery, so this is a real horizon: past it, the
- * gallery shows the newest {@link KEPT_LIST_LIMIT} and says so rather than
- * silently presenting a prefix as the whole set — the same honesty rule the
- * Discover board already applies to its own one-page read.
+ * and this app does not page the gallery, so this is a real horizon — and
+ * {@link listKeptRuns} reports whether it was reached so the gallery can SAY so
+ * rather than silently presenting a prefix as the whole set. Same honesty rule
+ * the Discover board already applies to its own one-page read.
+ *
+ * 🔴 THE PAGE IS KEY-ORDERED, NOT RECENCY-ORDERED, AND THAT IS THE OPPOSITE OF
+ * WHAT IT LOOKS LIKE. The host lists `ORDER BY key` ascending and pages forward
+ * with `key > cursor` (apps router `storage.list`), and `newId('kept')` puts
+ * `Date.now().toString(36)` first in the id — a fixed-width base-36 stamp until
+ * ~2059 — so key order IS chronological order, ascending. The one page this app
+ * reads is therefore the viewer's **oldest** {@link KEPT_LIST_LIMIT} runs; the
+ * `keptAt` sort in {@link listKeptRuns} orders WITHIN that page and cannot
+ * recover what the page left out. Past the horizon it is the newest keeps that
+ * go missing, which is why the notice must not promise "the newest N" — an
+ * earlier version of this docblock did, and nothing in the code supplied it.
  */
 export const KEPT_LIST_LIMIT = 200;
 
@@ -91,27 +109,54 @@ export function isKeptRun(value: unknown): value is KeptRun {
   return r.imageIds.every((n) => typeof n === 'number' && Number.isFinite(n));
 }
 
+/**
+ * 🔴 THE GALLERY IS ADD-ONLY, DELIBERATELY AND KNOWINGLY. There is no
+ * `deleteKeptRun` — one existed and was cut in the round-0 audit because its only
+ * caller was its own test, and a helper proved out by nothing but itself is not
+ * coverage. So a viewer can keep an image and cannot un-keep it. That is a real
+ * gap, named here rather than left to be discovered: it closes when a Remove
+ * control ships in `components/KeptGallery.tsx` with a test that drives it, and
+ * the check is mechanical — that control exists on `main`, or it does not.
+ */
 export async function saveKeptRun(store: DraftStore, run: KeptRun): Promise<void> {
   await store.set(keptKey(run.id), run);
 }
 
-export async function deleteKeptRun(store: DraftStore, id: string): Promise<boolean> {
-  const res = await store.delete(keptKey(id));
-  return res.deleted;
+/**
+ * One page of kept runs, plus whether the store had more to give.
+ *
+ * `truncated` is the host's own signal, not a guess: `list()` returns a
+ * `nextCursor` if and only if the page FILLED (apps router `storage.list`), so a
+ * cursor means "there may be more", never "there is definitely more" — a store
+ * holding exactly {@link KEPT_LIST_LIMIT} runs also fills its page. The UI copy
+ * is worded for that: it hedges rather than asserting a count the app cannot see.
+ */
+export interface KeptRunPage {
+  runs: KeptRun[];
+  /** The page filled, so runs past {@link KEPT_LIST_LIMIT} may exist unread. */
+  truncated: boolean;
 }
 
 /**
- * Every kept run this viewer holds, newest-kept first.
+ * One page of the kept runs this viewer holds, newest-kept first WITHIN the page.
  *
  * 🔴 Malformed rows are dropped silently and the rest are returned. A single bad
  * blob must not empty the gallery — the failure mode of the alternative is "all
  * your kept images vanished", which is indistinguishable to the viewer from data
  * loss.
+ *
+ * 🔴 Rejects rather than resolving empty when the store read fails. An empty list
+ * and a failed list are different facts and the gallery renders them differently
+ * — collapsing them here is what made a failed read say "you haven't kept
+ * anything yet", the one sentence this module exists to prevent.
  */
-export async function listKeptRuns(store: DraftStore): Promise<KeptRun[]> {
-  const { keys } = await store.list({ prefix: KEPT_PREFIX, limit: KEPT_LIST_LIMIT });
+export async function listKeptRuns(store: DraftStore): Promise<KeptRunPage> {
+  const { keys, nextCursor } = await store.list({ prefix: KEPT_PREFIX, limit: KEPT_LIST_LIMIT });
   const rows = await Promise.all(keys.map((k) => store.get<unknown>(k.key)));
-  return rows.filter(isKeptRun).sort((a, b) => b.keptAt - a.keptAt);
+  return {
+    runs: rows.filter(isKeptRun).sort((a, b) => b.keptAt - a.keptAt),
+    truncated: nextCursor != null,
+  };
 }
 
 /** The kept runs made with one published generator, newest first. */

@@ -285,6 +285,21 @@ export function App({ deps: depsOverride }: AppProps = {}) {
    * keep having silently failed.
    */
   const [keptRuns, setKeptRuns] = useState<KeptRun[]>([]);
+  /**
+   * The kept-runs read hit its one-page horizon (see `lib/runs.ts`), so
+   * `keptRuns` is a prefix of the viewer's history rather than the whole of it.
+   */
+  const [keptTruncated, setKeptTruncated] = useState(false);
+  /**
+   * 🔴 The kept-runs read FAILED — a DIFFERENT fact from "no kept runs", and
+   * keeping them apart is the whole point of this state. This catch used to be
+   * empty on the reasoning that "the gallery renders its own empty state": it
+   * does, and that empty state says *"Nothing kept yet"*, so a viewer whose read
+   * failed was told their history was gone. `KeptGallery`'s own `readError`
+   * covers a failed `getImages`, not a failed LIST, so nothing downstream could
+   * have caught it either.
+   */
+  const [keptError, setKeptError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -339,16 +354,30 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   useEffect(() => {
     if (!ready || !viewer) {
       setKeptRuns([]);
+      setKeptTruncated(false);
+      setKeptError(null);
       return;
     }
     let cancelled = false;
     (async () => {
       try {
-        const runs = await listKeptRuns(depsRef.current.drafts);
-        if (!cancelled) setKeptRuns(runs);
+        const page = await listKeptRuns(depsRef.current.drafts);
+        if (!cancelled) {
+          setKeptRuns(page.runs);
+          setKeptTruncated(page.truncated);
+          setKeptError(null);
+        }
       } catch {
-        // Non-fatal and deliberately quiet: a failed gallery read must not take
-        // down Browse or the Runner. The gallery renders its own empty state.
+        // 🔴 Non-fatal but NOT silent. It must not take down Browse or the
+        // Runner — hence no `setError` — but the gallery cannot infer this from
+        // an empty list, so it is stated. The host's message is deliberately not
+        // rendered: it is untrusted text, and the viewer-facing fact is the same
+        // either way.
+        if (!cancelled) {
+          setKeptRuns([]);
+          setKeptTruncated(false);
+          setKeptError('Couldn’t load your kept images just now.');
+        }
       }
     })();
     return () => {
@@ -759,6 +788,8 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             onReport={handleReport}
             coverUrlFor={coverUrlFor}
             keptRuns={keptRuns}
+            keptTruncated={keptTruncated}
+            keptError={keptError}
             getImages={deps.getImages}
             onOpenGeneratorKey={openPublishedByKey}
             onRetry={reload}
@@ -813,6 +844,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             // about provenance, so an unpublished draft (no shared key) correctly
             // shows none rather than borrowing another generator's images.
             keptRuns={runsForGenerator(keptRuns, running.sharedContentKey)}
+            keptTruncated={keptTruncated}
             getImages={deps.getImages}
             analytics={deps.analytics}
             rehydrateNotice={rehydrateNotice}

@@ -1,10 +1,12 @@
 // THE APP'S OWN GALLERY — the kept images a viewer has made here, resolved back
 // through the host's per-viewer moderation gate.
 //
-// 🔴 THIS IS THE TERMINAL THE APP DID NOT HAVE. A run used to end at a thumbnail
-// in a queue documented as in-session, so "press a stranger's button and spend
-// Buzz" produced nothing that outlived the tab. A kept run stores durable civitai
-// `Image` ids (see lib/runs.ts); this component is where they come back.
+// 🔴 THIS IS THE TERMINAL THE APP DID NOT HAVE. Precisely: a run used to end at a
+// thumbnail in a queue documented as in-session, and while the images did reach
+// the viewer's Civitai feed, the APP retained nothing — no record that the run
+// happened, no link from an image to the generator that made it, no way back to
+// it from inside the block. A kept run stores durable civitai `Image` ids (see
+// lib/runs.ts); this component is where they come back, attributed.
 //
 // 🔴 IDS IN, URLS RESOLVED PER RENDER — never the other way round. `getImages`
 // applies THIS viewer's browsing-level clamp server-side at read time, so a kept
@@ -25,13 +27,36 @@ import type { BlockGatedImage } from '@civitai/app-sdk/blocks';
 import { Alert, Button, Group, Stack } from '@civitai/blocks-react/ui';
 import { Image } from '@civitai/components-react';
 
-import { chunkImageIds, keptImageFeed, type KeptImageCell, type KeptRun } from '../lib/runs.js';
+import {
+  KEPT_LIST_LIMIT,
+  chunkImageIds,
+  keptImageFeed,
+  type KeptImageCell,
+  type KeptRun,
+} from '../lib/runs.js';
 import { CLASS_LIFT, motionClass, useMotion } from '../motion.js';
 import { elevate, metaText, radius, type Palette } from '../theme.js';
 import { EmptyState } from './EmptyState.js';
 
 /** Cells revealed per "Show more" click. */
 export const GALLERY_PAGE_SIZE = 12;
+
+/**
+ * 🔴 SAID, NOT IMPLIED. The store read is ONE page (see `lib/runs.ts`), so a
+ * viewer past the horizon is looking at a prefix of what they kept — and because
+ * that page is KEY-ordered, i.e. oldest-first, the runs it drops are their most
+ * RECENT ones. An unlabelled grid is then an authoritative wrong answer about
+ * their own history, the same failure the Discover board discloses for its own
+ * one-page read.
+ *
+ * Every word is bounded by what the code can see. It does not say "the newest N"
+ * (the page is the oldest N), and it does not assert more exist: the host emits
+ * its `nextCursor` whenever the page FILLED, so a viewer holding exactly
+ * {@link KEPT_LIST_LIMIT} runs trips this with nothing missing. "May not be
+ * here" is true in both readings; "are missing" would not be.
+ */
+export const TRUNCATION_NOTICE =
+  `Showing ${KEPT_LIST_LIMIT} kept runs — this app reads one page at a time, so your most recent keeps may not be here.`;
 
 /** What the gate said about one id, or `'missing'` when it said nothing at all. */
 export type GatedState = BlockGatedImage | { imageId: number; status: 'missing' };
@@ -49,6 +74,13 @@ export interface KeptGalleryProps {
   onOpenCell: (cell: KeptImageCell, url: string | null) => void;
   /** Show each cell's "Made with <generator>" caption (off inside one generator). */
   withAttribution?: boolean;
+  /**
+   * The store read hit its page limit, so `runs` is a prefix of what the viewer
+   * kept. Renders {@link TRUNCATION_NOTICE}; see its docblock for why the wording
+   * hedges. Passing it is how the caller keeps the grid from asserting that this
+   * is everything.
+   */
+  truncated?: boolean;
   'data-testid'?: string;
 }
 
@@ -61,6 +93,7 @@ export function KeptGallery({
   emptyAction,
   onOpenCell,
   withAttribution = false,
+  truncated = false,
   'data-testid': testId = 'kept-gallery',
 }: KeptGalleryProps) {
   const motion = useMotion();
@@ -116,9 +149,22 @@ export function KeptGallery({
     };
   }, [wantedIds, getImages]);
 
+  // 🔴 Rendered ALONGSIDE whatever the grid shows, never instead of it — and in
+  // the empty branch too. A page that filled with rows this app cannot parse
+  // yields an empty feed with more still unread, and "nothing kept yet" is the
+  // worst available reading of that state.
+  const notice = truncated ? (
+    <span style={metaText} role="status" data-testid={`${testId}-truncated`}>
+      {TRUNCATION_NOTICE}
+    </span>
+  ) : null;
+
   if (feed.length === 0) {
     return (
-      <EmptyState data-testid={`${testId}-empty`} title={emptyTitle} body={emptyBody} action={emptyAction} />
+      <Stack gap={10} data-testid={testId}>
+        {notice}
+        <EmptyState data-testid={`${testId}-empty`} title={emptyTitle} body={emptyBody} action={emptyAction} />
+      </Stack>
     );
   }
 
@@ -126,6 +172,7 @@ export function KeptGallery({
 
   return (
     <Stack gap={10} data-testid={testId}>
+      {notice}
       {readError && (
         <Alert color="warning" data-testid={`${testId}-error`}>
           {readError}

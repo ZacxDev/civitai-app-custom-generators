@@ -19,7 +19,9 @@ import { Harness } from '@civitai/blocks-react/testing';
 
 import { App, type AppDeps } from '../App.js';
 import { buildPublishPayload, newButton, newGenerator } from '../lib/generator.js';
-import { listKeptRuns } from '../lib/runs.js';
+import type { DraftStore } from '../lib/drafts.js';
+import { KEPT_PREFIX, listKeptRuns } from '../lib/runs.js';
+import { TRUNCATION_NOTICE } from './KeptGallery.js';
 import { fakeShared, immediateSleep, memoryDraftStore, mockWorkflow } from '../test-helpers.js';
 import type { SharedListItem } from '@civitai/blocks-react';
 
@@ -134,7 +136,7 @@ describe('the terminal, end to end', () => {
 
     // 🔴 It is genuinely PERSISTED, not merely in React state: the same store the
     // app writes through holds a well-formed record.
-    const stored = await listKeptRuns(drafts);
+    const stored = (await listKeptRuns(drafts)).runs;
     expect(stored).toHaveLength(1);
     expect(stored[0]).toMatchObject({
       imageIds: [777],
@@ -208,6 +210,112 @@ describe('the terminal, end to end', () => {
     expect(await screen.findByTestId('browse-kept-gallery-empty')).toHaveTextContent(/nothing kept yet/i);
     await userEvent.click(screen.getByTestId('kept-empty-discover'));
     expect(await screen.findByTestId('discover-list')).toBeInTheDocument();
+  });
+});
+
+/**
+ * 🔴 A FAILED READ IS NOT AN EMPTY GALLERY, AND THE APP USED TO SAY IT WAS. The
+ * kept-runs load swallowed every error on the note that "the gallery renders its
+ * own empty state" — it does, and that state reads *"Nothing kept yet"*. So the
+ * one viewer who must never see that sentence, the one whose keeps exist but
+ * could not be read, was the one guaranteed to. `KeptGallery`'s own `readError`
+ * does not cover this: it is raised by a failed `getImages`, and a failed LIST
+ * never reaches it.
+ */
+describe('a failed kept-runs read', () => {
+  /**
+   * Fails the KEPT list for the first `failures` calls; every other operation —
+   * drafts included — is untouched, so the rest of the app behaves normally and
+   * the assertion below is about the gallery alone.
+   */
+  function failingKeptList(inner: DraftStore, failures = Number.POSITIVE_INFINITY): DraftStore {
+    let calls = 0;
+    return {
+      ...inner,
+      async list(opts) {
+        if (opts?.prefix === KEPT_PREFIX) {
+          calls += 1;
+          if (calls <= failures) throw new Error('kv unavailable');
+        }
+        return inner.list(opts);
+      },
+    };
+  }
+
+  it('says the load failed and does NOT claim the viewer has kept nothing', async () => {
+    setup({ drafts: failingKeptList(memoryDraftStore()) });
+    await userEvent.click(await screen.findByTestId('tab-kept'));
+
+    expect(await screen.findByTestId('kept-load-error')).toHaveTextContent(
+      /couldn’t load your kept images/i,
+    );
+    // 🔴 The whole point: the confident wrong sentence is absent, not merely
+    // accompanied by a warning.
+    expect(screen.queryByTestId('browse-kept-gallery-empty')).not.toBeInTheDocument();
+    expect(screen.queryByText(/nothing kept yet/i)).not.toBeInTheDocument();
+  });
+
+  it('offers a retry that re-reads the store', async () => {
+    setup({ drafts: failingKeptList(memoryDraftStore(), 1) });
+    await userEvent.click(await screen.findByTestId('tab-kept'));
+    await userEvent.click(await screen.findByTestId('kept-load-retry'));
+
+    // Second read succeeds, so the failure clears and the honest empty state —
+    // now actually earned — is what the viewer gets.
+    await waitFor(() => expect(screen.queryByTestId('kept-load-error')).not.toBeInTheDocument());
+    expect(await screen.findByTestId('browse-kept-gallery-empty')).toBeInTheDocument();
+  });
+
+  it('NEGATIVE CONTROL: a store that reads fine raises nothing', async () => {
+    setup();
+    await userEvent.click(await screen.findByTestId('tab-kept'));
+    await screen.findByTestId('browse-kept-gallery-empty');
+    expect(screen.queryByTestId('kept-load-error')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * 🔴 THE ONE-PAGE HORIZON, DISCLOSED. `listKeptRuns` reads a single KV page, so
+ * past `KEPT_LIST_LIMIT` the grid is a prefix of the viewer's history presented
+ * as the whole of it — and because the page is key-ordered it is their most
+ * RECENT keeps that are missing. `runs.test.ts` drives the real fill condition
+ * against the host's list contract; this asserts the signal survives the whole
+ * chain (`listKeptRuns` → `App` → `Browse` → `KeptGallery`) and reaches a
+ * viewer, which no unit test can see.
+ */
+describe('the kept-runs horizon is disclosed in the gallery', () => {
+  /** The host emits `nextCursor` when its page fills; inject that signal directly. */
+  function moreToRead(inner: DraftStore): DraftStore {
+    return {
+      ...inner,
+      async list(opts) {
+        const res = await inner.list(opts);
+        return opts?.prefix === KEPT_PREFIX ? { ...res, nextCursor: 'more' } : res;
+      },
+    };
+  }
+
+  it('says so when the store had more than one page', async () => {
+    setup({ drafts: moreToRead(memoryDraftStore()) });
+    await runAndKeep();
+    await userEvent.click(screen.getByTestId('runner-back'));
+    await screen.findByTestId('browse');
+    await userEvent.click(await screen.findByTestId('tab-kept'));
+
+    const notice = await screen.findByTestId('browse-kept-gallery-truncated');
+    expect(notice).toHaveTextContent(TRUNCATION_NOTICE);
+    // 🔴 Alongside the grid, never instead of it — a disclosure that hides the
+    // images is a worse answer than the one it replaced.
+    expect(await screen.findByTestId('kept-cell')).toBeInTheDocument();
+  });
+
+  it('NEGATIVE CONTROL: a single-page store discloses nothing', async () => {
+    setup();
+    await runAndKeep();
+    await userEvent.click(screen.getByTestId('runner-back'));
+    await userEvent.click(await screen.findByTestId('tab-kept'));
+    await screen.findByTestId('kept-cell');
+    expect(screen.queryByTestId('browse-kept-gallery-truncated')).not.toBeInTheDocument();
   });
 });
 

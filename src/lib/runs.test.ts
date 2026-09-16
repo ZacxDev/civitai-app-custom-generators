@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest';
 import type { DraftStore } from './drafts.js';
 import {
   GATED_READ_MAX_IDS,
+  KEPT_LIST_LIMIT,
   KEPT_PREFIX,
   chunkImageIds,
-  deleteKeptRun,
   isKeptRun,
   keptImageCount,
   keptImageFeed,
@@ -16,7 +16,16 @@ import {
   type KeptRun,
 } from './runs.js';
 
-/** Minimal in-memory store (mirrors the per-viewer KV contract, as drafts.test does). */
+/**
+ * In-memory store built to the HOST's list contract, not to a convenient
+ * approximation of it — the truncation behaviour under test is entirely a
+ * property of that contract, so a fake that ignores `limit` could only ever
+ * confirm what the fake was written to believe. Mirrored from civitai's
+ * `apps.router` `storage.list`:
+ *   - `ORDER BY key` ascending, paging forward with `key > cursor`;
+ *   - `nextCursor` emitted IF AND ONLY IF the page filled (`rows.length ===
+ *     limit`), so it means "there may be more", never "there is more".
+ */
 function memoryDraftStore(): DraftStore {
   const map = new Map<string, unknown>();
   return {
@@ -34,7 +43,19 @@ function memoryDraftStore(): DraftStore {
     },
     async list(opts) {
       const prefix = opts?.prefix ?? '';
-      return { keys: [...map.keys()].filter((k) => k.startsWith(prefix)).map((key) => ({ key })) };
+      const after = opts?.cursor ? Buffer.from(opts.cursor, 'base64').toString('utf8') : '';
+      const limit = opts?.limit ?? 1000;
+      const all = [...map.keys()]
+        .filter((k) => k.startsWith(prefix) && k > after)
+        .sort();
+      const page = all.slice(0, limit);
+      return {
+        keys: page.map((key) => ({ key })),
+        nextCursor:
+          page.length === limit
+            ? Buffer.from(page[page.length - 1], 'utf8').toString('base64')
+            : undefined,
+      };
     },
   };
 }
@@ -63,16 +84,10 @@ describe('kept-run storage', () => {
     await saveKeptRun(store, run({ id: 'a', keptAt: 1 }));
     await saveKeptRun(store, run({ id: 'c', keptAt: 3 }));
     await saveKeptRun(store, run({ id: 'b', keptAt: 2 }));
-    const listed = await listKeptRuns(store);
-    expect(listed.map((r) => r.id)).toEqual(['c', 'b', 'a']);
-  });
-
-  it('deletes by id and reports whether anything went', async () => {
-    const store = memoryDraftStore();
-    await saveKeptRun(store, run({ id: 'a' }));
-    expect(await deleteKeptRun(store, 'a')).toBe(true);
-    expect(await deleteKeptRun(store, 'a')).toBe(false);
-    expect(await listKeptRuns(store)).toEqual([]);
+    const page = await listKeptRuns(store);
+    expect(page.runs.map((r) => r.id)).toEqual(['c', 'b', 'a']);
+    // A short page is the WHOLE set: nothing to disclose.
+    expect(page.truncated).toBe(false);
   });
 
   /**
@@ -88,7 +103,75 @@ describe('kept-run storage', () => {
     await store.set(keptKey('null'), null);
     await store.set(keptKey('empty'), run({ id: 'empty', imageIds: [] }));
     const listed = await listKeptRuns(store);
-    expect(listed.map((r) => r.id)).toEqual(['good']);
+    expect(listed.runs.map((r) => r.id)).toEqual(['good']);
+  });
+});
+
+/**
+ * 🔴 THE HORIZON IS REAL AND THE GALLERY HAS TO SAY SO. The read is ONE page, so
+ * past `KEPT_LIST_LIMIT` the grid is a prefix of the viewer's history — and an
+ * unlabelled prefix is an authoritative wrong answer about what they made. The
+ * docblock on `KEPT_LIST_LIMIT` claimed this was already disclosed for three
+ * commits while `listKeptRuns` returned a bare array and threw the signal away.
+ */
+describe('the one-page horizon is REPORTED, not hidden', () => {
+  /** `n` runs whose KEYS ascend with time, exactly as `newId('kept')` mints them. */
+  async function seed(store: DraftStore, n: number) {
+    for (let i = 0; i < n; i++) {
+      // Zero-padded so lexicographic key order IS chronological order, which is
+      // what the real id's leading base-36 `Date.now()` stamp gives us.
+      await saveKeptRun(store, run({ id: `k${String(i).padStart(5, '0')}`, keptAt: 1_000 + i }));
+    }
+  }
+
+  it('reports truncated when the page FILLS, and hands back exactly one page', async () => {
+    const store = memoryDraftStore();
+    await seed(store, KEPT_LIST_LIMIT + 1);
+    const page = await listKeptRuns(store);
+    expect(page.runs).toHaveLength(KEPT_LIST_LIMIT);
+    expect(page.truncated).toBe(true);
+  });
+
+  /**
+   * 🔴 THE PAGE IS THE OLDEST RUNS, NOT THE NEWEST — which is the exact claim the
+   * old docblock made ("shows the newest KEPT_LIST_LIMIT"). The host lists
+   * `ORDER BY key` ascending and the id's leading timestamp makes key order
+   * chronological, so the run that falls off the page is the viewer's most
+   * RECENT one. The `keptAt` sort orders within the page and cannot recover it.
+   * This is why the notice hedges instead of promising a recency window.
+   */
+  it('drops the NEWEST run past the horizon, not the oldest', async () => {
+    const store = memoryDraftStore();
+    await seed(store, KEPT_LIST_LIMIT + 1);
+    const { runs } = await listKeptRuns(store);
+    const ids = runs.map((r) => r.id);
+    // The last one kept — highest keptAt, highest key — is NOT in the page…
+    expect(ids).not.toContain(`k${String(KEPT_LIST_LIMIT).padStart(5, '0')}`);
+    // …while the very first one is.
+    expect(ids).toContain('k00000');
+    // Within the page it IS newest-first, which is the only ordering the sort
+    // can deliver.
+    expect(ids[0]).toBe(`k${String(KEPT_LIST_LIMIT - 1).padStart(5, '0')}`);
+  });
+
+  /**
+   * 🔴 The boundary, and the one place the flag's two spellings disagree. The
+   * host emits `nextCursor` iff the page FILLED, so a store holding exactly
+   * `KEPT_LIST_LIMIT` runs reports truncated with nothing actually missing —
+   * which is why the copy says "may not be here" rather than asserting a loss.
+   * A fixture one row short of the limit cannot see this at all.
+   */
+  it('a page that fills EXACTLY still reports truncated — the signal is "may be more"', async () => {
+    const store = memoryDraftStore();
+    await seed(store, KEPT_LIST_LIMIT);
+    const page = await listKeptRuns(store);
+    expect(page.runs).toHaveLength(KEPT_LIST_LIMIT);
+    expect(page.truncated).toBe(true);
+
+    const short = memoryDraftStore();
+    await seed(short, KEPT_LIST_LIMIT - 1);
+    // NEGATIVE CONTROL: one row fewer and the flag must go the other way.
+    expect((await listKeptRuns(short)).truncated).toBe(false);
   });
 });
 
