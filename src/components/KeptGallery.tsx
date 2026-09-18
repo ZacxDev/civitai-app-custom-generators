@@ -27,7 +27,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { BlockCreatePostResult, BlockGatedImage } from '@civitai/app-sdk/blocks';
 import { CreatePostError, useCreatePostFromApp } from '@civitai/blocks-react';
-import { Alert, Badge, Button, Group, Modal, NumberInput, Stack, TextInput, Textarea } from '@civitai/blocks-react/ui';
+import { Alert, Badge, Button, Group, Modal, Stack, TextInput, Textarea } from '@civitai/blocks-react/ui';
 import { Image } from '@civitai/components-react';
 
 import {
@@ -36,12 +36,8 @@ import {
   isRatingPending,
   parseModelVersionId,
   parsePostTags,
-  postTextLooksLinky,
-  POST_DETAIL_MAX,
   POST_MAX_IMAGES,
-  POST_MAX_TAGS,
   POST_SIGN_IN_NOTICE,
-  POST_TITLE_MAX,
   type PostFailure,
 } from '../lib/post.js';
 import { chunkImageIds, keptImageFeed, type KeptImageCell, type KeptRun } from '../lib/runs.js';
@@ -267,18 +263,24 @@ export const POST_TAGS_NOTICE =
 /**
  * What the composer says about the optional model-version attach.
  *
- * The attach is gated hard server-side (the version must be published and
+ * 🔴 IT NAMES THE PASTE, BECAUSE THE NUMBER IS NOT OBTAINABLE FROM IN HERE. A
+ * block runs in a sandboxed iframe with no view of the parent page: the only
+ * place a viewer ever sees a `modelVersionId` is the query parameter on a
+ * civitai model page. Asking for the bare number is asking for a value they have
+ * no way to look up, so the field asks for the link they can copy.
+ *
+ * The attach itself is gated hard server-side (the version must be published and
  * public, and an app may not attach to its own publisher's models), and a
  * refusal comes back as a free-text server message. The control is rendered
  * unconditionally and the refusal is surfaced verbatim — hiding the control when
  * it might be refused would mean guessing a server rule this app cannot see.
  */
 export const POST_ATTACH_NOTICE =
-  'Civitai decides whether the attach is allowed, and will say so if it turns it down.';
+  'Paste the link to the model version, or its id. Civitai decides whether the attach is allowed, and will say so if it turns it down.';
 
-/** Warning shown when civitai is likely to refuse the copy for containing a link. */
-export const POST_LINK_WARNING =
-  'Civitai refuses links in a post’s title or description. Leaving it in will get the post turned down.';
+/** Shown under the attach field when nothing usable could be read out of it. */
+export const POST_ATTACH_UNPARSED =
+  'That doesn’t look like a model version. Paste the page link from Civitai — the one with ?modelVersionId= in it.';
 
 /** What the composer says about the host's own confirm, so it is not a surprise. */
 export const POST_CONSENT_NOTICE =
@@ -495,7 +497,7 @@ export function KeptGallery({
   const [postTitle, setPostTitle] = useState('');
   const [postDetail, setPostDetail] = useState('');
   const [postTagsText, setPostTagsText] = useState('');
-  const [postVersionId, setPostVersionId] = useState<number | null>(null);
+  const [postVersionId, setPostVersionId] = useState('');
   const [postFailure, setPostFailure] = useState<PostFailure | null>(null);
   const [posted, setPosted] = useState<BlockCreatePostResult | null>(null);
   const [urlCopied, setUrlCopied] = useState(false);
@@ -516,8 +518,7 @@ export function KeptGallery({
 
   const tags = useMemo(() => parsePostTags(postTagsText), [postTagsText]);
   const modelVersionId = parseModelVersionId(postVersionId);
-  const versionLooksWrong = postVersionId != null && modelVersionId === undefined;
-  const linky = postTextLooksLinky(postTitle) || postTextLooksLinky(postDetail);
+  const versionLooksWrong = postVersionId.trim().length > 0 && modelVersionId === undefined;
 
   function toggleSelected(imageId: number) {
     setPostFailure(null);
@@ -561,7 +562,7 @@ export function KeptGallery({
       setPostTitle('');
       setPostDetail('');
       setPostTagsText('');
-      setPostVersionId(null);
+      setPostVersionId('');
       leaveSelection();
     } catch (err: unknown) {
       // 🔴 `timedOut` IS READ OFF THE ERROR, NOT OFF THE MESSAGE. It is set
@@ -863,10 +864,15 @@ export function KeptGallery({
         </Group>
       )}
 
-      {/* THE COMPOSER. Everything it collects is ADVISORY — the server bounds it,
-          screens it, and resolves tags against existing tags only — so the fields
-          are bounded here to stop the viewer BEFORE the host's consent dialog,
-          and every refusal is still rendered when one gets past them. */}
+      {/* THE COMPOSER. Everything it collects is ADVISORY — the SDK's own request
+          type says so, the server bounds it, screens it, and resolves tags
+          against existing tags only — so NOTHING here mirrors a server bound.
+          The server names each of those refusals in plain English and the
+          `kept-post-error` banner below renders a free-text refusal verbatim,
+          which is a sentence the viewer can act on; a `maxLength` is a silent
+          keyboard stop that goes wrong in the direction nobody can recover
+          from. The one thing bounded client-side is the image SELECTION, which
+          is an affordance rather than a copied validation. */}
       <Modal
         opened={posting && composerOpen}
         onClose={() => setComposerOpen(false)}
@@ -883,18 +889,16 @@ export function KeptGallery({
           <TextInput
             label="Title"
             data-testid="kept-post-title"
-            maxLength={POST_TITLE_MAX}
             value={postTitle}
-            description={`Optional. Up to ${POST_TITLE_MAX} characters.`}
+            description="Optional."
             onChange={(e) => setPostTitle(e.currentTarget.value)}
           />
           <Textarea
             label="Description"
             data-testid="kept-post-detail"
-            maxLength={POST_DETAIL_MAX}
             minRows={3}
             value={postDetail}
-            description={`Optional. Up to ${POST_DETAIL_MAX} characters.`}
+            description="Optional."
             onChange={(e) => setPostDetail(e.currentTarget.value)}
           />
           <TextInput
@@ -902,7 +906,7 @@ export function KeptGallery({
             data-testid="kept-post-tags"
             value={postTagsText}
             placeholder="portrait, neon"
-            description={`Optional, comma separated, up to ${POST_MAX_TAGS}. ${POST_TAGS_NOTICE}`}
+            description={`Optional, comma separated. ${POST_TAGS_NOTICE}`}
             onChange={(e) => setPostTagsText(e.currentTarget.value)}
           />
           {tags.length > 0 && (
@@ -914,21 +918,15 @@ export function KeptGallery({
               ))}
             </Group>
           )}
-          <NumberInput
+          <TextInput
             label="Add to a model’s gallery (optional)"
             data-testid="kept-post-version"
-            min={1}
-            step={1}
             value={postVersionId}
+            placeholder="https://civitai.com/models/…?modelVersionId=…"
             description={POST_ATTACH_NOTICE}
-            error={versionLooksWrong ? 'A model version id is a whole number above zero.' : undefined}
-            onChange={setPostVersionId}
+            error={versionLooksWrong ? POST_ATTACH_UNPARSED : undefined}
+            onChange={(e) => setPostVersionId(e.currentTarget.value)}
           />
-          {linky && (
-            <Alert color="warning" data-testid="kept-post-link-warning">
-              {POST_LINK_WARNING}
-            </Alert>
-          )}
           {postFailure && postFailure.kind === 'notice' && (
             <Alert color="warning" data-testid="kept-post-error" data-source={postFailure.source}>
               {postFailure.message}

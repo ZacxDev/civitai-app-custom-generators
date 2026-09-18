@@ -7,13 +7,17 @@
 // bounds are, and what a viewer is told when the host refuses — live here as
 // total functions rather than inside a component.
 //
-// 🔴 THE SERVER IS THE AUTHORITY AND THIS FILE IS NOT. Every bound below mirrors
-// one in civitai's `block-post.logic.ts`, and mirroring it buys exactly one
-// thing: the viewer is stopped BEFORE the host's consent dialog opens rather
-// than after they have agreed to something the server then refuses. A copy of a
-// server rule is never a proof of it, so nothing here may be relied on as a
-// guarantee — the refusal path is implemented in full for the cases these
-// bounds are meant to make rare.
+// 🔴 THE SERVER IS THE AUTHORITY AND THIS FILE DELIBERATELY COPIES ALMOST NONE
+// OF IT. The SDK's `BlockCreatePostRequest` calls every text field ADVISORY and
+// publishes no numeric bound for any of them — it publishes bounds precisely
+// where it wants a block to enforce one — so a mirrored `title`/`detail`/tag
+// ceiling here would be a second authority that can only drift, and it would
+// drift in the UNRECOVERABLE direction: a hard keyboard stop with no sentence
+// attached. The server names each of those refusals in plain English
+// (`title exceeds 255 characters`, `detail may not contain links`, …) and this
+// app renders a free-text refusal verbatim, so the server's own words are the
+// mechanism. The one bound that survives is {@link POST_MAX_IMAGES}, which is a
+// live selection affordance rather than a copied validation.
 
 import { isCreatePostErrorCode } from '@civitai/blocks-react';
 import type { BlockCreatePostHostError, BlockGatedImage } from '@civitai/app-sdk/blocks';
@@ -31,28 +35,25 @@ import type { BlockCreatePostHostError, BlockGatedImage } from '@civitai/app-sdk
  */
 export const POST_MAX_IMAGES = 20;
 
-/** Hard ceiling on applied tags (civitai `BLOCK_POST_MAX_TAGS`). */
-export const POST_MAX_TAGS = 5;
-
-/** Server-side `title` bound (civitai `BLOCK_POST_TITLE_MAX`). */
-export const POST_TITLE_MAX = 255;
-
-/** Server-side `detail` bound (civitai `BLOCK_POST_DETAIL_MAX`). */
-export const POST_DETAIL_MAX = 2000;
-
 /**
  * `true` when the gate returned an image NOTHING HAS RATED YET.
  *
- * 🔴 TWO SPELLINGS, BOTH CHECKED, AND NEITHER IS "ASSUME G". Since
+ * 🔴 THE FLAG ONLY, BECAUSE THE HOST STATES THE BICONDITIONAL. Since
  * civitai/civitai#4895 the author's own unrated image comes back `visible` with
- * `ratingPending: true` and NO `nsfwLevel` / `contentRating` — the absence IS
- * the fix, and a block that dereferenced those fields would read `undefined`.
- * `nsfwLevel === undefined` is checked alongside the flag so a host that ever
- * omits the flag while still omitting the rating is still read as pending, and a
- * default rating is never substituted for a missing one.
+ * `ratingPending: true` and NO `nsfwLevel` / `contentRating`, and
+ * `block-gated-images.service.ts` says so in as many words — *"Absent ⇔
+ * `ratingPending`"* — setting the two mutually exclusively.
+ *
+ * 🔴 AND AN ABSENT-RATING DISJUNCT WOULD FAIL THE UNRECOVERABLE WAY. This
+ * predicate makes a cell PERMANENTLY unselectable behind copy that promises the
+ * wait ends ("Still being rated — you can post this once that finishes"), with
+ * no escape hatch. Reading a missing `nsfwLevel` as pending would apply that
+ * dead end to any image whose rating the host ever omits for some other reason —
+ * and it would buy nothing, because this app reads `nsfwLevel` nowhere, so
+ * there is no default rating anywhere for it to be substituted into.
  */
 export function isRatingPending(image: BlockGatedImage): boolean {
-  return image.status === 'visible' && (image.ratingPending === true || image.nsfwLevel === undefined);
+  return image.status === 'visible' && image.ratingPending === true;
 }
 
 /**
@@ -78,14 +79,19 @@ export function isPostableGatedState(
 
 /**
  * Split the composer's comma-separated tag field into the names that will be
- * SENT — trimmed, de-duplicated case-insensitively (first spelling wins), and
- * capped at {@link POST_MAX_TAGS}.
+ * SENT — trimmed, de-duplicated case-insensitively (first spelling wins).
  *
  * ⚠️ WHAT COMES BACK IS NOT WHAT IS APPLIED. The server resolves these against
  * EXISTING tags only: a name matching no tag is DROPPED, never minted. So this
  * is the request, and the host's consent screen — which renders the server's
  * resolution, not these strings — is the answer. The UI must not promise the
  * viewer their tags will be applied.
+ *
+ * 🔴 NO COUNT CEILING HERE, DELIBERATELY. civitai's `block-post.logic.ts`
+ * TRUNCATES an over-long tag list (`if (out.length >= BLOCK_POST_MAX_TAGS)
+ * break`) rather than refusing the post, so a client cap could only duplicate a
+ * silent truncation — there is no refusal for it to get in front of, and the
+ * consent screen shows the viewer the list that was actually resolved.
  */
 export function parsePostTags(raw: string): string[] {
   const out: string[] = [];
@@ -97,48 +103,52 @@ export function parsePostTags(raw: string): string[] {
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(name);
-    if (out.length === POST_MAX_TAGS) break;
   }
   return out;
+}
+
+/**
+ * The ONE spelling of a version id that a viewer can actually obtain: the
+ * `modelVersionId` query parameter civitai puts on a model page's URL.
+ *
+ * Anchored to a `?`/`&` so it cannot match a word inside prose, and terminated
+ * so a longer parameter value is read whole rather than truncated to its prefix.
+ */
+const MODEL_VERSION_QUERY_RE = /[?&]modelVersionId=(\d+)(?:[&#]|$)/;
+
+/** A version id is a positive safe integer or it is not a version id. */
+function asVersionId(n: number): number | undefined {
+  return Number.isSafeInteger(n) && n > 0 ? n : undefined;
 }
 
 /**
  * Normalise the optional model-version gallery attach into the value that will
  * be SENT, or `undefined` to omit the key entirely.
  *
- * Returns `undefined` for anything that is not a positive safe integer — an
- * empty field, a cleared control, a half-typed or pasted string — so the request
- * omits `modelVersionId` rather than carrying a `NaN`, a `0` or a float the host
- * would have to reject. Takes `number | string | null` because the composer's
- * control is numeric while a paste is not.
+ * 🔴 A PASTED URL IS THE PRIMARY INPUT, NOT A FALLBACK. There is nowhere inside
+ * a sandboxed block iframe to obtain a raw `modelVersionId`: the only place a
+ * viewer ever sees one is the `?modelVersionId=` parameter on a civitai model
+ * page, i.e. in their address bar. A control that accepts only a bare number is
+ * therefore a control asking for a value nobody has, which is why the composer's
+ * field is a text field and this takes a string.
+ *
+ * 🔴 CONSERVATIVE BY CONSTRUCTION — IT PARSES OR IT REFUSES, IT NEVER GUESSES.
+ * A model URL carries a modelId in its path as well, and attaching to the wrong
+ * id is a refusal the viewer cannot diagnose, so only the explicitly-named
+ * `modelVersionId` parameter is read. Everything else — an empty field, a
+ * half-typed paste, a model link with no version parameter, a float, a zero —
+ * returns `undefined`, so the request omits the key rather than carrying
+ * something the host has to reject.
  */
 export function parseModelVersionId(raw: string | number | null | undefined): number | undefined {
   if (raw == null) return undefined;
-  if (typeof raw === 'number') return Number.isSafeInteger(raw) && raw > 0 ? raw : undefined;
+  if (typeof raw === 'number') return asVersionId(raw);
   const trimmed = raw.trim();
-  if (!/^\d+$/.test(trimmed)) return undefined;
-  const n = Number(trimmed);
-  return Number.isSafeInteger(n) && n > 0 ? n : undefined;
-}
-
-/**
- * A copy of civitai's `URL_LIKE_RE` — the predicate their `validateBlockPostText`
- * refuses `title` and `detail` on.
- *
- * 🔴 ADVISORY ONLY, AND DELIBERATELY NOT A BLOCK. The server owns this refusal
- * and forwards it as a free-text message, which this app renders verbatim. A
- * client-side hard block would be a second, drifting authority: this copy can be
- * narrower than theirs (a homoglyph domain, an exotic TLD) and could also become
- * WIDER than theirs on a future server relaxation, at which point it would
- * refuse text civitai would have accepted. So it warns and lets the viewer
- * proceed.
- */
-const URL_LIKE_RE =
-  /(?:https?:\/\/|www\.|\b[a-z0-9-]+\.(?:com|net|org|io|co|ai|xyz|app|dev|me|ru|cn|gg|link|click|top|site|online|shop)\b)/i;
-
-/** `true` when civitai is likely to refuse this text for containing a link. */
-export function postTextLooksLinky(text: string): boolean {
-  return URL_LIKE_RE.test(text);
+  if (trimmed.length === 0) return undefined;
+  if (/^\d+$/.test(trimmed)) return asVersionId(Number(trimmed));
+  const match = MODEL_VERSION_QUERY_RE.exec(trimmed);
+  if (match == null) return undefined;
+  return asVersionId(Number(match[1]));
 }
 
 /**

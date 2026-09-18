@@ -321,3 +321,131 @@ describe('posting is opt-in', () => {
     expect(cell).not.toHaveAttribute('aria-pressed');
   });
 });
+
+/**
+ * 🔴 THE ONLY BOUND THIS APP STILL MIRRORS, TESTED AS BEHAVIOUR RATHER THAN AS A
+ * LITERAL. The previous guard was `expect(POST_MAX_IMAGES).toBe(20)`, which
+ * compares two spellings of one value inside one repo, edited in one commit — it
+ * could not detect the server drift its own comment claimed to catch, and it
+ * read as coverage while providing none. What is worth pinning is that the cap
+ * DOES something: selection stops, and the viewer is told why rather than being
+ * left with a cell that silently refuses to tick. A mutant that raises the
+ * constant lets the 21st cell select and fails here; one that lowers it changes
+ * the count and the sentence.
+ *
+ * Twenty-one images, so the boundary is crossed rather than landed on.
+ */
+describe('the image cap is an affordance, not a silent refusal', () => {
+  const capIds = Array.from({ length: 21 }, (_, i) => 600 + i);
+
+  it('stops selection at twenty and says so', async () => {
+    const user = userEvent.setup();
+    render(
+      <KeptGallery
+        {...props({ runs: [run({ id: 'kcap', imageIds: capIds })], posting: true })}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getAllByTestId('kept-cell').length).toBeGreaterThan(0));
+    // The grid pages at GALLERY_PAGE_SIZE; one "Show more" puts all 21 on screen.
+    await user.click(await screen.findByTestId('kept-gallery-show-more'));
+    await waitFor(() => expect(screen.getAllByTestId('kept-cell')).toHaveLength(21));
+    await waitFor(() =>
+      expect(screen.getAllByTestId('kept-cell')[20]).toHaveAttribute('data-postable', 'true'),
+    );
+
+    await user.click(screen.getByTestId('kept-post-start'));
+    const cells = screen.getAllByTestId('kept-cell');
+    for (const cell of cells.slice(0, 20)) await user.click(cell);
+
+    expect(screen.getByTestId('kept-post-count')).toHaveTextContent('20 selected');
+    expect(screen.getByTestId('kept-post-cap')).toHaveTextContent(
+      'That’s the most Civitai takes in one post (20). Deselect one to swap it out.',
+    );
+
+    // The 21st is inert rather than a control that ticks and then loses the
+    // image at the host's confirm.
+    const overflow = cells[20];
+    expect(overflow).toBeDisabled();
+    await user.click(overflow);
+    expect(screen.getByTestId('kept-post-count')).toHaveTextContent('20 selected');
+  });
+
+  /**
+   * NEGATIVE CONTROL: the notice is a fact about the cap, not about selection
+   * mode. Nineteen selected and the twentieth cell still takes a click.
+   */
+  it('says nothing, and blocks nothing, below the cap', async () => {
+    const user = userEvent.setup();
+    render(
+      <KeptGallery
+        {...props({ runs: [run({ id: 'kcap', imageIds: capIds })], posting: true })}
+      />,
+    );
+
+    await user.click(await screen.findByTestId('kept-gallery-show-more'));
+    await waitFor(() => expect(screen.getAllByTestId('kept-cell')).toHaveLength(21));
+    await waitFor(() =>
+      expect(screen.getAllByTestId('kept-cell')[19]).toHaveAttribute('data-postable', 'true'),
+    );
+
+    await user.click(screen.getByTestId('kept-post-start'));
+    const cells = screen.getAllByTestId('kept-cell');
+    for (const cell of cells.slice(0, 19)) await user.click(cell);
+
+    expect(screen.getByTestId('kept-post-count')).toHaveTextContent('19 selected');
+    expect(screen.queryByTestId('kept-post-cap')).not.toBeInTheDocument();
+    expect(cells[19]).not.toBeDisabled();
+  });
+});
+
+/**
+ * 🔴 THE ATTACH FIELD HAS TO BE FILLABLE FROM INSIDE A SANDBOXED IFRAME. It used
+ * to be a `NumberInput` asking for a raw `modelVersionId` — a number that exists
+ * nowhere a block can see it. The only place a viewer meets one is the
+ * `?modelVersionId=` parameter in their address bar on a civitai model page, so
+ * the field has to take that paste; a number input cannot even receive it.
+ */
+describe('the model-version attach takes what a viewer can actually copy', () => {
+  async function openComposer(user: ReturnType<typeof userEvent.setup>) {
+    render(<KeptGallery {...props({ posting: true })} />);
+    const cell = await screen.findByTestId('kept-cell');
+    await waitFor(() => expect(cell).toHaveAttribute('data-postable', 'true'));
+    await user.click(screen.getByTestId('kept-post-start'));
+    await user.click(screen.getByTestId('kept-cell'));
+    await user.click(screen.getByTestId('kept-post-open'));
+    return await screen.findByTestId('kept-post-version');
+  }
+
+  it('accepts a pasted model-version link without complaint', async () => {
+    const user = userEvent.setup();
+    const field = await openComposer(user);
+
+    await user.click(field);
+    await user.paste('https://civitai.com/models/133005?modelVersionId=782002');
+
+    expect(field).toHaveValue('https://civitai.com/models/133005?modelVersionId=782002');
+    expect(field).not.toHaveAttribute('aria-invalid', 'true');
+    expect(document.body.textContent).not.toContain('That doesn’t look like a model version');
+  });
+
+  it('names the paste it wants when it cannot read one', async () => {
+    const user = userEvent.setup();
+    const field = await openComposer(user);
+
+    await user.type(field, 'the neon one');
+
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    // The sentence is wired to the field itself (`aria-describedby` → the error
+    // node), so a viewer using a screen reader hears it on the control rather
+    // than as loose text somewhere on the page.
+    const described = field.getAttribute('aria-describedby') ?? '';
+    const errorNode = described
+      .split(/\s+/)
+      .map((id) => document.getElementById(id))
+      .find((el) => el?.getAttribute('role') === 'alert');
+    expect(errorNode).toHaveTextContent(
+      'That doesn’t look like a model version. Paste the page link from Civitai — the one with ?modelVersionId= in it.',
+    );
+  });
+});

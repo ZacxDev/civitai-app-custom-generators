@@ -209,6 +209,49 @@ describe('creating a post from My gallery, across the real host bridge', () => {
     expect(screen.queryByTestId('kept-post-success')).not.toBeInTheDocument();
   });
 
+  /**
+   * 🔴 THE TRADE THIS APP DELIBERATELY TAKES, DRIVEN END TO END. The composer
+   * used to carry `maxLength={255}` on the title, which stops the keyboard dead
+   * with no sentence attached and goes wrong in the direction nobody can
+   * recover from — if civitai ever relaxes the bound (their own comment says it
+   * is deliberately STRICTER than the native post schema, which has no `.max()`
+   * at all) the field silently refuses text the server would have taken, and
+   * there is no message to read and nothing to click. So the field is unbounded
+   * and the SERVER's sentence is the mechanism.
+   *
+   * Both halves are asserted here: a 300-character title is accepted by the
+   * control IN FULL (the old `maxLength` would have truncated it to 255, so this
+   * assertion is red on the pre-change tree), and the refusal civitai actually
+   * sends for it reaches the viewer verbatim, in the composer, next to the field
+   * they can now edit.
+   */
+  it('takes a title past the server bound, then renders the server’s own refusal', async () => {
+    const user = userEvent.setup();
+    // The literal sentence civitai's `validateBlockPostText` returns.
+    const serverMessage = 'title exceeds 255 characters';
+    await renderGallery({ gatedImages: [rated], keptIds: [RATED_ID], createPostError: serverMessage });
+
+    const composer = await openComposer(user);
+    const title = within(composer).getByTestId('kept-post-title');
+    const long = 'n'.repeat(300);
+    await user.click(title);
+    await user.paste(long);
+
+    // No keyboard stop: the control holds all 300 characters.
+    expect(title).toHaveValue(long);
+
+    await user.click(within(composer).getByTestId('kept-post-submit'));
+
+    const err = await screen.findByTestId('kept-post-error');
+    expect(err).toHaveAttribute('data-source', 'server');
+    expect(err).toHaveTextContent('title exceeds 255 characters');
+    // Still in the composer, with the title still there to shorten — the
+    // recoverable direction.
+    expect(screen.getByTestId('kept-post-composer')).toBeInTheDocument();
+    expect(within(composer).getByTestId('kept-post-title')).toHaveValue(long);
+    expect(screen.queryByTestId('kept-post-success')).not.toBeInTheDocument();
+  });
+
   it('gives each CLOSED host refusal code its own sentence', async () => {
     const user = userEvent.setup();
     await renderGallery({ gatedImages: [rated], keptIds: [RATED_ID], createPostError: 'review-mode' });

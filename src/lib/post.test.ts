@@ -19,29 +19,15 @@ import {
   isRatingPending,
   parseModelVersionId,
   parsePostTags,
-  postTextLooksLinky,
-  POST_DETAIL_MAX,
-  POST_MAX_IMAGES,
-  POST_MAX_TAGS,
-  POST_TITLE_MAX,
 } from './post.js';
 
-describe('the bounds this app mirrors from the server', () => {
-  /**
-   * 🔴 LITERALS, READ OFF civitai's `block-post.logic.ts`. A client-side bound is
-   * only worth having if it is the SAME bound — its entire job is to stop the
-   * viewer BEFORE the host's consent dialog rather than after they have agreed
-   * to something the server then refuses. A drifted copy is worse than none: it
-   * either refuses posts civitai would accept, or lets through the refusal it
-   * was added to prevent.
-   */
-  it('matches the server ceilings exactly', () => {
-    expect(POST_MAX_IMAGES).toBe(20);
-    expect(POST_MAX_TAGS).toBe(5);
-    expect(POST_TITLE_MAX).toBe(255);
-    expect(POST_DETAIL_MAX).toBe(2000);
-  });
-});
+// 🔴 THERE IS NO `expect(POST_MAX_IMAGES).toBe(20)` HERE, AND ITS ABSENCE IS
+// DELIBERATE. That assertion compares two spellings of one value inside one
+// repo, edited in one commit, so it cannot detect the server drift its own
+// comment claimed to catch — and a test that reads as coverage while providing
+// none is worse than no test, because it stops anyone looking. The cap is
+// covered where it is observable instead: `KeptGallery` stops selection at it
+// and says so, which is behaviour a mutation to the constant would break.
 
 describe('parsePostTags', () => {
   it('trims, drops empties, and keeps the order typed', () => {
@@ -52,10 +38,14 @@ describe('parsePostTags', () => {
     expect(parsePostTags('Portrait, portrait, PORTRAIT, neon')).toEqual(['Portrait', 'neon']);
   });
 
-  it('caps at five, which is the server cap', () => {
-    // Six distinct names in, five out — and the SIXTH is the one dropped, not an
-    // arbitrary member, so an off-by-one that kept the tail would fail here.
-    expect(parsePostTags('a,b,c,d,e,f')).toEqual(['a', 'b', 'c', 'd', 'e']);
+  /**
+   * 🔴 NO CLIENT CAP, AND THAT IS THE ASSERTION. civitai TRUNCATES an over-long
+   * tag list rather than refusing the post, so a cap here could only duplicate a
+   * silent truncation — there is no refusal to get in front of, and the host's
+   * consent screen shows the viewer the list it actually resolved.
+   */
+  it('does not truncate the list — the server does that, silently', () => {
+    expect(parsePostTags('a,b,c,d,e,f,g')).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'g']);
   });
 
   it('returns nothing for an empty or whitespace field', () => {
@@ -71,26 +61,68 @@ describe('parseModelVersionId', () => {
     expect(parseModelVersionId(' 7 ')).toBe(7);
   });
 
+  /**
+   * 🔴 THE PATH THE VIEWER ACTUALLY HAS. Nothing inside a sandboxed block iframe
+   * hands a viewer a raw `modelVersionId`; the only place the number is visible
+   * is the query parameter on a civitai model page, i.e. their address bar. So a
+   * paste of that URL is the primary input, and each of these is a real address
+   * bar shape — the bare version link, one carrying more parameters after it,
+   * and one with a fragment.
+   */
+  it('reads the id out of a pasted model URL', () => {
+    expect(parseModelVersionId('https://civitai.com/models/133005?modelVersionId=782002')).toBe(782002);
+    expect(parseModelVersionId('  https://civitai.com/models/133005?modelVersionId=782002  ')).toBe(782002);
+    expect(parseModelVersionId('https://civitai.com/models/133005?modelVersionId=782002&dialog=x')).toBe(
+      782002,
+    );
+    expect(parseModelVersionId('https://civitai.com/models/133005?dialog=x&modelVersionId=782002')).toBe(
+      782002,
+    );
+    expect(parseModelVersionId('https://civitai.com/models/133005?modelVersionId=782002#gallery')).toBe(
+      782002,
+    );
+  });
+
+  /**
+   * 🔴 IT PARSES OR IT REFUSES — IT NEVER GUESSES. A model URL carries a modelId
+   * in its PATH as well, and `133005` is not a version id: attaching to the
+   * wrong id is a server refusal the viewer has no way to diagnose, so a link
+   * with no `modelVersionId` parameter is malformed input rather than a hint.
+   */
+  it('refuses a model link that names no version, rather than guessing the path id', () => {
+    expect(parseModelVersionId('https://civitai.com/models/133005')).toBeUndefined();
+    expect(parseModelVersionId('https://civitai.com/models/133005/neon-portrait')).toBeUndefined();
+    // Not anchored to a `?`/`&`, so a word in prose cannot be mined for an id.
+    expect(parseModelVersionId('the modelVersionId=782002 one')).toBeUndefined();
+  });
+
   it('omits the key rather than sending something the host must reject', () => {
     // Each of these would otherwise travel as `modelVersionId` and be refused
     // server-side, costing the viewer the whole post for a typo in an OPTIONAL
     // field.
-    for (const bad of [null, undefined, '', '   ', '0', 0, -3, 1.5, '1.5', 'abc', '12a', NaN, Infinity]) {
+    for (const bad of [
+      null,
+      undefined,
+      '',
+      '   ',
+      '0',
+      0,
+      -3,
+      1.5,
+      '1.5',
+      'abc',
+      '12a',
+      NaN,
+      Infinity,
+      'https://civitai.com/models/1?modelVersionId=0',
+      'https://civitai.com/models/1?modelVersionId=abc',
+      'https://civitai.com/models/1?modelVersionId=',
+      // Past `Number.MAX_SAFE_INTEGER`, so `Number()` would round it to a
+      // different id than the one pasted.
+      '90071992547409910',
+    ]) {
       expect(parseModelVersionId(bad as number | string | null | undefined)).toBeUndefined();
     }
-  });
-});
-
-describe('postTextLooksLinky', () => {
-  it('spots the forms a block would actually reach for', () => {
-    expect(postTextLooksLinky('see https://example.com/x')).toBe(true);
-    expect(postTextLooksLinky('www.example.org')).toBe(true);
-    expect(postTextLooksLinky('grab it at mysite.io today')).toBe(true);
-  });
-
-  it('leaves ordinary prose alone', () => {
-    expect(postTextLooksLinky('A neon portrait, rendered at 1024 by 1024.')).toBe(false);
-    expect(postTextLooksLinky('')).toBe(false);
   });
 });
 
@@ -114,11 +146,16 @@ describe('what may be put in a post', () => {
     height: 512,
   };
   /**
-   * The same state spelled ONLY by the missing rating — no `ratingPending` flag.
-   * Checked because a default rating must never be substituted for an absent
-   * one, whichever way the host spells the absence.
+   * A `visible` image the host returned WITHOUT the flag and without a rating.
+   *
+   * 🔴 POSTABLE, AND THAT IS THE ASSERTION. The gate states the biconditional —
+   * *"Absent ⇔ `ratingPending`"* — so this shape is not the pending one, and
+   * reading it as pending would put the cell behind copy promising a wait that
+   * never ends ("you can post this once that finishes"), permanently, with no
+   * escape hatch. The flag is the spelling; an absent rating is not a second
+   * one.
    */
-  const pendingByOmission: BlockGatedImage = {
+  const unflaggedNoRating: BlockGatedImage = {
     imageId: 3,
     status: 'visible',
     url: 'https://img.example/3.jpg',
@@ -127,11 +164,15 @@ describe('what may be put in a post', () => {
   };
   const hidden: BlockGatedImage = { imageId: 4, status: 'hidden' };
 
-  it('reads an unrated own-image as pending, by either spelling', () => {
+  it('reads an unrated own-image as pending, by the flag the host sets', () => {
     expect(isRatingPending(pending)).toBe(true);
-    expect(isRatingPending(pendingByOmission)).toBe(true);
     expect(isRatingPending(rated)).toBe(false);
     expect(isRatingPending(hidden)).toBe(false);
+  });
+
+  it('does NOT strand an image whose rating is merely absent', () => {
+    expect(isRatingPending(unflaggedNoRating)).toBe(false);
+    expect(isPostableGatedState(unflaggedNoRating)).toBe(true);
   });
 
   /**
@@ -143,7 +184,6 @@ describe('what may be put in a post', () => {
   it('refuses a `visible` image that nothing has rated yet', () => {
     expect(isPostableGatedState(rated)).toBe(true);
     expect(isPostableGatedState(pending)).toBe(false);
-    expect(isPostableGatedState(pendingByOmission)).toBe(false);
   });
 
   it('refuses everything that is not a `visible` image with a url', () => {
