@@ -140,11 +140,23 @@ export interface BrowseProps {
    */
   keptIncomplete?: boolean;
   /**
-   * The kept-runs read FAILED. 🔴 Not the same fact as "no kept runs", and the
-   * difference is the whole reason this prop exists: rendering the gallery's
-   * empty state over a failed read tells a viewer who has kept things that they
-   * have not, which reads as data loss caused by this app. Set ⇒ the panel says
-   * the load failed and offers `onRetry`, and the empty state is NOT shown.
+   * A viewer-facing sentence about the kept-run STORE, rendered over the gallery
+   * with `onRetry` beside it, and suppressing the empty state.
+   *
+   * 🔴 THE ORIGINATING FAULT IS A FAILED READ. Not the same fact as "no kept
+   * runs", and the difference is the whole reason this prop exists: rendering the
+   * gallery's empty state over a failed read tells a viewer who has kept things
+   * that they have not, which reads as data loss caused by this app.
+   *
+   * ⚠️ IT IS NO LONGER ONLY A READ, AND THIS DOC SAID IT WAS. `App` also sets it
+   * when a post landed but the durable PRUNE could not be written
+   * (`handlePostedImages`) — a *write* failure, where the list beside it is fully
+   * reliable and merely over-reports by the ids that could not be pruned. So this
+   * being set does NOT license treating `keptRuns` as untrustworthy: do not
+   * suppress or grey the grid on the strength of it. If a future caller needs
+   * behaviour that is right for one fault and wrong for the other, SPLIT THE
+   * CHANNEL rather than keying off this string — the two carry the same prop and
+   * different guarantees.
    */
   keptError?: string | null;
   /** Per-viewer gated image read for the gallery. Required alongside `keptRuns`. */
@@ -155,6 +167,45 @@ export interface BrowseProps {
    * of presenting a control that does nothing.
    */
   onOpenGeneratorKey?: (key: string) => boolean;
+  /**
+   * Offer the My-gallery post composer (`posts:write:self`), WITH somewhere for
+   * the durable removal to land. Absent ⇒ no post surface at all.
+   *
+   * 🔴 THIS TAB AND NOWHERE ELSE. My gallery is the viewer's WHOLE kept set and
+   * the surface they come to to look at what they made, so it is the one place
+   * where "post these" is the obvious next thing and where the grid emptying out
+   * afterwards is comprehensible. The Runner's kept strip is one generator's
+   * slice under a heading about that generator, so it deliberately does not get
+   * this — see `KeptGalleryProps.posting`.
+   */
+  posting?: {
+    /**
+     * The ids that joined a post, as the SERVER echoed them — the cue to delete
+     * them from the durable kept-run store.
+     *
+     * 🔴 CARRIED ON THE OPT-IN ITSELF, SO THE PAIR IS UNREPRESENTABLE. A posted
+     * image stops resolving for this app forever (the app-scoped read is
+     * conjoined with `postId IS NULL`), so a post that is not followed by a
+     * prune leaves a permanent *"No longer available"* tile and a run count that
+     * keeps counting it. See `removeKeptImages` in `lib/runs.ts`.
+     *
+     * ⚠️ THIS PROP USED TO BE TWO INDEPENDENT OPTIONALS — `canPost?: boolean`
+     * plus `onPosted?` — under a docblock asserting *"REQUIRED ALONGSIDE
+     * `canPost`, AND THE GALLERY'S OWN PROP SHAPE ENFORCES IT"*. It did not:
+     * `KeptGalleryProps` is a DIFFERENT type, and this component collapsed the
+     * pair itself (`canPost && onPosted ? { onPosted } : undefined`) before that
+     * shape was ever consulted, so the enforcement was asserted in prose and
+     * absent from the types. A round-2 audit mutated that line to the fail-open
+     * form `onPosted ?? (() => {})` — the round-0 defect restored — and the whole
+     * `dom` project stayed green. The pair is now ONE object, which the
+     * typechecker enforces at every call site and CI runs (`pnpm typecheck`).
+     */
+    onPosted: (imageIds: number[]) => void;
+  };
+  /** Route an anonymous viewer into the host sign-in flow (post refusal path). */
+  onRequestSignIn?: () => void;
+  /** Copy text to the clipboard; resolves `true` on success. Hands over a post url. */
+  copyToClipboard?: (text: string) => Promise<boolean>;
   onRetry: () => void;
 }
 
@@ -171,7 +222,7 @@ interface VoteState {
 }
 
 export function Browse(props: BrowseProps) {
-  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, keptTruncated = false, keptIncomplete = false, keptError = null, getImages, onOpenGeneratorKey, onRetry } = props;
+  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, keptTruncated = false, keptIncomplete = false, keptError = null, getImages, onOpenGeneratorKey, posting, onRequestSignIn, copyToClipboard, onRetry } = props;
   const [tab, setTab] = useState<Tab>('discover');
   // Motion gate for the chrome Browse owns directly (draft cards). Cards rendered
   // by PublishedCard/IntroPanel read it themselves.
@@ -672,7 +723,12 @@ export function Browse(props: BrowseProps) {
                 about the viewer's history built on a read that never returned —
                 so the failure REPLACES it rather than sitting above it. With
                 runs already in hand (a keep made this session) the list is real
-                but possibly short, so the alert rides above it instead. */}
+                but possibly short, so the alert rides above it instead.
+                ⚠️ The suppression is keyed on there being nothing to show, NOT
+                on the fault: `keptError` also carries the post-prune WRITE
+                failure (see the prop's own doc), where the list is reliable —
+                and that arm can never reach `keptCells.length === 0`, because a
+                rejected write puts its run back into `remaining`. */}
             {keptError && (
               <Alert color="warning" data-testid="kept-load-error">
                 <Stack gap={8}>
@@ -694,6 +750,23 @@ export function Browse(props: BrowseProps) {
               withAttribution
               truncated={keptTruncated}
               incomplete={keptIncomplete}
+              // 🔴 THE OPT-IN CARRIES THE DURABLE REMOVAL, AND IT IS PASSED
+              // THROUGH RATHER THAN ASSEMBLED HERE. `KeptGallery` does not own
+              // the kept-run store, so posting without a prune path is a
+              // permanent "No longer available" tile. This line used to build
+              // the pair out of two independent optionals and silently DEGRADE
+              // when only one arrived — `canPost && onPosted ? … : undefined` —
+              // which meant the gallery's prop shape was consulted after the
+              // decision had already been made, and a fail-open mutation of it
+              // was invisible to the whole suite. Both props are one object now,
+              // so the pair cannot come apart HERE — which is narrower than "no
+              // mistake is possible": a deliberately-written fallback (`posting
+              // ?? { onPosted: () => {} }`) still type-checks and still silently
+              // drops the prune. The type closes the ordinary call-site error,
+              // not that one.
+              posting={posting}
+              onRequestSignIn={onRequestSignIn}
+              copyToClipboard={copyToClipboard}
               emptyTitle="Nothing kept yet"
               emptyBody="Run a generator and press Keep on a result — the images you keep stay here."
               emptyAction={

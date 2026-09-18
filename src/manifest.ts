@@ -6,10 +6,11 @@
 // validates the FULL runtime shape, so to get a real `defineBlock` gate we
 // augment the source manifest to the full shape before validating.
 //
-// All six scopes (`ai:write:budgeted`, `buzz:read:self`, `apps:storage:read`,
-// `apps:storage:write`, `apps:storage:shared:read`, `apps:storage:shared:write`)
-// are members of BLOCK_SCOPES in @civitai/app-sdk (verified against 0.27), so
-// they validate directly.
+// All seven scopes (`ai:write:budgeted`, `buzz:read:self`, `apps:storage:read`,
+// `apps:storage:write`, `apps:storage:shared:read`, `apps:storage:shared:write`,
+// `posts:write:self`) are members of BLOCK_SCOPES in @civitai/app-sdk (the first
+// six verified against 0.27, `posts:write:self` against 0.42), so they validate
+// directly.
 
 import { defineBlock } from '@civitai/app-sdk/blocks';
 import type { BlockManifest } from '@civitai/app-sdk/blocks';

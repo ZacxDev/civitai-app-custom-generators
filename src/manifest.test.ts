@@ -9,7 +9,7 @@ describe('block.manifest.json', () => {
     expect(() => validateManifest()).not.toThrow();
   });
 
-  it('declares exactly the six scopes the app uses', () => {
+  it('declares exactly the seven scopes the app uses', () => {
     expect(manifest.scopes).toEqual([
       'ai:write:budgeted',
       'buzz:read:self',
@@ -17,7 +17,34 @@ describe('block.manifest.json', () => {
       'apps:storage:write',
       'apps:storage:shared:read',
       'apps:storage:shared:write',
+      'posts:write:self',
     ]);
+  });
+
+  /**
+   * 🔴 A SENSITIVE SCOPE WITHOUT A JUSTIFICATION IS REJECTED AT SUBMIT, NOT AT
+   * BUILD. `defineBlock` above is a SHAPE gate — it does not enforce the
+   * justification requirement (the schema says so in as many words: *"enforced
+   * imperatively by the manifest validator"*), so a manifest that declares
+   * `posts:write:self` and forgets the rationale typechecks, builds, tests green
+   * and is then turned down by the platform at the one point where the feedback
+   * loop is a human review round. That is exactly the shape of defect worth
+   * pinning locally.
+   *
+   * Asserted as a RELATIONSHIP over every declared scope rather than a list of
+   * the sensitive ones: this repo cannot see civitai's sensitivity table, and a
+   * copy of it here would rot silently the next time a scope is reclassified.
+   * Justifying all seven is cheap and cannot be wrong.
+   */
+  it('justifies every declared scope, with a justification for nothing else', () => {
+    const scopes = manifest.scopes as string[];
+    const justifications = manifest.scopeJustifications as Record<string, string>;
+    expect(Object.keys(justifications).sort()).toEqual([...scopes].sort());
+    for (const scope of scopes) {
+      // Non-empty and ≤500 chars — the schema's own bounds on each value.
+      expect(justifications[scope]!.trim().length).toBeGreaterThan(0);
+      expect(justifications[scope]!.length).toBeLessThanOrEqual(500);
+    }
   });
 
   it('is a generation-category page app', () => {

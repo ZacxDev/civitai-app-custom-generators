@@ -180,16 +180,172 @@ export function isKeptRun(value: unknown): value is KeptRun {
 }
 
 /**
- * 🔴 THE GALLERY IS ADD-ONLY, DELIBERATELY AND KNOWINGLY. There is no
- * `deleteKeptRun` — one existed and was cut in the round-0 audit because its only
- * caller was its own test, and a helper proved out by nothing but itself is not
- * coverage. So a viewer can keep an image and cannot un-keep it. That is a real
- * gap, named here rather than left to be discovered: it closes when a Remove
- * control ships in `components/KeptGallery.tsx` with a test that drives it, and
- * the check is mechanical — that control exists on `main`, or it does not.
+ * 🔴 THERE IS STILL NO VIEWER-FACING UN-KEEP, AND THIS BLOCK USED TO SAY THE
+ * STORE WAS ADD-ONLY FULL STOP. That is no longer true: {@link removeKeptImages}
+ * deletes from it, driven by a successful post (the one event that removes an
+ * image from this app's grid on the SERVER side, so the record here has to
+ * follow). What has not changed is the gap the old wording was really about — a
+ * viewer can keep an image and cannot decide, on its own, to un-keep it. That
+ * closes when a Remove control ships in `components/KeptGallery.tsx` with a test
+ * that drives it, and the check is mechanical — that control exists on `main`,
+ * or it does not.
  */
 export async function saveKeptRun(store: DraftStore, run: KeptRun): Promise<void> {
   await store.set(keptKey(run.id), run);
+}
+
+/**
+ * A partial failure of {@link removeKeptImages} — SOME of the store was
+ * corrected and some was not, with the runs as the store is BELIEVED to hold
+ * them attached so the caller can match its screen to the record.
+ *
+ * ⚠️ BELIEVED, NOT KNOWN. Read {@link KeptRemovalError.remaining} before acting
+ * on this: a rejected write is not proof the write did not land, so `remaining`
+ * can report a run as un-pruned that the store has in fact pruned. This
+ * paragraph is what an editor hover shows, which is why the caveat is repeated
+ * here rather than left to the field below.
+ */
+export class KeptRemovalError extends Error {
+  /**
+   * The kept runs as the store is BELIEVED to hold them, in the order the runs
+   * were given: a run whose rewrite RESOLVED appears rewritten, a run whose write
+   * REJECTED appears exactly as it was passed in, and a run whose deletion
+   * resolved is absent. Assigning this to the caller's state is what keeps the
+   * screen and the storage from disagreeing after a partial failure.
+   *
+   * ⚠️ BELIEVED, NOT KNOWN — A REJECTION IS NOT PROOF THE WRITE DID NOT LAND, and
+   * this block used to say flatly that these are "the runs as the STORE now holds
+   * them". `useAppStorage()`'s `set`/`delete` are RPCs over the postMessage
+   * bridge, so a `RequestTimeoutError` (or a dropped reply) rejects a write that
+   * the host may already have applied. In that case this list reports a run as
+   * un-pruned while the store has pruned it, and assigning it CAUSES the very
+   * disagreement the paragraph above says it prevents. The error is one-sided and
+   * benign: the screen over-reports what is kept, the viewer's own sentence
+   * already hedges with *"may still be listed"*, and the next kept-runs read
+   * corrects it. Same softening as the hydration-horizon bound on
+   * {@link removeKeptImages} — a trade, not a proof.
+   */
+  readonly remaining: KeptRun[];
+
+  constructor(message: string, remaining: KeptRun[]) {
+    super(message);
+    this.name = 'KeptRemovalError';
+    this.remaining = remaining;
+  }
+}
+
+/**
+ * Drop image ids from the viewer's kept runs — IN THE DURABLE STORE, not just on
+ * screen — and return the runs that remain, in the order they were given.
+ *
+ * 🔴 WHY THIS HAS TO EXIST, AND WHY A COMPONENT-LOCAL MASK IS NOT ENOUGH. civitai's
+ * app-scoped gated read is conjoined with `postId IS NULL`, so an image that
+ * joins a post STOPS RESOLVING for this app — permanently. Masking the ids in
+ * `KeptGallery`'s own state hides them for ONE mount: switch tabs, reload, come
+ * back tomorrow, and every posted id is back in the grid rendering *"No longer
+ * available"* forever, with the tab's own *"N images kept from M runs"* header
+ * still counting them. The record has to be corrected where it lives.
+ *
+ * 🔴 SCOPED TO THE NAMED IDS, NEVER TO THE RUN. A run is several images and a
+ * viewer may post one of them, so a run is REWRITTEN with the survivors rather
+ * than deleted — the key is deleted only when nothing is left, because
+ * {@link isKeptRun} rejects an empty `imageIds` and a row that fails it would be
+ * dropped silently on every later read anyway (a permanently-unreadable key,
+ * spending the viewer's per-app row quota for nothing).
+ *
+ * ⚠️ IT ONLY REACHES THE RUNS IT IS HANDED. This takes the caller's loaded set
+ * rather than walking the store, so an id living in a run outside
+ * {@link KEPT_LIST_LIMIT} is not pruned. Walking the whole store instead would
+ * spend a `get` per row to find rows that almost never exist.
+ *
+ * ⚠️ "ALMOST NEVER", NOT "CANNOT" — THIS PARAGRAPH USED TO CLAIM THE BOUND WAS
+ * AIRTIGHT. The old wording was *"the only way an id reaches a post is by being
+ * rendered, and the only runs that render are the ones in that set"*, which is
+ * true of the run holding the RENDERED id and false of a SECOND run holding the
+ * SAME id: the same image can legitimately sit in two kept runs (a re-keep of one
+ * output — the reason {@link chunkImageIds} de-duplicates, and a case this
+ * module's own suite covers), and the second copy may sit outside the hydration
+ * horizon. It then survives the prune and comes back as a dead tile. Reaching it
+ * takes more than {@link KEPT_LIST_LIMIT} kept runs AND a re-keep spanning that
+ * boundary, so the bound is still the right trade — but it is a trade, not a
+ * proof, and the residual is a permanently-unresolvable cell rather than nothing.
+ *
+ * 🔴 EVERY WRITE IS ATTEMPTED, AND A PARTIAL FAILURE IS REPORTED WITH WHAT
+ * DURABLY LANDED. A rejected write used to surface as a bare rejection: the
+ * caller learned "something failed" and nothing about WHICH runs were corrected,
+ * while the in-flight writes landed anyway — a half-corrected store the caller
+ * could not describe, so its screen and its storage silently disagreed. Now the
+ * failure carries the best available account of the store
+ * ({@link KeptRemovalError.remaining}) — resolved rewrites applied, rejected ones
+ * left at their pre-call contents, with the one case that account can still get
+ * wrong named on that field — so the caller can at least match the screen to the
+ * record and say so. There is no retry here: the write that failed is the
+ * viewer's own per-app storage, and a silent retry would hide the one fact worth
+ * reporting.
+ */
+
+export async function removeKeptImages(
+  store: DraftStore,
+  runs: readonly KeptRun[],
+  imageIds: readonly number[],
+): Promise<KeptRun[]> {
+  const drop = new Set(imageIds);
+  if (drop.size === 0) return [...runs];
+  /**
+   * One entry per input run, in input order, so a rejected write can be
+   * attributed to the run it belongs to rather than merely counted. `next` is
+   * what the run becomes if its write lands: the rewritten run, or `null` for a
+   * key that is being deleted.
+   */
+  const plan: Array<{ run: KeptRun; next: KeptRun | null; write?: Promise<unknown> }> = [];
+  for (const run of runs) {
+    const kept = run.imageIds.filter((id) => !drop.has(id));
+    if (kept.length === run.imageIds.length) {
+      // Untouched — no write, so an unrelated run is never even rewritten.
+      plan.push({ run, next: run });
+      continue;
+    }
+    if (kept.length === 0) {
+      plan.push({ run, next: null, write: store.delete(keptKey(run.id)) });
+      continue;
+    }
+    const next: KeptRun = { ...run, imageIds: kept };
+    plan.push({ run, next, write: store.set(keptKey(run.id), next) });
+  }
+  // Settle every write INDIVIDUALLY — a hand-rolled `allSettled` keyed to the
+  // run, rather than `Promise.all`. All of them were started before the first
+  // `await` either way, so bailing at the first rejection threw away the
+  // knowledge of what the others did; it never prevented them from landing.
+  const settled = await Promise.all(
+    plan.map(async (p) => {
+      if (!p.write) return { ok: true as const };
+      try {
+        await p.write;
+        return { ok: true as const };
+      } catch (err: unknown) {
+        return { ok: false as const, err };
+      }
+    }),
+  );
+  const remaining: KeptRun[] = [];
+  let failure: unknown;
+  settled.forEach((res, i) => {
+    const p = plan[i]!;
+    if (res.ok) {
+      if (p.next) remaining.push(p.next);
+      return;
+    }
+    // The write REJECTED, so report the run as it was passed in. That is the
+    // best available reading and not a certainty — see
+    // {@link KeptRemovalError.remaining} for the bridge-timeout case where a
+    // rejected write may nonetheless have landed.
+    if (failure === undefined) failure = res.err;
+    remaining.push(p.run);
+  });
+  if (failure !== undefined) {
+    throw new KeptRemovalError(failure instanceof Error ? failure.message : String(failure), remaining);
+  }
+  return remaining;
 }
 
 /**

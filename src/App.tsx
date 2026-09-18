@@ -61,7 +61,7 @@ import { setGeneratorMeta } from './lib/meta.js';
 import type { DraftStore, StoredDraft } from './lib/drafts.js';
 import { deleteDraft as deleteDraftFn, listDrafts, saveDraft as saveDraftFn } from './lib/drafts.js';
 import type { KeptRun } from './lib/runs.js';
-import { listKeptRuns, runsForGenerator, saveKeptRun } from './lib/runs.js';
+import { KeptRemovalError, listKeptRuns, removeKeptImages, runsForGenerator, saveKeptRun } from './lib/runs.js';
 import { Browse } from './components/Browse.js';
 import { Builder } from './components/Builder.js';
 import { Runner } from './components/Runner.js';
@@ -466,6 +466,66 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   const handleKeepRun = useCallback(async (run: KeptRun) => {
     await saveKeptRun(depsRef.current.drafts, run);
     setKeptRuns((prev) => [run, ...prev.filter((r) => r.id !== run.id)]);
+  }, []);
+
+  /**
+   * Images just joined a POST, so they have left this app's gallery for good —
+   * correct the durable record, not only the screen.
+   *
+   * 🔴 THE HALF `KeptGallery` CANNOT DO. civitai's app-scoped gated read is
+   * conjoined with `postId IS NULL`, so a posted id stops resolving for this app
+   * permanently. The gallery masks the ids it posted, but that state dies with
+   * the mount: without this, switching tabs or reloading brought every posted
+   * image back as a *"No longer available"* tile — forever — with the tab header
+   * still counting them. `removeKeptImages` rewrites only the affected runs and
+   * only the named ids, so a run's other images survive.
+   *
+   * 🔴 THE IDS ARE THE SERVER'S ECHO, NOT THE SELECTION. What a post is made of
+   * is decided by the post call; deleting from a durable store on the strength
+   * of what we ASKED for would delete an image the server may not have taken.
+   *
+   * State is set from what `removeKeptImages` RETURNS rather than by re-listing
+   * — the same read-after-write reasoning as `handleKeepRun` above.
+   *
+   * 🔴 A PARTIAL WRITE FAILURE IS ACTED ON AND STATED, AND IT USED TO BE
+   * NEITHER. The old catch was empty, under a comment saying *"the next
+   * kept-runs read is authoritative"* — which reassures where it cannot. The
+   * writes are fired together, so a rejection leaves a store where SOME runs
+   * were corrected and some were not, and the ids that were not are exactly the
+   * defect this whole path exists to remove: permanently-dead *"No longer
+   * available"* tiles, with nothing said. Two things happen instead. The list is
+   * set from {@link KeptRemovalError.remaining} — the best available account of
+   * what the store now holds, with the one case it can still get wrong bounded on
+   * that field — so the screen and the record do not silently disagree; and the
+   * viewer is told, because this is the one outcome where their gallery is about
+   * to look broken through no action of theirs. That assignment is load-bearing
+   * and is pinned by a MIXED partial failure in
+   * `components/KeptGallery.post.transport.test.tsx`: the all-writes-fail fixture
+   * cannot see it, because `remaining` comes back byte-equal to the list that went
+   * in. NO RETRY: the post itself succeeded and
+   * must never be re-sent, and re-attempting the failed STORE write silently
+   * would hide the only fact worth reporting. `onRetry` (the alert's own
+   * control) re-lists, which is the bounded, viewer-initiated version.
+   */
+  const keptRunsRef = useRef<KeptRun[]>(keptRuns);
+  keptRunsRef.current = keptRuns;
+  const handlePostedImages = useCallback((imageIds: number[]) => {
+    void (async () => {
+      try {
+        const next = await removeKeptImages(depsRef.current.drafts, keptRunsRef.current, imageIds);
+        setKeptRuns(next);
+        setKeptError(null);
+      } catch (err: unknown) {
+        if (err instanceof KeptRemovalError) setKeptRuns(err.remaining);
+        // Names what happened in the viewer's terms: the post is NOT in doubt,
+        // the gallery's own record is. The host's message is deliberately not
+        // rendered — it is untrusted text, and the viewer-facing fact is the
+        // same whatever it says.
+        setKeptError(
+          'Your post went through, but this app couldn’t update My gallery — some of those images may still be listed here, and won’t load.',
+        );
+      }
+    })();
   }, []);
 
   // Resolve the MODERATED cover url for every card whose stored data carries a
@@ -880,6 +940,29 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             keptError={keptError}
             getImages={deps.getImages}
             onOpenGeneratorKey={openPublishedByKey}
+            // 🔴 NOT GATED ON THE TOKEN'S SCOPES, and that is deliberate rather
+            // than an oversight. `posts:write:self` is SENSITIVE and
+            // consent-gated: the host mints the first token without it and adds
+            // it only after the viewer grants it, which the host does as part of
+            // the post call itself. Hiding the control until the scope appeared
+            // would hide it until after a post the viewer could not start. The
+            // gallery is already only rendered for a signed-in viewer, and the
+            // host's own `sign in to post` refusal is routed below for the case
+            // the session lapses mid-session.
+            posting={{ onPosted: handlePostedImages }}
+            onRequestSignIn={deps.requestSignIn}
+            copyToClipboard={async (text) => {
+              // Same host-clipboard path as Share, normalised to the true/false
+              // the gallery wants: the post url is the only way out of an
+              // `allow-scripts allow-forms` iframe, so a silent failure there
+              // must be visible.
+              try {
+                await deps.copyToClipboard(text);
+                return true;
+              } catch {
+                return false;
+              }
+            }}
             onRetry={reload}
           />
         )}

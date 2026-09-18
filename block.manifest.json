@@ -1,10 +1,10 @@
 {
   "$schema": "https://civitai.com/schemas/app-block/v1.json",
   "blockId": "custom-generators",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "name": "Custom Generators",
   "tagline": "Build the button. Share the button.",
-  "description": "Custom Generators turns a set of generation settings into buttons anyone can press.\n\nBuild one in the builder: give it a name, a cover image, and as many buttons as you like. Each button is a saved preset — a checkpoint, up to five weighted LoRAs, a prompt template, and optional params like steps, CFG, size and quantity. Put `{prompt}` anywhere in a template and a prompt box appears for whoever runs it; set a button to Image → Image and they get a source-image upload too. A live preview sits beside the editor, so you see exactly what runners will see.\n\nSave it as a draft, or publish it and it lands in Discover for everyone. Browse what other people have built: search, sort by newest or popular, upvote, copy a share link, or hit Make a copy to fork someone's generator into your own editable draft. Anything you publish, you can withdraw again.\n\nEvery button tells you what it is before you press it — the checkpoint it uses, how many LoRAs, the output size, roughly what it costs, and whether it needs a prompt or an image from you.\n\nWhen a generation finishes, tap a result to see it full size alongside the recipe that made it. Press Keep and it is saved to My gallery, where your images stay — with the generator that made each one, and a one-tap way back to make another.\n\nRunning a generator spends your Buzz, and it always asks first. Press a button and you get a cost estimate for that exact generation, then a Confirm step before a single Buzz leaves your balance. If the estimate is more than you have, Confirm is blocked and you are offered a top-up instead of a failed generation.",
+  "description": "Custom Generators turns a set of generation settings into buttons anyone can press.\n\nBuild one in the builder: give it a name, a cover image, and as many buttons as you like. Each button is a saved preset — a checkpoint, up to five weighted LoRAs, a prompt template, and optional params like steps, CFG, size and quantity. Put `{prompt}` anywhere in a template and a prompt box appears for whoever runs it; set a button to Image → Image and they get a source-image upload too. A live preview sits beside the editor, so you see exactly what runners will see.\n\nSave it as a draft, or publish it and it lands in Discover for everyone. Browse what other people have built: search, sort by newest or popular, upvote, copy a share link, or hit Make a copy to fork someone's generator into your own editable draft. Anything you publish, you can withdraw again.\n\nEvery button tells you what it is before you press it — the checkpoint it uses, how many LoRAs, the output size, roughly what it costs, and whether it needs a prompt or an image from you.\n\nWhen a generation finishes, tap a result to see it full size alongside the recipe that made it. Press Keep and it is saved to My gallery, where your images stay — with the generator that made each one, and a one-tap way back to make another.\n\nFrom My gallery you can also post what you made: select up to twenty kept images, add an optional title, description and tags, and publish them as one Post on your own Civitai profile. Civitai shows you exactly what it is about to post first. Posting moves those images to your profile, so they leave My gallery here.\n\nRunning a generator spends your Buzz, and it always asks first. Press a button and you get a cost estimate for that exact generation, then a Confirm step before a single Buzz leaves your balance. If the estimate is more than you have, Confirm is blocked and you are offered a top-up instead of a failed generation.",
   "type": "block",
   "bootSkeleton": true,
   "category": "generation",
@@ -15,7 +15,8 @@
     "apps:storage:read",
     "apps:storage:write",
     "apps:storage:shared:read",
-    "apps:storage:shared:write"
+    "apps:storage:shared:write",
+    "posts:write:self"
   ],
   "scopeJustifications": {
     "ai:write:budgeted": "Spends the viewer's Buzz to run the generator's one-tap image generations, capped per generation by the manifest page.buzzBudgetPerGen and gated behind an explicit estimate + Confirm step.",
@@ -23,7 +24,8 @@
     "apps:storage:read": "Reads the viewer's own app-scoped drafts so they can resume editing generators they previously saved.",
     "apps:storage:write": "Saves the viewer's own generator drafts to their app-scoped storage so work persists between sessions.",
     "apps:storage:shared:read": "Lists published generators from shared storage to populate the Discover feed that all users browse.",
-    "apps:storage:shared:write": "Publishes, updates, and withdraws the viewer's own generators in shared storage so other users can find and run them in Discover."
+    "apps:storage:shared:write": "Publishes, updates, and withdraws the viewer's own generators in shared storage so other users can find and run them in Discover.",
+    "posts:write:self": "Lets the viewer select images they already kept in My gallery and publish them as one Post on their own Civitai profile, with an optional title, description and tags. Only images this app published for that same viewer are ever named, never a url; the viewer picks the images, and Civitai's own confirm step shows them the resolved post before anything is created."
   },
   "page": {
     "path": "/",
