@@ -195,6 +195,28 @@ export async function saveKeptRun(store: DraftStore, run: KeptRun): Promise<void
 }
 
 /**
+ * A partial failure of {@link removeKeptImages} — SOME of the store was
+ * corrected and some was not, with the runs that are durably true of it
+ * attached so the caller can match its screen to the record.
+ */
+export class KeptRemovalError extends Error {
+  /**
+   * The kept runs as the STORE now holds them, in the order the runs were given:
+   * a run whose rewrite landed appears rewritten, a run whose write FAILED
+   * appears exactly as it was passed in, and a run whose deletion landed is
+   * absent. Assigning this to the caller's state is what stops the screen and the
+   * storage disagreeing after a partial failure.
+   */
+  readonly remaining: KeptRun[];
+
+  constructor(message: string, remaining: KeptRun[]) {
+    super(message);
+    this.name = 'KeptRemovalError';
+    this.remaining = remaining;
+  }
+}
+
+/**
  * Drop image ids from the viewer's kept runs — IN THE DURABLE STORE, not just on
  * screen — and return the runs that remain, in the order they were given.
  *
@@ -215,14 +237,34 @@ export async function saveKeptRun(store: DraftStore, run: KeptRun): Promise<void
  *
  * ⚠️ IT ONLY REACHES THE RUNS IT IS HANDED. This takes the caller's loaded set
  * rather than walking the store, so an id living in a run outside
- * {@link KEPT_LIST_LIMIT} is not pruned. That is the right bound and not a
- * compromise: the only way an id reaches a post is by being rendered, and the
- * only runs that render are the ones in that set. Walking the whole store
- * instead would spend a `get` per row to find rows that cannot be involved.
+ * {@link KEPT_LIST_LIMIT} is not pruned. Walking the whole store instead would
+ * spend a `get` per row to find rows that almost never exist.
  *
- * Rejects if a write fails — a half-corrected store is a fact the caller has to
- * know about, because the next read is what the viewer sees.
+ * ⚠️ "ALMOST NEVER", NOT "CANNOT" — THIS PARAGRAPH USED TO CLAIM THE BOUND WAS
+ * AIRTIGHT. The old wording was *"the only way an id reaches a post is by being
+ * rendered, and the only runs that render are the ones in that set"*, which is
+ * true of the run holding the RENDERED id and false of a SECOND run holding the
+ * SAME id: the same image can legitimately sit in two kept runs (a re-keep of one
+ * output — the reason {@link chunkImageIds} de-duplicates, and a case this
+ * module's own suite covers), and the second copy may sit outside the hydration
+ * horizon. It then survives the prune and comes back as a dead tile. Reaching it
+ * takes more than {@link KEPT_LIST_LIMIT} kept runs AND a re-keep spanning that
+ * boundary, so the bound is still the right trade — but it is a trade, not a
+ * proof, and the residual is a permanently-unresolvable cell rather than nothing.
+ *
+ * 🔴 EVERY WRITE IS ATTEMPTED, AND A PARTIAL FAILURE IS REPORTED WITH WHAT
+ * DURABLY LANDED. A rejected write used to surface as a bare rejection: the
+ * caller learned "something failed" and nothing about WHICH runs were corrected,
+ * while the in-flight writes landed anyway — a half-corrected store the caller
+ * could not describe, so its screen and its storage silently disagreed. Now the
+ * failure carries the runs that are durably true of the store
+ * ({@link KeptRemovalError.remaining}) — successful rewrites applied, failed ones
+ * left at their pre-call contents — so the caller can at least match the screen
+ * to the record and say so. There is no retry here: the write that failed is the
+ * viewer's own per-app storage, and a silent retry would hide the one fact worth
+ * reporting.
  */
+
 export async function removeKeptImages(
   store: DraftStore,
   runs: readonly KeptRun[],
@@ -230,24 +272,57 @@ export async function removeKeptImages(
 ): Promise<KeptRun[]> {
   const drop = new Set(imageIds);
   if (drop.size === 0) return [...runs];
-  const remaining: KeptRun[] = [];
-  const writes: Array<Promise<unknown>> = [];
+  /**
+   * One entry per input run, in input order, so a rejected write can be
+   * attributed to the run it belongs to rather than merely counted. `next` is
+   * what the run becomes if its write lands: the rewritten run, or `null` for a
+   * key that is being deleted.
+   */
+  const plan: Array<{ run: KeptRun; next: KeptRun | null; write?: Promise<unknown> }> = [];
   for (const run of runs) {
     const kept = run.imageIds.filter((id) => !drop.has(id));
     if (kept.length === run.imageIds.length) {
       // Untouched — no write, so an unrelated run is never even rewritten.
-      remaining.push(run);
+      plan.push({ run, next: run });
       continue;
     }
     if (kept.length === 0) {
-      writes.push(store.delete(keptKey(run.id)));
+      plan.push({ run, next: null, write: store.delete(keptKey(run.id)) });
       continue;
     }
     const next: KeptRun = { ...run, imageIds: kept };
-    remaining.push(next);
-    writes.push(store.set(keptKey(run.id), next));
+    plan.push({ run, next, write: store.set(keptKey(run.id), next) });
   }
-  await Promise.all(writes);
+  // Settle every write INDIVIDUALLY — a hand-rolled `allSettled` keyed to the
+  // run, rather than `Promise.all`. All of them were started before the first
+  // `await` either way, so bailing at the first rejection threw away the
+  // knowledge of what the others did; it never prevented them from landing.
+  const settled = await Promise.all(
+    plan.map(async (p) => {
+      if (!p.write) return { ok: true as const };
+      try {
+        await p.write;
+        return { ok: true as const };
+      } catch (err: unknown) {
+        return { ok: false as const, err };
+      }
+    }),
+  );
+  const remaining: KeptRun[] = [];
+  let failure: unknown;
+  settled.forEach((res, i) => {
+    const p = plan[i]!;
+    if (res.ok) {
+      if (p.next) remaining.push(p.next);
+      return;
+    }
+    // The write did not land, so the STORE still holds this run as it was.
+    if (failure === undefined) failure = res.err;
+    remaining.push(p.run);
+  });
+  if (failure !== undefined) {
+    throw new KeptRemovalError(failure instanceof Error ? failure.message : String(failure), remaining);
+  }
   return remaining;
 }
 

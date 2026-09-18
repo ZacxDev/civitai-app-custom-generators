@@ -12,6 +12,7 @@ import {
   keptImageCount,
   keptImageFeed,
   keptKey,
+  KeptRemovalError,
   listKeptRuns,
   removeKeptImages,
   runsForGenerator,
@@ -480,8 +481,21 @@ describe('removing posted images from the kept runs', () => {
   /**
    * 🔴 THE ONE THAT WOULD BE SILENT DATA LOSS. Posting from one run must not
    * touch another, and an untouched run must not even be REWRITTEN — a needless
-   * `set` spends a write and re-stamps `updatedAt`, which is the key order the
-   * whole newest-first read depends on.
+   * `set` spends one of the viewer's per-app writes on a row whose contents did
+   * not change, and rewrites a blob that was already correct.
+   *
+   * ⚠️ THE REASON STATED HERE USED TO BE WRONG, AND IT INVITED THE OPPOSITE
+   * CONCLUSION. It said a needless `set` "re-stamps `updatedAt`, which is the key
+   * order the whole newest-first read depends on" — which would make this guard
+   * about ORDERING. Nothing in the kept-run read consults `updatedAt`:
+   * `listKeptKeys` takes `k.key` and nothing else, the host lists a prefix in KEY
+   * order, and `listKeptRuns` sorts the hydrated rows by their stored `keptAt`.
+   * (`updatedAt` IS the ordering input for `listDrafts`, which is a different
+   * read over a different prefix — that is where the sentence came from.) So a
+   * re-stamp would be harmless to ordering, and a maintainer reading the old
+   * reason could have concluded the guard was load-bearing for something it is
+   * not. The guard is right; it is about spending a write and rewriting a
+   * correct row.
    */
   it('leaves every other run alone, and does not rewrite it', async () => {
     const writes: string[] = [];
@@ -566,5 +580,74 @@ describe('removing posted images from the kept runs', () => {
     };
 
     await expect(removeKeptImages(failing, [r], [22])).rejects.toThrow('quota exceeded');
+  });
+
+  /**
+   * 🔴 A PARTIAL FAILURE HAS TO SAY WHAT DURABLY LANDED, because the writes are
+   * fired together and the ones that were already in flight land anyway. The old
+   * `Promise.all` abandoned that knowledge at the first rejection: the caller got
+   * "something failed" and nothing about WHICH runs were corrected, so the only
+   * safe thing it could do was leave its whole list alone — putting the screen
+   * and the storage out of step in the direction where the next read silently
+   * disagrees.
+   *
+   * Two runs are affected, ONE write is rejected by key, and the assertion is
+   * over BOTH: the surviving write really landed in the store, and
+   * `KeptRemovalError.remaining` describes the store as it now is — the failed
+   * run at its ORIGINAL contents, the succeeded one rewritten.
+   */
+  it('reports the half that landed when one write fails', async () => {
+    const store = memoryDraftStore();
+    const a = run({ id: 'k1', keptAt: 1_000, imageIds: [11, 22] });
+    const b = run({ id: 'k2', keptAt: 2_000, imageIds: [33, 44] });
+    await saveKeptRun(store, a);
+    await saveKeptRun(store, b);
+    const flaky: DraftStore = {
+      ...store,
+      set: async (key, value) => {
+        if (key === keptKey('k1')) throw new Error('quota exceeded');
+        return store.set(key, value);
+      },
+    };
+
+    const err = await removeKeptImages(flaky, [a, b], [22, 44]).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(KeptRemovalError);
+    expect((err as KeptRemovalError).message).toContain('quota exceeded');
+    // k1's write was refused, so the store still holds BOTH of its images; k2's
+    // landed. `remaining` says exactly that, in the order the runs were given.
+    expect((err as KeptRemovalError).remaining).toEqual([a, { ...b, imageIds: [33] }]);
+    expect(await store.get(keptKey('k1'))).toEqual(a);
+    expect(await store.get(keptKey('k2'))).toEqual({ ...b, imageIds: [33] });
+  });
+
+  /**
+   * The same accounting for a DELETE that fails — an emptied run whose key could
+   * not be removed is still in the store, so it is still in `remaining`.
+   */
+  it('keeps an un-deletable emptied run in the reported set', async () => {
+    const store = memoryDraftStore();
+    const a = run({ id: 'k1', keptAt: 1_000, imageIds: [11] });
+    const b = run({ id: 'k2', keptAt: 2_000, imageIds: [33, 44] });
+    await saveKeptRun(store, a);
+    await saveKeptRun(store, b);
+    const flaky: DraftStore = {
+      ...store,
+      delete: async () => {
+        throw new Error('storage unavailable');
+      },
+    };
+
+    const err = await removeKeptImages(flaky, [a, b], [11, 44]).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(KeptRemovalError);
+    expect((err as KeptRemovalError).remaining).toEqual([a, { ...b, imageIds: [33] }]);
+    expect(await store.get(keptKey('k1'))).toEqual(a);
   });
 });

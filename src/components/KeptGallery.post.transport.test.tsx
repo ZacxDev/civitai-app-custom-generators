@@ -157,8 +157,25 @@ async function renderGallery(opts: {
   onOutbound?: (msg: { type: string; payload?: unknown }) => void;
   /** Override the App's clipboard seam (default: whatever jsdom provides). */
   copyToClipboard?: (text: string) => Promise<void>;
+  /**
+   * Make every WRITE to the kept-run store fail, AFTER the seed — the shape a
+   * per-app row/byte quota produces. Reads still work, so the test can ask the
+   * store what it really holds.
+   */
+  failStoreWrites?: boolean;
 }): Promise<{ drafts: DraftStore }> {
-  const drafts = await seededDrafts(opts.keptIds);
+  const seeded = await seededDrafts(opts.keptIds);
+  const drafts: DraftStore = opts.failStoreWrites
+    ? {
+        ...seeded,
+        set: async () => {
+          throw new Error('quota exceeded');
+        },
+        delete: async () => {
+          throw new Error('quota exceeded');
+        },
+      }
+    : seeded;
   const shared = fakeShared([]);
   const deps: Partial<AppDeps> = {
     resolveResources: async () => [],
@@ -779,6 +796,101 @@ describe('a refusal that arrives after the viewer tries to leave', () => {
 });
 
 /**
+ * 🔴 THE SECOND EXIT FROM THE COMPOSER, WHICH THE `onClose` GUARD CANNOT REACH.
+ * That guard keeps the Modal mounted against Escape, the overlay and the ✕ — but
+ * the Modal, and with it the `kept-post-error` banner, was rendered ONLY in the
+ * non-empty return: `if (feed.length === 0) return (…)` rendered the notice, the
+ * success panel and `EmptyState`, and nothing else. So a kept set that EMPTIED
+ * while a post was in flight unmounted the composer exactly as Escape used to,
+ * and the guard could not help because it lived inside the dropped subtree.
+ *
+ * Reachable, and not exotic: `App` sets `keptRuns` to `[]` whenever `ready` or
+ * `viewer` flips false and in the catch arm of a failed re-list, and the
+ * in-flight window is up to ten minutes because the request waits on a human.
+ * The timeout case in this same file documents hitting exactly that state — the
+ * SDK's token housekeeping expiring under a fake clock, flipping `ready` false
+ * and emptying the kept list.
+ *
+ * Driven the same way as the dismissal case above: the outbound frame is HELD,
+ * so the post really is in flight across the real bridge while the feed empties.
+ */
+describe('a refusal that arrives after the grid has emptied', () => {
+  it('still reaches them — the composer survives the kept set going empty mid-flight', async () => {
+    const user = userEvent.setup();
+    const serverMessage = 'You can only create 5 posts per hour';
+    const runWith = (imageIds: number[]): KeptRun => ({
+      id: 'k00001',
+      keptAt: 1_000,
+      imageIds,
+      generatorName: 'Neon Portrait Studio',
+      buttonLabel: 'Cyberpunk',
+    });
+    const gallery = (runs: KeptRun[]) => (
+      <Harness
+        viewer={VIEWER}
+        theme="dark"
+        consentGranted
+        createPostError={serverMessage}
+        applyUrlToggles={false}
+        showLog={false}
+      >
+        <KeptGallery
+          posting={{ onPosted: () => {} }}
+          runs={runs}
+          c={palette()}
+          getImages={async (ids) => ids.map(ratedImage)}
+          emptyTitle="Nothing kept yet"
+          emptyBody="Keep a generation and it will be here next time."
+          onOpenCell={() => {}}
+          data-testid="browse-kept-gallery"
+        />
+      </Harness>
+    );
+
+    const { rerender } = render(gallery([runWith([RATED_ID])]));
+    const composer = await openComposer(user, { viaTab: false });
+
+    const parent = window.parent as unknown as {
+      postMessage: (msg: unknown, targetOrigin?: string) => void;
+    };
+    const send = parent.postMessage;
+    let held: { msg: unknown; targetOrigin?: string } | null = null;
+    parent.postMessage = (msg: unknown, targetOrigin?: string) => {
+      if ((msg as { type?: string } | null)?.type === 'CREATE_POST_FROM_APP') {
+        held = { msg, targetOrigin };
+        return;
+      }
+      send.call(parent, msg, targetOrigin);
+    };
+    try {
+      await user.click(within(composer).getByTestId('kept-post-submit'));
+      await waitFor(() => expect(screen.getByTestId('kept-post-submit')).toBeDisabled());
+
+      // The kept set empties underneath the in-flight post — the state `App`
+      // reaches by flipping `ready`/`viewer` false, by a failed re-list, or
+      // simply by the viewer having posted everything they kept.
+      rerender(gallery([]));
+      await screen.findByTestId('browse-kept-gallery-empty');
+    } finally {
+      parent.postMessage = send;
+    }
+
+    // Release the held frame: the host answers, refusing.
+    await act(async () => {
+      send.call(parent, held!.msg, held!.targetOrigin);
+    });
+
+    const err = await screen.findByTestId('kept-post-error');
+    expect(err).toHaveAttribute('data-source', 'server');
+    expect(err).toHaveTextContent(serverMessage);
+    // The composer is still there to read it in, and nothing claims a post was
+    // made — the two halves the empty branch used to drop on the floor.
+    expect(screen.getByTestId('kept-post-composer')).toBeInTheDocument();
+    expect(screen.queryByTestId('kept-post-success')).not.toBeInTheDocument();
+  });
+});
+
+/**
  * 🔴 THE POSTED IMAGES USED TO COME BACK, DEAD, FOREVER. `KeptGallery` dropped
  * the posted ids from its own state and the docblock over that state claimed the
  * drop prevented "cells that the very next mount renders as 'No longer
@@ -880,6 +992,55 @@ describe('a posted image leaves the durable kept-run store', () => {
       'data-image-id',
       String(RATED_ID),
     );
+  });
+
+  /**
+   * 🔴 WHEN THE PRUNE CANNOT BE WRITTEN, SAY SO — the branch that used to be an
+   * EMPTY `catch` under a comment reading *"the next kept-runs read is
+   * authoritative"*. It is authoritative about the STORE, which is precisely the
+   * thing that did not get corrected: the un-pruned ids come back on the next
+   * read as permanently-dead tiles, the exact defect the prune exists to remove,
+   * with nothing said to the viewer and nothing reconciling the in-memory list
+   * with what storage actually holds.
+   *
+   * The post itself is NOT in doubt here and the copy must not put it in doubt —
+   * the success banner is up, and the sentence is about this app's own record.
+   */
+  it('says so when the post lands but the kept-run store refuses the prune', async () => {
+    const user = userEvent.setup();
+    const { drafts } = await renderGallery({
+      gatedImages: [ratedImage(RATED_ID), ratedImage(RATED_B)],
+      keptIds: [RATED_ID, RATED_B],
+      createPostResult: { postId: 75, url: 'https://civitai.com/posts/75', imageIds: [RATED_ID] },
+      failStoreWrites: true,
+    });
+
+    await user.click(await screen.findByTestId('tab-kept'));
+    const gallery = await screen.findByTestId('browse-kept-gallery');
+    await waitFor(() => expect(within(gallery).getAllByTestId('kept-cell')).toHaveLength(2));
+    await waitFor(() =>
+      expect(within(gallery).getAllByTestId('kept-cell')[0]).toHaveAttribute('data-postable', 'true'),
+    );
+    await user.click(screen.getByTestId('kept-post-start'));
+    await user.click(
+      within(gallery)
+        .getAllByTestId('kept-cell')
+        .find((el) => el.getAttribute('data-image-id') === String(RATED_ID))!,
+    );
+    await user.click(screen.getByTestId('kept-post-open'));
+    await user.click(within(await screen.findByTestId('kept-post-composer')).getByTestId('kept-post-submit'));
+
+    // The post SUCCEEDED — that half is unchanged and is said first.
+    await screen.findByTestId('kept-post-success');
+
+    const alert = await screen.findByTestId('kept-load-error');
+    expect(alert).toHaveTextContent(
+      'Your post went through, but this app couldn’t update My gallery — some of those images may still be listed here, and won’t load.',
+    );
+    // The store genuinely still holds the posted id, and the app's own count
+    // agrees with it rather than with the correction it failed to make.
+    expect(await keptImageIdsInStore(drafts)).toEqual([RATED_ID, RATED_B]);
+    expect(screen.getByTestId('kept-summary')).toHaveTextContent('2 images kept from 1 run.');
   });
 });
 

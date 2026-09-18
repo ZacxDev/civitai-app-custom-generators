@@ -61,7 +61,7 @@ import { setGeneratorMeta } from './lib/meta.js';
 import type { DraftStore, StoredDraft } from './lib/drafts.js';
 import { deleteDraft as deleteDraftFn, listDrafts, saveDraft as saveDraftFn } from './lib/drafts.js';
 import type { KeptRun } from './lib/runs.js';
-import { listKeptRuns, removeKeptImages, runsForGenerator, saveKeptRun } from './lib/runs.js';
+import { KeptRemovalError, listKeptRuns, removeKeptImages, runsForGenerator, saveKeptRun } from './lib/runs.js';
 import { Browse } from './components/Browse.js';
 import { Builder } from './components/Builder.js';
 import { Runner } from './components/Runner.js';
@@ -485,10 +485,22 @@ export function App({ deps: depsOverride }: AppProps = {}) {
    * of what we ASKED for would delete an image the server may not have taken.
    *
    * State is set from what `removeKeptImages` RETURNS rather than by re-listing
-   * — the same read-after-write reasoning as `handleKeepRun` above. A write
-   * failure leaves the in-memory list alone: the store still holds those runs, so
-   * claiming otherwise would put the app's list and its storage out of step in
-   * the direction where the next reload silently disagrees with the screen.
+   * — the same read-after-write reasoning as `handleKeepRun` above.
+   *
+   * 🔴 A PARTIAL WRITE FAILURE IS ACTED ON AND STATED, AND IT USED TO BE
+   * NEITHER. The old catch was empty, under a comment saying *"the next
+   * kept-runs read is authoritative"* — which reassures where it cannot. The
+   * writes are fired together, so a rejection leaves a store where SOME runs
+   * were corrected and some were not, and the ids that were not are exactly the
+   * defect this whole path exists to remove: permanently-dead *"No longer
+   * available"* tiles, with nothing said. Two things happen instead. The list is
+   * set from {@link KeptRemovalError.remaining} — the runs as the STORE now holds
+   * them — so the screen and the record cannot silently disagree; and the viewer
+   * is told, because this is the one outcome where their gallery is about to look
+   * broken through no action of theirs. NO RETRY: the post itself succeeded and
+   * must never be re-sent, and re-attempting the failed STORE write silently
+   * would hide the only fact worth reporting. `onRetry` (the alert's own
+   * control) re-lists, which is the bounded, viewer-initiated version.
    */
   const keptRunsRef = useRef<KeptRun[]>(keptRuns);
   keptRunsRef.current = keptRuns;
@@ -497,10 +509,16 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       try {
         const next = await removeKeptImages(depsRef.current.drafts, keptRunsRef.current, imageIds);
         setKeptRuns(next);
-      } catch {
-        // Non-fatal and deliberately quiet: the post SUCCEEDED and the gallery
-        // already says so. The grid hides these ids for this mount either way,
-        // and the next kept-runs read is authoritative.
+        setKeptError(null);
+      } catch (err: unknown) {
+        if (err instanceof KeptRemovalError) setKeptRuns(err.remaining);
+        // Names what happened in the viewer's terms: the post is NOT in doubt,
+        // the gallery's own record is. The host's message is deliberately not
+        // rendered — it is untrusted text, and the viewer-facing fact is the
+        // same whatever it says.
+        setKeptError(
+          'Your post went through, but this app couldn’t update My gallery — some of those images may still be listed here, and won’t load.',
+        );
       }
     })();
   }, []);
@@ -926,8 +944,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             // gallery is already only rendered for a signed-in viewer, and the
             // host's own `sign in to post` refusal is routed below for the case
             // the session lapses mid-session.
-            canPost
-            onPosted={handlePostedImages}
+            posting={{ onPosted: handlePostedImages }}
             onRequestSignIn={deps.requestSignIn}
             copyToClipboard={async (text) => {
               // Same host-clipboard path as Share, normalised to the true/false

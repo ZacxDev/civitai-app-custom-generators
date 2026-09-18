@@ -106,10 +106,27 @@ export function isPostableGatedState(
  * `POST_TAGS_PREVIEW_LABEL` in `components/KeptGallery.tsx`.
  *
  * ⚠️ What makes that adequate here and NOT adequate for the model-version attach
- * (which DOES block submit) is reversibility: the consent screen lists the tags
- * that will actually land and the viewer can still decline, so an over-long tag
- * list is discovered BEFORE anything is published. A silently-omitted attach is
- * discovered after.
+ * (which DOES block submit) is reversibility: the consent screen renders the
+ * server's resolution — the tags that will actually land — and the viewer can
+ * still decline, so the post can still be stopped after seeing it.
+ *
+ * ⚠️ VISIBLE IS NOT ANNOUNCED, AND THIS BLOCK USED TO SAY AN OVER-LONG LIST IS
+ * "discovered BEFORE anything is published". Nothing on that screen SAYS a name
+ * was omitted. Read off civitai's `normalizeBlockPostTagNames` and
+ * `buildCreatePostConsentCopy`: the cap check sits on the RESOLVED branch and
+ * `break`s the loop, so once `BLOCK_POST_MAX_TAGS` known names have been taken
+ * the walk stops dead — every later name lands in neither the resolved list nor
+ * `droppedTags`, and `droppedTagsLine` (the one sentence about tags that did not
+ * make it) is built from `droppedTags` alone. The consent body then renders the
+ * resolved badges, which is at most the cap. So a viewer who types eight known
+ * tags sees a shorter row than they typed and no sentence about the rest: what
+ * they get is an ABSENCE TO NOTICE, before publishing, not a disclosure.
+ *
+ * That is still the reversible side of the line — the screen is shown and the
+ * decline is available while nothing has been published — and it is what keeps
+ * (b) the right call. The attach is the other side: it is omitted with no screen
+ * of its own at all, and is discovered after the images have left this app's
+ * grid for good, which is why that one blocks submit.
  */
 export function parsePostTags(raw: string): string[] {
   const out: string[] = [];

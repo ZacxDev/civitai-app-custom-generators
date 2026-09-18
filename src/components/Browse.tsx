@@ -156,7 +156,8 @@ export interface BrowseProps {
    */
   onOpenGeneratorKey?: (key: string) => boolean;
   /**
-   * Offer the My-gallery post composer (`posts:write:self`).
+   * Offer the My-gallery post composer (`posts:write:self`), WITH somewhere for
+   * the durable removal to land. Absent ⇒ no post surface at all.
    *
    * 🔴 THIS TAB AND NOWHERE ELSE. My gallery is the viewer's WHOLE kept set and
    * the surface they come to to look at what they made, so it is the one place
@@ -165,18 +166,30 @@ export interface BrowseProps {
    * slice under a heading about that generator, so it deliberately does not get
    * this — see `KeptGalleryProps.posting`.
    */
-  canPost?: boolean;
-  /**
-   * The ids that joined a post, as the SERVER echoed them — the cue to delete
-   * them from the durable kept-run store.
-   *
-   * 🔴 REQUIRED ALONGSIDE `canPost`, AND THE GALLERY'S OWN PROP SHAPE ENFORCES
-   * IT. A posted image stops resolving for this app forever (the app-scoped read
-   * is conjoined with `postId IS NULL`), so a post that is not followed by a
-   * prune leaves a permanent *"No longer available"* tile and a run count that
-   * keeps counting it. See `removeKeptImages` in `lib/runs.ts`.
-   */
-  onPosted?: (imageIds: number[]) => void;
+  posting?: {
+    /**
+     * The ids that joined a post, as the SERVER echoed them — the cue to delete
+     * them from the durable kept-run store.
+     *
+     * 🔴 CARRIED ON THE OPT-IN ITSELF, SO THE PAIR IS UNREPRESENTABLE. A posted
+     * image stops resolving for this app forever (the app-scoped read is
+     * conjoined with `postId IS NULL`), so a post that is not followed by a
+     * prune leaves a permanent *"No longer available"* tile and a run count that
+     * keeps counting it. See `removeKeptImages` in `lib/runs.ts`.
+     *
+     * ⚠️ THIS PROP USED TO BE TWO INDEPENDENT OPTIONALS — `canPost?: boolean`
+     * plus `onPosted?` — under a docblock asserting *"REQUIRED ALONGSIDE
+     * `canPost`, AND THE GALLERY'S OWN PROP SHAPE ENFORCES IT"*. It did not:
+     * `KeptGalleryProps` is a DIFFERENT type, and this component collapsed the
+     * pair itself (`canPost && onPosted ? { onPosted } : undefined`) before that
+     * shape was ever consulted, so the enforcement was asserted in prose and
+     * absent from the types. A round-2 audit mutated that line to the fail-open
+     * form `onPosted ?? (() => {})` — the round-0 defect restored — and the whole
+     * `dom` project stayed green. The pair is now ONE object, which the
+     * typechecker enforces at every call site and CI runs (`pnpm typecheck`).
+     */
+    onPosted: (imageIds: number[]) => void;
+  };
   /** Route an anonymous viewer into the host sign-in flow (post refusal path). */
   onRequestSignIn?: () => void;
   /** Copy text to the clipboard; resolves `true` on success. Hands over a post url. */
@@ -197,7 +210,7 @@ interface VoteState {
 }
 
 export function Browse(props: BrowseProps) {
-  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, keptTruncated = false, keptIncomplete = false, keptError = null, getImages, onOpenGeneratorKey, canPost = false, onPosted, onRequestSignIn, copyToClipboard, onRetry } = props;
+  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, keptTruncated = false, keptIncomplete = false, keptError = null, getImages, onOpenGeneratorKey, posting, onRequestSignIn, copyToClipboard, onRetry } = props;
   const [tab, setTab] = useState<Tab>('discover');
   // Motion gate for the chrome Browse owns directly (draft cards). Cards rendered
   // by PublishedCard/IntroPanel read it themselves.
@@ -720,12 +733,17 @@ export function Browse(props: BrowseProps) {
               withAttribution
               truncated={keptTruncated}
               incomplete={keptIncomplete}
-              // 🔴 THE OPT-IN CARRIES THE DURABLE REMOVAL. `KeptGallery` does
-              // not own the kept-run store, so posting without a prune path is
-              // a permanent "No longer available" tile — the gallery's prop
-              // shape makes that combination unrepresentable, and this is where
-              // the pair is assembled.
-              posting={canPost && onPosted ? { onPosted } : undefined}
+              // 🔴 THE OPT-IN CARRIES THE DURABLE REMOVAL, AND IT IS PASSED
+              // THROUGH RATHER THAN ASSEMBLED HERE. `KeptGallery` does not own
+              // the kept-run store, so posting without a prune path is a
+              // permanent "No longer available" tile. This line used to build
+              // the pair out of two independent optionals and silently DEGRADE
+              // when only one arrived — `canPost && onPosted ? … : undefined` —
+              // which meant the gallery's prop shape was consulted after the
+              // decision had already been made, and a fail-open mutation of it
+              // was invisible to the whole suite. Both props are one object now,
+              // so there is nothing left here to get wrong.
+              posting={posting}
               onRequestSignIn={onRequestSignIn}
               copyToClipboard={copyToClipboard}
               emptyTitle="Nothing kept yet"
