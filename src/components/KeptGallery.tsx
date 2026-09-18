@@ -252,13 +252,38 @@ export const POST_PENDING_CELL_NOTICE = 'Still being rated — you can post this
 /**
  * What the composer says about tags.
  *
- * ⚠️ AN APP MAY NOT PROMISE THIS. The server resolves tag names against EXISTING
- * tags only: an unmatched name is DROPPED, never minted, and the host's consent
- * screen shows the viewer the RESOLVED list rather than the one typed here. So
- * the field asks, and the confirm answers.
+ * ⚠️ AN APP MAY NOT PROMISE THIS, AND THIS SENTENCE USED TO COVER ONLY HALF THE
+ * REASON. The server resolves tag names against EXISTING tags only — an
+ * unmatched name is DROPPED, never minted — AND it stops at a count ceiling
+ * (`BLOCK_POST_MAX_TAGS`, applied with a `break` before the lookup, so a name
+ * past the cap lands in neither the resolved list nor the dropped one). The old
+ * copy named resolution and said nothing about the ceiling, so a viewer who
+ * typed eight tags read a sentence that explained why an unknown name would go
+ * and gave them no reason to expect a known one to.
+ *
+ * 🔴 THE CEILING IS NAMED, THE NUMBER IS NOT. A figure here would be a copied
+ * server constant in viewer-facing copy — the thing this whole feature refuses
+ * to do (see the header of `lib/post.ts`) — and it would be wrong silently. What
+ * the viewer needs is that Civitai, not this app, decides which tags land, and
+ * that they will see the answer before anything is published.
  */
 export const POST_TAGS_NOTICE =
-  'Only tags that already exist on Civitai can be applied — anything else is dropped. Civitai shows you the final list before posting.';
+  'Civitai decides which of these apply — only tags it already has, and only so many per post. It shows you the final list before anything is published.';
+
+/**
+ * What the composer says ABOVE the parsed tag badges.
+ *
+ * 🔴 THE BADGES ARE A PARSE RESULT, NOT A PROMISE, AND NOTHING SAID SO. They
+ * render one badge per name this app will SEND — the comma split, trimmed and
+ * de-duplicated — which is genuinely useful and genuinely this app's own work.
+ * Unlabelled, a row of tag chips in a compose form reads as "these are your
+ * tags", i.e. as a claim about the post that is about to exist; type eight and
+ * the server applies five, with nothing anywhere having hinted at it. The label
+ * is what makes the row honest, and it is the reason no client-side cap was
+ * added: the composer stopped promising instead of starting to guess.
+ */
+export const POST_TAGS_PREVIEW_LABEL =
+  'What this app will send. Civitai’s confirm screen lists the ones that actually land.';
 
 /**
  * What the composer says about the optional model-version attach.
@@ -281,6 +306,20 @@ export const POST_ATTACH_NOTICE =
 /** Shown under the attach field when nothing usable could be read out of it. */
 export const POST_ATTACH_UNPARSED =
   'That doesn’t look like a model version. Paste the page link from Civitai — the one with ?modelVersionId= in it.';
+
+/**
+ * Shown when the one-tap copy of the post url did not work.
+ *
+ * 🔴 A SILENT FAILURE HERE IS THE WHOLE PROBLEM. `copyToClipboard` resolves
+ * `false` (or throws) when the host clipboard path is unavailable — plausible
+ * inside an opaque-origin iframe with no transient activation — and the control
+ * used to answer that by leaving its label at *"Copy link"*, which is exactly
+ * what a viewer sees when their click missed. The url is rendered as selectable
+ * text either way, so there is a real instruction to give, and the button's own
+ * label carries the verdict rather than a colour.
+ */
+export const POST_COPY_FAILED_NOTICE =
+  'Couldn’t copy it. The link above is selectable — copy it from there.';
 
 /** What the composer says about the host's own confirm, so it is not a surprise. */
 export const POST_CONSENT_NOTICE =
@@ -328,7 +367,7 @@ export interface KeptGalleryProps {
   /**
    * Offer the multi-select + composer that publishes kept images as a REAL Post
    * on the viewer's profile (`useCreatePostFromApp()`, scope
-   * `posts:write:self`).
+   * `posts:write:self`). Absent ⇒ no post surface at all.
    *
    * 🔴 OPT-IN, AND OFF BY DEFAULT ON PURPOSE. Posting is not a variation on
    * viewing: it is public, feed-visible, reward-earning content under the
@@ -339,11 +378,33 @@ export interface KeptGalleryProps {
    * it does not pass this. My gallery, which is the whole set and the place a
    * viewer goes to look at what they made, does.
    *
+   * 🔴 AN OBJECT CARRYING `onPosted`, NOT A BOOLEAN, AND THE SHAPE IS THE GUARD.
+   * This component does not own the kept-run store — it is handed `runs` — so it
+   * CANNOT make {@link POST_REMOVES_FROM_GALLERY} durably true on its own; all
+   * it can do is stop rendering the ids for this mount. While `posting` was a
+   * bare boolean, a caller could opt in and never wire the durable half, and the
+   * failure was invisible until the next mount. Spelling the opt-in as "posting, WITH somewhere for the removal to land"
+   * makes that combination unrepresentable rather than merely discouraged.
+   *
    * The hook is mounted unconditionally either way: it holds only local state
    * until `createPost` is called, so a gallery with posting off sends nothing
    * and needs no transport.
    */
-  posting?: boolean;
+  posting?: {
+    /**
+     * The ids that JOINED the post, as the SERVER echoed them — the caller's cue
+     * to delete them from its durable store (`removeKeptImages` in `lib/runs.ts`).
+     *
+     * 🔴 THE SERVER'S ECHO, NOT THE SELECTION, AND THEY ARE DIFFERENT FACTS. What
+     * a post is made of is decided by the post call: a `published` source
+     * contributes the id it named, and the host is free to report a set this app
+     * did not send (the SDK's own mock host returns deliberately-different ids to
+     * expose a block that conflates the two). Deleting by SELECTION would delete
+     * a kept image on the strength of having asked for it; deleting by ECHO
+     * deletes exactly what stopped being ours.
+     */
+    onPosted: (imageIds: number[]) => void;
+  };
   /**
    * Route an anonymous viewer into the host sign-in flow — the correct response
    * to the host's `sign in to post` refusal, which is not an error to render.
@@ -377,23 +438,33 @@ export function KeptGallery({
   truncated = false,
   incomplete = false,
   recheckDelayMs = GALLERY_RECHECK_MS,
-  posting = false,
+  posting,
   onRequestSignIn,
   copyToClipboard,
   'data-testid': testId = 'kept-gallery',
 }: KeptGalleryProps) {
   const motion = useMotion();
   const { createPost, pending: postPending } = useCreatePostFromApp();
+  /** The post surface is offered at all. See the `posting` prop. */
+  const canPost = posting != null;
   /**
-   * Ids that have JOINED A POST this session, dropped from the feed below.
+   * Ids that have JOINED A POST **on this mount**, dropped from the feed below.
    *
    * 🔴 NOT AN OPTIMISTIC FLOURISH — IT IS WHAT THE SERVER ALREADY DID. The
    * app-scoped read is conjoined with `postId IS NULL`, so these ids stop
    * resolving the moment the post lands: leaving them on screen would show
-   * cells that the very next mount renders as "No longer available", which reads
-   * as breakage rather than as the thing the composer warned about. Dropping
-   * them makes {@link POST_REMOVES_FROM_GALLERY} visibly true instead of merely
-   * stated.
+   * cells rendering "No longer available", which reads as breakage rather than
+   * as the thing the composer warned about.
+   *
+   * 🔴 THIS IS HALF THE FIX AND IT USED TO CLAIM TO BE THE WHOLE ONE. The
+   * docblock here asserted that dropping the ids prevented a cell "that the very
+   * next mount renders as 'No longer available'". It prevented no such thing:
+   * this state dies with the mount and the kept-run store still held every
+   * posted id, so posting 3 of 12 and switching tabs brought all 12 back, 3 of
+   * them permanently dead — with the tab's own "N images kept from M runs"
+   * header still counting them. The durable half is `posting.onPosted`, which
+   * hands the server's echo to the owner of the store; this set is only what
+   * keeps the grid honest between that call and the caller's re-render.
    */
   const [postedIds, setPostedIds] = useState<Set<number>>(() => new Set());
   const feed = useMemo(
@@ -500,25 +571,60 @@ export function KeptGallery({
   const [postVersionId, setPostVersionId] = useState('');
   const [postFailure, setPostFailure] = useState<PostFailure | null>(null);
   const [posted, setPosted] = useState<BlockCreatePostResult | null>(null);
-  const [urlCopied, setUrlCopied] = useState(false);
+  /**
+   * The one-tap copy's verdict. 🔴 THREE STATES, NOT TWO. A boolean can only say
+   * "copied" or "not yet", and "not yet" is what a FAILED copy looked like — the
+   * label sat at "Copy link" and the viewer learned nothing. See
+   * {@link POST_COPY_FAILED_NOTICE}.
+   */
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
 
   const postable = useMemo(() => {
     const ids = new Set<number>();
-    if (!posting) return ids;
+    if (!canPost) return ids;
     for (const cell of feed) if (isPostableGatedState(gated[cell.imageId])) ids.add(cell.imageId);
     return ids;
-  }, [posting, feed, gated]);
+  }, [canPost, feed, gated]);
 
-  // A cell the viewer had selected can stop being postable underneath them — the
-  // one re-read flips a `hidden` cell, or a post drops ids from the feed. Reading
-  // the selection THROUGH the live postable set means the composer can never send
-  // an id the grid no longer considers eligible.
+  // 🔴 A CELL THE VIEWER HAD SELECTED CAN STOP BEING POSTABLE UNDERNEATH THEM,
+  // and `selected` is a list of ids rather than of live cells, so it keeps them.
+  // Reading the selection THROUGH the live postable set means the composer can
+  // never send an id the grid no longer considers eligible — which matters
+  // because an ineligible id does not cost that image, it costs the WHOLE post
+  // (`resolveAppPublishedImages` refuses unresolvable ids rather than skipping
+  // them).
+  //
+  // Two mechanisms reach it, and an earlier version of this comment named a
+  // third that cannot: a `hidden` cell's one re-read makes a cell MORE postable,
+  // never less, so it is not one of them.
+  //   (1) `runs` CHANGES UNDER THE GRID. This component does not own the kept
+  //       set; the caller re-lists it, prepends a fresh keep, and — since
+  //       `posting.onPosted` — prunes it after a post. Any of those can remove a
+  //       selected id from `feed`, and everything outside `feed` is unpostable.
+  //   (2) A RE-READ RETURNS A DIFFERENT VERDICT for an id already on screen.
+  //       `retryRead` (the failed-read "Try again") clears the whole requested
+  //       set, so every visible id is asked again and may come back `hidden`,
+  //       omitted, or `ratingPending` — the last being the dangerous one, since
+  //       it still carries a url and still renders as a picture.
   const selectedIds = useMemo(() => selected.filter((id) => postable.has(id)), [selected, postable]);
   const atImageCap = selectedIds.length >= POST_MAX_IMAGES;
 
   const tags = useMemo(() => parsePostTags(postTagsText), [postTagsText]);
   const modelVersionId = parseModelVersionId(postVersionId);
   const versionLooksWrong = postVersionId.trim().length > 0 && modelVersionId === undefined;
+  /**
+   * 🔴 ONE PREDICATE, BOTH CONSUMERS — the button's `disabled` and `submitPost`'s
+   * own guard, which used to disagree. `versionLooksWrong` only DECORATED the
+   * attach field: the button stayed enabled, `submitPost` omitted the
+   * unparseable key, and the post published with no attach at all. That is the
+   * one refusal in this composer the server never gets to make — it never sees
+   * the field — and it is irreversible in the direction that matters, because
+   * the images have left this app's grid by the time the viewer notices the
+   * attach is missing. The inline {@link POST_ATTACH_UNPARSED} is already
+   * rendered on the field, so blocking submit adds a stop to a sentence the
+   * viewer can already read and act on (clear the field, or fix the link).
+   */
+  const canSubmitPost = selectedIds.length > 0 && !postPending && !versionLooksWrong;
 
   function toggleSelected(imageId: number) {
     setPostFailure(null);
@@ -539,7 +645,10 @@ export function KeptGallery({
   }
 
   async function submitPost() {
-    if (selectedIds.length === 0 || postPending) return;
+    // `posting` is what makes this control exist at all; re-checked here so the
+    // durable `onPosted` below is reachable without an optional call, which is
+    // the whole point of carrying it on the opt-in.
+    if (posting == null || !canSubmitPost) return;
     setPostFailure(null);
     const detail = postDetail.trim();
     const title = postTitle.trim();
@@ -556,9 +665,20 @@ export function KeptGallery({
         ...(modelVersionId !== undefined ? { modelVersionId } : {}),
       });
       setPosted(result);
-      setUrlCopied(false);
-      // The server has already removed these from this app's grid; mirror it.
-      setPostedIds((prev) => new Set([...prev, ...selectedIds]));
+      setCopyState('idle');
+      // 🔴 THE SERVER'S ECHO, IN BOTH PLACES. `result.imageIds` is what actually
+      // joined the post; `selectedIds` is what this app ASKED for. They are
+      // different facts — the SDK's mock host returns deliberately-different ids
+      // precisely to expose a block that conflates them — and using one for the
+      // grid removal and the other for the success sentence (which reads
+      // `posted.imageIds`) left this component holding two answers to "what got
+      // posted". The echo is also the SAFE one for a DURABLE delete: it removes
+      // exactly what stopped resolving, never an image on the strength of having
+      // asked for it.
+      setPostedIds((prev) => new Set([...prev, ...result.imageIds]));
+      // The durable half — this component does not own the store. See the
+      // `posting` prop.
+      posting.onPosted(result.imageIds);
       setPostTitle('');
       setPostDetail('');
       setPostTagsText('');
@@ -593,9 +713,9 @@ export function KeptGallery({
   async function copyPostUrl() {
     if (!posted || !copyToClipboard) return;
     try {
-      setUrlCopied(await copyToClipboard(posted.url));
+      setCopyState((await copyToClipboard(posted.url)) ? 'copied' : 'failed');
     } catch {
-      setUrlCopied(false);
+      setCopyState('failed');
     }
   }
 
@@ -638,13 +758,18 @@ export function KeptGallery({
         <Group gap={8}>
           {copyToClipboard && (
             <Button size="sm" variant="light" data-testid="kept-post-copy" onClick={copyPostUrl}>
-              {urlCopied ? 'Link copied' : 'Copy link'}
+              {copyState === 'copied' ? 'Link copied' : copyState === 'failed' ? 'Couldn’t copy' : 'Copy link'}
             </Button>
           )}
           <Button size="sm" variant="subtle" data-testid="kept-post-dismiss" onClick={() => setPosted(null)}>
             Dismiss
           </Button>
         </Group>
+        {copyState === 'failed' && (
+          <span style={metaText} role="status" data-testid="kept-post-copy-failed">
+            {POST_COPY_FAILED_NOTICE}
+          </span>
+        )}
         <span style={metaText}>
           {posted.imageIds.length === 1 ? 'That image has' : 'Those images have'} left My gallery — they live on your
           profile now.
@@ -685,14 +810,14 @@ export function KeptGallery({
           "Select images to post" over a grid where every cell is hidden, missing
           or still being rated is a control that can only ever refuse — and the
           per-cell notice already explains why. */}
-      {posting && postable.size > 0 && !selecting && (
+      {canPost && postable.size > 0 && !selecting && (
         <Group>
           <Button size="sm" variant="light" data-testid="kept-post-start" onClick={() => setSelecting(true)}>
             Select images to post
           </Button>
         </Group>
       )}
-      {posting && selecting && (
+      {canPost && selecting && (
         <Stack gap={6} data-testid="kept-post-bar">
           <Group gap={8}>
             <Badge variant="light" data-testid="kept-post-count">
@@ -735,7 +860,7 @@ export function KeptGallery({
           // nothing has rated yet comes back `visible` WITH a url (it is the
           // viewer's own), and the post service refuses it — and the whole post
           // with it. See `isPostableGatedState` and POST_PENDING_CELL_NOTICE.
-          const ratingPending = posting && state != null && state.status === 'visible' && isRatingPending(state);
+          const ratingPending = canPost && state != null && state.status === 'visible' && isRatingPending(state);
           const canSelect = postable.has(cell.imageId);
           const isSelected = selectedIds.includes(cell.imageId);
           const capBlocked = selecting && canSelect && !isSelected && atImageCap;
@@ -748,7 +873,7 @@ export function KeptGallery({
                 data-testid="kept-cell"
                 data-image-id={cell.imageId}
                 data-state={state?.status ?? 'loading'}
-                data-postable={posting ? String(canSelect) : undefined}
+                data-postable={canPost ? String(canSelect) : undefined}
                 data-selected={selecting ? String(isSelected) : undefined}
                 // Only a resolvable cell opens: a `hidden`/`missing` cell has
                 // nothing to enlarge, so it is inert rather than a button that
@@ -873,9 +998,21 @@ export function KeptGallery({
           keyboard stop that goes wrong in the direction nobody can recover
           from. The one thing bounded client-side is the image SELECTION, which
           is an affordance rather than a copied validation. */}
+      {/* 🔴 `onClose` IS GUARDED FOR THE SAME REASON Cancel IS DISABLED, AND IT
+          USED NOT TO BE. `Modal` renders `null` when closed and the
+          `kept-post-error` banner is its child, so an Escape / overlay click /
+          ✕ during an in-flight post UNMOUNTED the only place a refusal can be
+          rendered: the request would come back refused (a rate limit, a blocked
+          title, a refused attach), `setPostFailure` would land in a modal that
+          no longer exists, and the viewer would be told nothing at all — the one
+          hole in "every refusal is named". The composer is not a place to be
+          while it is waiting; it says so ("Waiting on Civitai…") and now behaves
+          that way from every exit rather than only from the button. */}
       <Modal
-        opened={posting && composerOpen}
-        onClose={() => setComposerOpen(false)}
+        opened={canPost && composerOpen}
+        onClose={() => {
+          if (!postPending) setComposerOpen(false);
+        }}
         title="Post to your profile"
         size="md"
       >
@@ -910,13 +1047,22 @@ export function KeptGallery({
             onChange={(e) => setPostTagsText(e.currentTarget.value)}
           />
           {tags.length > 0 && (
-            <Group gap={6} data-testid="kept-post-tag-preview">
-              {tags.map((t) => (
-                <Badge key={t} variant="light">
-                  {t}
-                </Badge>
-              ))}
-            </Group>
+            <Stack gap={4} data-testid="kept-post-tag-preview">
+              {/* 🔴 LABELLED, BECAUSE A ROW OF TAG CHIPS IN A COMPOSE FORM READS
+                  AS A PROMISE. The server drops unmatched names AND stops at a
+                  count ceiling, so the badges are what this app SENDS and never
+                  what will apply. See POST_TAGS_PREVIEW_LABEL. */}
+              <span style={metaText} data-testid="kept-post-tag-preview-label">
+                {POST_TAGS_PREVIEW_LABEL}
+              </span>
+              <Group gap={6}>
+                {tags.map((t) => (
+                  <Badge key={t} variant="light">
+                    {t}
+                  </Badge>
+                ))}
+              </Group>
+            </Stack>
           )}
           <TextInput
             label="Add to a model’s gallery (optional)"
@@ -936,7 +1082,7 @@ export function KeptGallery({
           <Group gap={8}>
             <Button
               data-testid="kept-post-submit"
-              disabled={selectedIds.length === 0 || postPending}
+              disabled={!canSubmitPost}
               onClick={submitPost}
             >
               {postPending ? 'Waiting on Civitai…' : `Post ${selectedIds.length} image${selectedIds.length === 1 ? '' : 's'}`}

@@ -342,7 +342,7 @@ describe('the image cap is an affordance, not a silent refusal', () => {
     const user = userEvent.setup();
     render(
       <KeptGallery
-        {...props({ runs: [run({ id: 'kcap', imageIds: capIds })], posting: true })}
+        {...props({ runs: [run({ id: 'kcap', imageIds: capIds })], posting: { onPosted: vi.fn() } })}
       />,
     );
 
@@ -379,7 +379,7 @@ describe('the image cap is an affordance, not a silent refusal', () => {
     const user = userEvent.setup();
     render(
       <KeptGallery
-        {...props({ runs: [run({ id: 'kcap', imageIds: capIds })], posting: true })}
+        {...props({ runs: [run({ id: 'kcap', imageIds: capIds })], posting: { onPosted: vi.fn() } })}
       />,
     );
 
@@ -408,7 +408,7 @@ describe('the image cap is an affordance, not a silent refusal', () => {
  */
 describe('the model-version attach takes what a viewer can actually copy', () => {
   async function openComposer(user: ReturnType<typeof userEvent.setup>) {
-    render(<KeptGallery {...props({ posting: true })} />);
+    render(<KeptGallery {...props({ posting: { onPosted: vi.fn() } })} />);
     const cell = await screen.findByTestId('kept-cell');
     await waitFor(() => expect(cell).toHaveAttribute('data-postable', 'true'));
     await user.click(screen.getByTestId('kept-post-start'));
@@ -447,5 +447,147 @@ describe('the model-version attach takes what a viewer can actually copy', () =>
     expect(errorNode).toHaveTextContent(
       'That doesn’t look like a model version. Paste the page link from Civitai — the one with ?modelVersionId= in it.',
     );
+  });
+
+  /**
+   * 🔴 THE INLINE ERROR WAS DECORATION, AND THE POST WENT OUT WITHOUT THE ATTACH.
+   * `versionLooksWrong` drove the field's `error` prop and nothing else: the
+   * submit button stayed enabled with its label unchanged, and `submitPost`
+   * simply omitted the key. So pasting a model link with no `?modelVersionId=`
+   * — the single most likely wrong paste, since it is what the address bar holds
+   * before you click a version — published a real post with no gallery attach,
+   * while the images left this app's grid for good.
+   *
+   * It is the one refusal in this composer the SERVER never gets to make: the
+   * field never reaches it. So the client has to, and the sentence it stops on
+   * is already on the field.
+   */
+  it('will not let the post go out while the attach is unreadable', async () => {
+    const user = userEvent.setup();
+    const field = await openComposer(user);
+    const submit = screen.getByTestId('kept-post-submit');
+
+    // CONTROL: one image is selected and the button is live before the paste, so
+    // a disabled button below is attributable to the attach and not to an empty
+    // selection.
+    expect(submit).not.toBeDisabled();
+
+    await user.click(field);
+    await user.paste('https://civitai.com/models/133005');
+
+    expect(submit).toBeDisabled();
+
+    // …and it comes back the moment the field is usable again — emptied here,
+    // which is the recovery a viewer reaches for first.
+    await user.clear(field);
+    expect(screen.getByTestId('kept-post-submit')).not.toBeDisabled();
+  });
+});
+
+/**
+ * 🔴 THE THIRD CELL STATE, WHICH NOTHING IN THIS REPO RENDERED UNTIL NOW. The
+ * gate OMITS ids it cannot resolve at all, and an omitted id is not the same
+ * fact as a `hidden` one — it means the image is gone, and after a post it means
+ * exactly that (civitai's app-scoped read is conjoined with `postId IS NULL`).
+ * The sentence it renders is the one a stale kept-run store produces over and
+ * over, so it has to be both correct and pinned.
+ */
+describe('a cell the gate cannot resolve at all', () => {
+  it('says the image is gone, and does not blame the scan or the browsing level', async () => {
+    render(<KeptGallery {...props({ getImages: async () => [] })} />);
+
+    const cell = await screen.findByTestId('kept-cell');
+    await waitFor(() => expect(cell).toHaveAttribute('data-state', 'missing'));
+    expect(within(cell).getByTestId('kept-cell-placeholder')).toHaveTextContent('No longer available');
+    // NEGATIVE CONTROL: not the `hidden` sentence, which promises a wait that
+    // will never end for an id the gate has stopped returning.
+    expect(document.body.textContent).not.toContain('Still being checked');
+  });
+
+  it('is inert rather than a control that opens an empty lightbox', async () => {
+    const onOpenCell = vi.fn();
+    render(<KeptGallery {...props({ getImages: async () => [], onOpenCell })} />);
+
+    const cell = await screen.findByTestId('kept-cell');
+    await waitFor(() => expect(cell).toHaveAttribute('data-state', 'missing'));
+    expect(cell).toBeDisabled();
+    await userEvent.click(cell);
+    expect(onOpenCell).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 🔴 THE COMPOSER PREVIEWED TAGS AS IF THEY WOULD APPLY, AND FIVE IS WHERE THE
+ * SERVER STOPS. civitai's `normalizeBlockPostTagNames` applies
+ * `BLOCK_POST_MAX_TAGS` with a `break` BEFORE the tag lookup, so names past the
+ * cap land in neither the resolved list nor the `droppedTags` the consent screen
+ * renders — type eight, see eight badges, and three of them are simply never
+ * mentioned again anywhere.
+ *
+ * The fix is not a mirrored constant (see `lib/post.ts`'s `parsePostTags`): it
+ * is that the composer stops making the promise. The badges are labelled as what
+ * this app SENDS, and the field's copy names Civitai's ceiling — without a
+ * number — and points at the confirm screen as the authority. Eight tags here,
+ * so the fixture is PAST the server's cap rather than on it.
+ */
+describe('the tag field promises nothing it cannot keep', () => {
+  const EIGHT = 'one, two, three, four, five, six, seven, eight';
+
+  async function typeTags(user: ReturnType<typeof userEvent.setup>, text: string) {
+    render(<KeptGallery {...props({ posting: { onPosted: vi.fn() } })} />);
+    const cell = await screen.findByTestId('kept-cell');
+    await waitFor(() => expect(cell).toHaveAttribute('data-postable', 'true'));
+    await user.click(screen.getByTestId('kept-post-start'));
+    await user.click(screen.getByTestId('kept-cell'));
+    await user.click(screen.getByTestId('kept-post-open'));
+    await user.type(await screen.findByTestId('kept-post-tags'), text);
+  }
+
+  it('labels the badges as what is SENT, never as what will apply', async () => {
+    const user = userEvent.setup();
+    await typeTags(user, EIGHT);
+
+    const preview = screen.getByTestId('kept-post-tag-preview');
+    expect(within(preview).getByTestId('kept-post-tag-preview-label')).toHaveTextContent(
+      'What this app will send. Civitai’s confirm screen lists the ones that actually land.',
+    );
+    // All eight are still shown — this app does not guess which five survive.
+    for (const name of ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight']) {
+      expect(preview).toHaveTextContent(name);
+    }
+  });
+
+  /**
+   * The field's own description, pinned whole. The old sentence explained ONLY
+   * why an unknown name would be dropped, which gave a viewer every reason to
+   * expect a known one to survive.
+   */
+  it('names Civitai’s per-post ceiling in the field copy, without a number', async () => {
+    const user = userEvent.setup();
+    await typeTags(user, EIGHT);
+
+    const field = screen.getByTestId('kept-post-tags');
+    const described = (field.getAttribute('aria-describedby') ?? '')
+      .split(/\s+/)
+      .map((id) => document.getElementById(id))
+      .filter((el): el is HTMLElement => el != null)
+      .map((el) => el.textContent ?? '')
+      .join(' ');
+    expect(described).toContain(
+      'Civitai decides which of these apply — only tags it already has, and only so many per post. It shows you the final list before anything is published.',
+    );
+    // 🔴 NO COPIED SERVER CONSTANT IN VIEWER-FACING COPY. A number here would be
+    // a second authority on a bound this app cannot observe.
+    expect(described).not.toMatch(/\d/);
+  });
+
+  it('NEGATIVE CONTROL: no preview, and no label, with the field empty', async () => {
+    const user = userEvent.setup();
+    await typeTags(user, 'one');
+    expect(screen.getByTestId('kept-post-tag-preview')).toBeInTheDocument();
+
+    await user.clear(screen.getByTestId('kept-post-tags'));
+    expect(screen.queryByTestId('kept-post-tag-preview')).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('What this app will send');
   });
 });

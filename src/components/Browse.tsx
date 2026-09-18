@@ -166,6 +166,17 @@ export interface BrowseProps {
    * this — see `KeptGalleryProps.posting`.
    */
   canPost?: boolean;
+  /**
+   * The ids that joined a post, as the SERVER echoed them — the cue to delete
+   * them from the durable kept-run store.
+   *
+   * 🔴 REQUIRED ALONGSIDE `canPost`, AND THE GALLERY'S OWN PROP SHAPE ENFORCES
+   * IT. A posted image stops resolving for this app forever (the app-scoped read
+   * is conjoined with `postId IS NULL`), so a post that is not followed by a
+   * prune leaves a permanent *"No longer available"* tile and a run count that
+   * keeps counting it. See `removeKeptImages` in `lib/runs.ts`.
+   */
+  onPosted?: (imageIds: number[]) => void;
   /** Route an anonymous viewer into the host sign-in flow (post refusal path). */
   onRequestSignIn?: () => void;
   /** Copy text to the clipboard; resolves `true` on success. Hands over a post url. */
@@ -186,7 +197,7 @@ interface VoteState {
 }
 
 export function Browse(props: BrowseProps) {
-  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, keptTruncated = false, keptIncomplete = false, keptError = null, getImages, onOpenGeneratorKey, canPost = false, onRequestSignIn, copyToClipboard, onRetry } = props;
+  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, keptTruncated = false, keptIncomplete = false, keptError = null, getImages, onOpenGeneratorKey, canPost = false, onPosted, onRequestSignIn, copyToClipboard, onRetry } = props;
   const [tab, setTab] = useState<Tab>('discover');
   // Motion gate for the chrome Browse owns directly (draft cards). Cards rendered
   // by PublishedCard/IntroPanel read it themselves.
@@ -709,7 +720,12 @@ export function Browse(props: BrowseProps) {
               withAttribution
               truncated={keptTruncated}
               incomplete={keptIncomplete}
-              posting={canPost}
+              // 🔴 THE OPT-IN CARRIES THE DURABLE REMOVAL. `KeptGallery` does
+              // not own the kept-run store, so posting without a prune path is
+              // a permanent "No longer available" tile — the gallery's prop
+              // shape makes that combination unrepresentable, and this is where
+              // the pair is assembled.
+              posting={canPost && onPosted ? { onPosted } : undefined}
               onRequestSignIn={onRequestSignIn}
               copyToClipboard={copyToClipboard}
               emptyTitle="Nothing kept yet"

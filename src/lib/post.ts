@@ -87,11 +87,29 @@ export function isPostableGatedState(
  * resolution, not these strings — is the answer. The UI must not promise the
  * viewer their tags will be applied.
  *
- * 🔴 NO COUNT CEILING HERE, DELIBERATELY. civitai's `block-post.logic.ts`
- * TRUNCATES an over-long tag list (`if (out.length >= BLOCK_POST_MAX_TAGS)
- * break`) rather than refusing the post, so a client cap could only duplicate a
- * silent truncation — there is no refusal for it to get in front of, and the
- * consent screen shows the viewer the list that was actually resolved.
+ * 🔴 NO COUNT CEILING HERE, AND THE REASON IS NARROWER THAN THIS BLOCK USED TO
+ * CLAIM. civitai's `normalizeBlockPostTagNames` applies `BLOCK_POST_MAX_TAGS`
+ * with a `break` **before** the tag lookup, so names past the cap appear in
+ * NEITHER the resolved `tags` nor the `droppedTags` the consent screen renders:
+ * they are not "shown as dropped", they are absent. So the old reasoning — the
+ * consent screen shows what was resolved, therefore nothing is hidden — was
+ * false for exactly the names the cap eats.
+ *
+ * A mirrored cap here is still the wrong fix, for the reason at the top of this
+ * file: it would be a copied server constant whose drift is SILENT and points
+ * the unrecoverable way (raise the server's cap and this app would keep dropping
+ * names the server would have taken, with no sentence attached and nothing on
+ * the confirm to reveal it). What the cap actually costs is a PROMISE the
+ * composer was making, so the composer stops making it — the tag field's own
+ * copy names the ceiling without naming a number, and the preview is labelled as
+ * what this app SENDS rather than what will apply. See `POST_TAGS_NOTICE` and
+ * `POST_TAGS_PREVIEW_LABEL` in `components/KeptGallery.tsx`.
+ *
+ * ⚠️ What makes that adequate here and NOT adequate for the model-version attach
+ * (which DOES block submit) is reversibility: the consent screen lists the tags
+ * that will actually land and the viewer can still decline, so an over-long tag
+ * list is discovered BEFORE anything is published. A silently-omitted attach is
+ * discovered after.
  */
 export function parsePostTags(raw: string): string[] {
   const out: string[] = [];
@@ -178,8 +196,20 @@ export const POST_TIMEOUT_NOTICE =
 /** Shown when the host refuses for sign-in and this app has no sign-in route wired. */
 export const POST_SIGN_IN_NOTICE = 'Sign in to Civitai first — there’s no profile to post to yet.';
 
-/** Shown when the failure carries no message at all. */
-export const POST_UNKNOWN_NOTICE = 'Civitai turned the post down without saying why. Nothing was posted.';
+/**
+ * Shown when the failure carries no message at all.
+ *
+ * 🔴 IT USED TO END *"Nothing was posted."* — the exact claim
+ * {@link POST_TIMEOUT_NOTICE} is written NOT to make, in a branch that knows
+ * even less. This arm is reached when the host replied with an `error` that is
+ * an empty string: the app knows a refusal came back and knows nothing about
+ * what the server did before sending it, so it may describe the refusal and must
+ * not describe the outcome. Practically unreachable — the SDK substitutes
+ * `no images to post` for an empty `error` — which is precisely why the sentence
+ * had to be read rather than trusted.
+ */
+export const POST_UNKNOWN_NOTICE =
+  'Civitai turned the post down and didn’t say why. Check your Civitai profile before posting these again.';
 
 /**
  * One sentence per HOST refusal code, minus the two that are not sentences.

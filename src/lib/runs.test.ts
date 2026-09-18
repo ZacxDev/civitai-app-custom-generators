@@ -13,6 +13,7 @@ import {
   keptImageFeed,
   keptKey,
   listKeptRuns,
+  removeKeptImages,
   runsForGenerator,
   saveKeptRun,
   type KeptRun,
@@ -436,5 +437,134 @@ describe('chunkImageIds — the gated read is capped at 100 ids per request', ()
   it('never divides by a degenerate size', () => {
     expect(chunkImageIds([1, 2, 3], 0)).toEqual([[1], [2], [3]]);
     expect(chunkImageIds([1, 2, 3], -4)).toEqual([[1], [2], [3]]);
+  });
+});
+
+/**
+ * 🔴 THE DELETE PATH THE STORE DID NOT HAVE, AND THE DEFECT IT CLOSES. A posted
+ * image stops resolving for this app permanently (civitai's app-scoped gated
+ * read is conjoined with `postId IS NULL`), and nothing removed it from the kept
+ * runs — so a posted id came back on every later mount as a "No longer
+ * available" tile, and the gallery header kept counting it.
+ *
+ * Every case here is about SCOPE: what this must not take with it.
+ */
+describe('removing posted images from the kept runs', () => {
+  it('drops the named ids and rewrites the run with the survivors', async () => {
+    const store = memoryDraftStore();
+    const r = run({ id: 'k1', imageIds: [11, 22, 33] });
+    await saveKeptRun(store, r);
+
+    const remaining = await removeKeptImages(store, [r], [22]);
+
+    expect(remaining).toEqual([{ ...r, imageIds: [11, 33] }]);
+    // …and durably, which is the whole point: the returned value is not the
+    // claim, the store is.
+    expect(await store.get(keptKey('k1'))).toEqual({ ...r, imageIds: [11, 33] });
+  });
+
+  /**
+   * A run with no images is not a kept run (`isKeptRun` rejects an empty
+   * `imageIds`), so an emptied row would be dropped on every later read anyway —
+   * a permanently-unreadable key spending the viewer's per-app row quota.
+   */
+  it('deletes the key when the run has nothing left', async () => {
+    const store = memoryDraftStore();
+    const r = run({ id: 'k1', imageIds: [11] });
+    await saveKeptRun(store, r);
+
+    expect(await removeKeptImages(store, [r], [11])).toEqual([]);
+    expect(await store.get(keptKey('k1'))).toBeNull();
+  });
+
+  /**
+   * 🔴 THE ONE THAT WOULD BE SILENT DATA LOSS. Posting from one run must not
+   * touch another, and an untouched run must not even be REWRITTEN — a needless
+   * `set` spends a write and re-stamps `updatedAt`, which is the key order the
+   * whole newest-first read depends on.
+   */
+  it('leaves every other run alone, and does not rewrite it', async () => {
+    const writes: string[] = [];
+    const store = memoryDraftStore();
+    const spied: DraftStore = {
+      ...store,
+      set: (key, value) => {
+        writes.push(key);
+        return store.set(key, value);
+      },
+      delete: (key) => {
+        writes.push(`delete:${key}`);
+        return store.delete(key);
+      },
+    };
+    const a = run({ id: 'k1', keptAt: 1_000, imageIds: [11, 22] });
+    const b = run({ id: 'k2', keptAt: 2_000, imageIds: [33, 44] });
+    await saveKeptRun(store, a);
+    await saveKeptRun(store, b);
+
+    const remaining = await removeKeptImages(spied, [a, b], [22]);
+
+    expect(remaining).toEqual([{ ...a, imageIds: [11] }, b]);
+    expect(writes).toEqual([keptKey('k1')]);
+    expect(await store.get(keptKey('k2'))).toEqual(b);
+  });
+
+  /**
+   * The same image id can legitimately sit in two kept runs (a re-keep of one
+   * output — the reason `chunkImageIds` de-duplicates). It has one `postId`, so
+   * it has to go from both or the second copy is a dead tile.
+   */
+  it('removes an id that appears in more than one run', async () => {
+    const store = memoryDraftStore();
+    const a = run({ id: 'k1', imageIds: [11, 99] });
+    const b = run({ id: 'k2', imageIds: [99, 22] });
+    await saveKeptRun(store, a);
+    await saveKeptRun(store, b);
+
+    const remaining = await removeKeptImages(store, [a, b], [99]);
+
+    expect(remaining).toEqual([{ ...a, imageIds: [11] }, { ...b, imageIds: [22] }]);
+  });
+
+  it('NEGATIVE CONTROL: an id nobody kept changes nothing, and writes nothing', async () => {
+    const writes: string[] = [];
+    const store = memoryDraftStore();
+    const spied: DraftStore = {
+      ...store,
+      set: (key, value) => {
+        writes.push(key);
+        return store.set(key, value);
+      },
+      delete: (key) => {
+        writes.push(`delete:${key}`);
+        return store.delete(key);
+      },
+    };
+    const r = run({ id: 'k1', imageIds: [11, 22] });
+    await saveKeptRun(store, r);
+
+    expect(await removeKeptImages(spied, [r], [777])).toEqual([r]);
+    expect(await removeKeptImages(spied, [r], [])).toEqual([r]);
+    expect(writes).toEqual([]);
+  });
+
+  /**
+   * 🔴 A HALF-CORRECTED STORE IS A FACT THE CALLER HAS TO KNOW. `App` leaves its
+   * in-memory list alone when this rejects, because the next read is what the
+   * viewer will actually see; swallowing the failure here would put the screen
+   * and the storage out of step with nothing to detect it.
+   */
+  it('rejects when the store write fails', async () => {
+    const store = memoryDraftStore();
+    const r = run({ id: 'k1', imageIds: [11, 22] });
+    await saveKeptRun(store, r);
+    const failing: DraftStore = {
+      ...store,
+      set: async () => {
+        throw new Error('quota exceeded');
+      },
+    };
+
+    await expect(removeKeptImages(failing, [r], [22])).rejects.toThrow('quota exceeded');
   });
 });

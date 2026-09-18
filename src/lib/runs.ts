@@ -180,16 +180,75 @@ export function isKeptRun(value: unknown): value is KeptRun {
 }
 
 /**
- * 🔴 THE GALLERY IS ADD-ONLY, DELIBERATELY AND KNOWINGLY. There is no
- * `deleteKeptRun` — one existed and was cut in the round-0 audit because its only
- * caller was its own test, and a helper proved out by nothing but itself is not
- * coverage. So a viewer can keep an image and cannot un-keep it. That is a real
- * gap, named here rather than left to be discovered: it closes when a Remove
- * control ships in `components/KeptGallery.tsx` with a test that drives it, and
- * the check is mechanical — that control exists on `main`, or it does not.
+ * 🔴 THERE IS STILL NO VIEWER-FACING UN-KEEP, AND THIS BLOCK USED TO SAY THE
+ * STORE WAS ADD-ONLY FULL STOP. That is no longer true: {@link removeKeptImages}
+ * deletes from it, driven by a successful post (the one event that removes an
+ * image from this app's grid on the SERVER side, so the record here has to
+ * follow). What has not changed is the gap the old wording was really about — a
+ * viewer can keep an image and cannot decide, on its own, to un-keep it. That
+ * closes when a Remove control ships in `components/KeptGallery.tsx` with a test
+ * that drives it, and the check is mechanical — that control exists on `main`,
+ * or it does not.
  */
 export async function saveKeptRun(store: DraftStore, run: KeptRun): Promise<void> {
   await store.set(keptKey(run.id), run);
+}
+
+/**
+ * Drop image ids from the viewer's kept runs — IN THE DURABLE STORE, not just on
+ * screen — and return the runs that remain, in the order they were given.
+ *
+ * 🔴 WHY THIS HAS TO EXIST, AND WHY A COMPONENT-LOCAL MASK IS NOT ENOUGH. civitai's
+ * app-scoped gated read is conjoined with `postId IS NULL`, so an image that
+ * joins a post STOPS RESOLVING for this app — permanently. Masking the ids in
+ * `KeptGallery`'s own state hides them for ONE mount: switch tabs, reload, come
+ * back tomorrow, and every posted id is back in the grid rendering *"No longer
+ * available"* forever, with the tab's own *"N images kept from M runs"* header
+ * still counting them. The record has to be corrected where it lives.
+ *
+ * 🔴 SCOPED TO THE NAMED IDS, NEVER TO THE RUN. A run is several images and a
+ * viewer may post one of them, so a run is REWRITTEN with the survivors rather
+ * than deleted — the key is deleted only when nothing is left, because
+ * {@link isKeptRun} rejects an empty `imageIds` and a row that fails it would be
+ * dropped silently on every later read anyway (a permanently-unreadable key,
+ * spending the viewer's per-app row quota for nothing).
+ *
+ * ⚠️ IT ONLY REACHES THE RUNS IT IS HANDED. This takes the caller's loaded set
+ * rather than walking the store, so an id living in a run outside
+ * {@link KEPT_LIST_LIMIT} is not pruned. That is the right bound and not a
+ * compromise: the only way an id reaches a post is by being rendered, and the
+ * only runs that render are the ones in that set. Walking the whole store
+ * instead would spend a `get` per row to find rows that cannot be involved.
+ *
+ * Rejects if a write fails — a half-corrected store is a fact the caller has to
+ * know about, because the next read is what the viewer sees.
+ */
+export async function removeKeptImages(
+  store: DraftStore,
+  runs: readonly KeptRun[],
+  imageIds: readonly number[],
+): Promise<KeptRun[]> {
+  const drop = new Set(imageIds);
+  if (drop.size === 0) return [...runs];
+  const remaining: KeptRun[] = [];
+  const writes: Array<Promise<unknown>> = [];
+  for (const run of runs) {
+    const kept = run.imageIds.filter((id) => !drop.has(id));
+    if (kept.length === run.imageIds.length) {
+      // Untouched — no write, so an unrelated run is never even rewritten.
+      remaining.push(run);
+      continue;
+    }
+    if (kept.length === 0) {
+      writes.push(store.delete(keptKey(run.id)));
+      continue;
+    }
+    const next: KeptRun = { ...run, imageIds: kept };
+    remaining.push(next);
+    writes.push(store.set(keptKey(run.id), next));
+  }
+  await Promise.all(writes);
+  return remaining;
 }
 
 /**

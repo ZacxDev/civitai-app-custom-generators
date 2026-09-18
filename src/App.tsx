@@ -61,7 +61,7 @@ import { setGeneratorMeta } from './lib/meta.js';
 import type { DraftStore, StoredDraft } from './lib/drafts.js';
 import { deleteDraft as deleteDraftFn, listDrafts, saveDraft as saveDraftFn } from './lib/drafts.js';
 import type { KeptRun } from './lib/runs.js';
-import { listKeptRuns, runsForGenerator, saveKeptRun } from './lib/runs.js';
+import { listKeptRuns, removeKeptImages, runsForGenerator, saveKeptRun } from './lib/runs.js';
 import { Browse } from './components/Browse.js';
 import { Builder } from './components/Builder.js';
 import { Runner } from './components/Runner.js';
@@ -466,6 +466,43 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   const handleKeepRun = useCallback(async (run: KeptRun) => {
     await saveKeptRun(depsRef.current.drafts, run);
     setKeptRuns((prev) => [run, ...prev.filter((r) => r.id !== run.id)]);
+  }, []);
+
+  /**
+   * Images just joined a POST, so they have left this app's gallery for good —
+   * correct the durable record, not only the screen.
+   *
+   * 🔴 THE HALF `KeptGallery` CANNOT DO. civitai's app-scoped gated read is
+   * conjoined with `postId IS NULL`, so a posted id stops resolving for this app
+   * permanently. The gallery masks the ids it posted, but that state dies with
+   * the mount: without this, switching tabs or reloading brought every posted
+   * image back as a *"No longer available"* tile — forever — with the tab header
+   * still counting them. `removeKeptImages` rewrites only the affected runs and
+   * only the named ids, so a run's other images survive.
+   *
+   * 🔴 THE IDS ARE THE SERVER'S ECHO, NOT THE SELECTION. What a post is made of
+   * is decided by the post call; deleting from a durable store on the strength
+   * of what we ASKED for would delete an image the server may not have taken.
+   *
+   * State is set from what `removeKeptImages` RETURNS rather than by re-listing
+   * — the same read-after-write reasoning as `handleKeepRun` above. A write
+   * failure leaves the in-memory list alone: the store still holds those runs, so
+   * claiming otherwise would put the app's list and its storage out of step in
+   * the direction where the next reload silently disagrees with the screen.
+   */
+  const keptRunsRef = useRef<KeptRun[]>(keptRuns);
+  keptRunsRef.current = keptRuns;
+  const handlePostedImages = useCallback((imageIds: number[]) => {
+    void (async () => {
+      try {
+        const next = await removeKeptImages(depsRef.current.drafts, keptRunsRef.current, imageIds);
+        setKeptRuns(next);
+      } catch {
+        // Non-fatal and deliberately quiet: the post SUCCEEDED and the gallery
+        // already says so. The grid hides these ids for this mount either way,
+        // and the next kept-runs read is authoritative.
+      }
+    })();
   }, []);
 
   // Resolve the MODERATED cover url for every card whose stored data carries a
@@ -890,6 +927,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             // host's own `sign in to post` refusal is routed below for the case
             // the session lapses mid-session.
             canPost
+            onPosted={handlePostedImages}
             onRequestSignIn={deps.requestSignIn}
             copyToClipboard={async (text) => {
               // Same host-clipboard path as Share, normalised to the true/false

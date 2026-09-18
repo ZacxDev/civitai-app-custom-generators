@@ -301,11 +301,22 @@ describe('describeCreatePostError', () => {
     });
   });
 
-  it('never renders an empty banner', () => {
-    expect(describeCreatePostError('   ', { timedOut: false })).toEqual({
+  /**
+   * 🔴 AND IT DOES NOT CLAIM AN OUTCOME IT CANNOT KNOW. The sentence used to end
+   * *"Nothing was posted."* — the exact claim `POST_TIMEOUT_NOTICE` is written
+   * NOT to make, on a branch that knows even less than the timeout does: all the
+   * app has here is that a refusal came back carrying no words, which says
+   * nothing about what the server did before sending it. It may describe the
+   * refusal; it may not describe the post.
+   */
+  it('never renders an empty banner, and never asserts nothing was posted', () => {
+    const outcome = describeCreatePostError('   ', { timedOut: false });
+    expect(outcome).toEqual({
       kind: 'notice',
       source: 'server',
-      message: 'Civitai turned the post down without saying why. Nothing was posted.',
+      message:
+        'Civitai turned the post down and didn’t say why. Check your Civitai profile before posting these again.',
     });
+    expect(outcome).not.toMatchObject({ message: expect.stringContaining('Nothing was posted') });
   });
 });
