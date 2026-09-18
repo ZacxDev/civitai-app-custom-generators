@@ -196,8 +196,14 @@ export async function saveKeptRun(store: DraftStore, run: KeptRun): Promise<void
 
 /**
  * A partial failure of {@link removeKeptImages} — SOME of the store was
- * corrected and some was not, with the runs that are durably true of it
- * attached so the caller can match its screen to the record.
+ * corrected and some was not, with the runs as the store is BELIEVED to hold
+ * them attached so the caller can match its screen to the record.
+ *
+ * ⚠️ BELIEVED, NOT KNOWN. Read {@link KeptRemovalError.remaining} before acting
+ * on this: a rejected write is not proof the write did not land, so `remaining`
+ * can report a run as un-pruned that the store has in fact pruned. This
+ * paragraph is what an editor hover shows, which is why the caveat is repeated
+ * here rather than left to the field below.
  */
 export class KeptRemovalError extends Error {
   /**
