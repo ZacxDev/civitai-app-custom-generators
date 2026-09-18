@@ -75,16 +75,38 @@ export const INCOMPLETE_NOTICE =
 /**
  * What a cell says when the gate returned `hidden`.
  *
- * 🔴 THE DOMINANT CAUSE IS THE SCAN, NOT THE BROWSING LEVEL, AND THIS LINE USED
+ * 🔴 THE DOMINANT CAUSE WAS THE SCAN, NOT THE BROWSING LEVEL, AND THIS LINE USED
  * TO NAME ONLY THE BROWSING LEVEL. `publishGenerationOutputs` creates each row
  * with `createImage` DEFAULT ingestion, which Prisma defaults to `Pending`, and
- * the gate (`block-gated-images.logic.ts`) returns `hidden` for anything not
+ * the gate (`block-gated-images.logic.ts`) returned `hidden` for anything not
  * terminally `Scanned` — with NO owner bypass, in its own words *"an
  * unscanned/flagged image is `hidden` for EVERYONE (including its author)"*. So
  * on the ordinary path — press Keep, the gallery mounts below the result and
- * reads within the same second — the viewer's own just-paid-for images come back
+ * reads within the same second — the viewer's own just-paid-for images came back
  * `hidden`, and *"Not shown at your browsing level"* told them Civitai had
  * withheld their own work from them.
+ *
+ * ⚠️ THAT OWNER SENTENCE IS NO LONGER TRUE, AND THE CORRECTION IS THE WHOLE
+ * REASON THIS COMPONENT BROKE IN PRODUCTION. civitai/civitai#4895 added an
+ * owner projection: `classifyGatedImageForViewer` now returns an internal
+ * `pending` verdict for "nothing has rated this yet" (a non-terminal ingestion,
+ * OR `Scanned` with `nsfwLevel === 0`), and `getBlockGatedImagesByIds` turns
+ * that into `visible` + `ratingPending: true` — url, NO rating — **for the
+ * image's own author**, and `hidden` for everyone else. This gallery only ever
+ * renders the viewer's OWN kept images, so the just-kept case is now the
+ * `ratingPending` shape rather than `hidden`. `@civitai/blocks-react` <= 0.50.0
+ * rejected that shape in `isValidGatedImage`, which fails the WHOLE
+ * `IMAGES_RESULT`, which the transport DROPS — so `getImages()` never resolved
+ * and the read below died at the SDK's 30s request timeout, rendering
+ * *"Couldn’t load your kept images just now."* over a perfectly good gallery.
+ * Fixed by the 0.51.0 / app-sdk 0.42.0 pins (#22) and pinned, at the bridge
+ * rather than at the component, by `Browse.gallery.transport.test.tsx`.
+ *
+ * What remains `hidden` for the AUTHOR is therefore narrower than the four
+ * causes enumerated below: the moderation flags and hard block (3), the two
+ * TERMINAL scan refusals (`Blocked` / `NotFound`), and the browsing ceiling (4).
+ * The enumeration is kept whole because it is the gate's contract for every
+ * viewer, and the copy stays soft for the reason given at the end of this block.
  *
  * 🔴 THE GATE HAS FOUR `hidden` CAUSES, NOT TWO, AND THIS BLOCK USED TO SAY
  * "both". Read off `classifyGatedImageForViewer` in order, an image is `hidden`
@@ -173,6 +195,17 @@ export const HIDDEN_CELL_NOTICE = 'Still being checked, or above your browsing l
  *
  * Exactly ONE re-read per id, tracked in a ref, so a permanently-hidden image
  * (above the viewer's ceiling, flagged) can never become a polling loop.
+ *
+ * ⚠️ NARROWER THAN IT READS, SINCE civitai/civitai#4895 — see the owner-projection
+ * note on {@link HIDDEN_CELL_NOTICE}. The case this delay was sized for (the
+ * author's own just-kept, not-yet-scanned image) no longer returns `hidden` to
+ * its author at all; it returns `visible` + `ratingPending`, which renders
+ * immediately and never reaches this path. What still reaches it is the narrowed
+ * `hidden` set — moderation flags, a hard block, a TERMINAL scan refusal, the
+ * browsing ceiling — none of which one re-read 20s later is likely to clear.
+ * Left in place rather than removed: it is bounded, it costs one request per
+ * withheld cell per mount, and removing a mechanism is a behaviour change that
+ * does not belong in the release that ships the fix above.
  */
 export const GALLERY_RECHECK_MS = 20_000;
 
