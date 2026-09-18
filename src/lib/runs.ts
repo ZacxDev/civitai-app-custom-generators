@@ -201,11 +201,23 @@ export async function saveKeptRun(store: DraftStore, run: KeptRun): Promise<void
  */
 export class KeptRemovalError extends Error {
   /**
-   * The kept runs as the STORE now holds them, in the order the runs were given:
-   * a run whose rewrite landed appears rewritten, a run whose write FAILED
-   * appears exactly as it was passed in, and a run whose deletion landed is
-   * absent. Assigning this to the caller's state is what stops the screen and the
-   * storage disagreeing after a partial failure.
+   * The kept runs as the store is BELIEVED to hold them, in the order the runs
+   * were given: a run whose rewrite RESOLVED appears rewritten, a run whose write
+   * REJECTED appears exactly as it was passed in, and a run whose deletion
+   * resolved is absent. Assigning this to the caller's state is what keeps the
+   * screen and the storage from disagreeing after a partial failure.
+   *
+   * ⚠️ BELIEVED, NOT KNOWN — A REJECTION IS NOT PROOF THE WRITE DID NOT LAND, and
+   * this block used to say flatly that these are "the runs as the STORE now holds
+   * them". `useAppStorage()`'s `set`/`delete` are RPCs over the postMessage
+   * bridge, so a `RequestTimeoutError` (or a dropped reply) rejects a write that
+   * the host may already have applied. In that case this list reports a run as
+   * un-pruned while the store has pruned it, and assigning it CAUSES the very
+   * disagreement the paragraph above says it prevents. The error is one-sided and
+   * benign: the screen over-reports what is kept, the viewer's own sentence
+   * already hedges with *"may still be listed"*, and the next kept-runs read
+   * corrects it. Same softening as the hydration-horizon bound on
+   * {@link removeKeptImages} — a trade, not a proof.
    */
   readonly remaining: KeptRun[];
 
@@ -257,10 +269,11 @@ export class KeptRemovalError extends Error {
  * caller learned "something failed" and nothing about WHICH runs were corrected,
  * while the in-flight writes landed anyway — a half-corrected store the caller
  * could not describe, so its screen and its storage silently disagreed. Now the
- * failure carries the runs that are durably true of the store
- * ({@link KeptRemovalError.remaining}) — successful rewrites applied, failed ones
- * left at their pre-call contents — so the caller can at least match the screen
- * to the record and say so. There is no retry here: the write that failed is the
+ * failure carries the best available account of the store
+ * ({@link KeptRemovalError.remaining}) — resolved rewrites applied, rejected ones
+ * left at their pre-call contents, with the one case that account can still get
+ * wrong named on that field — so the caller can at least match the screen to the
+ * record and say so. There is no retry here: the write that failed is the
  * viewer's own per-app storage, and a silent retry would hide the one fact worth
  * reporting.
  */
@@ -316,7 +329,10 @@ export async function removeKeptImages(
       if (p.next) remaining.push(p.next);
       return;
     }
-    // The write did not land, so the STORE still holds this run as it was.
+    // The write REJECTED, so report the run as it was passed in. That is the
+    // best available reading and not a certainty — see
+    // {@link KeptRemovalError.remaining} for the bridge-timeout case where a
+    // rejected write may nonetheless have landed.
     if (failure === undefined) failure = res.err;
     remaining.push(p.run);
   });

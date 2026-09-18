@@ -59,6 +59,7 @@ const RATED_ID = 90_210;
 const PENDING_ID = 90_211;
 const RATED_B = 90_212;
 const RATED_C = 90_213;
+const RATED_D = 90_214;
 
 /** A kept image something HAS rated — the only shape the post service accepts. */
 function ratedImage(imageId: number): BlockGatedImage {
@@ -123,7 +124,10 @@ const POST: BlockCreatePostResult = {
   imageIds: [RATED_ID],
 };
 
-async function seededDrafts(imageIds: number[]): Promise<DraftStore> {
+async function seededDrafts(
+  imageIds: number[],
+  extraRuns: ReadonlyArray<{ id: string; keptAt: number; imageIds: number[] }> = [],
+): Promise<DraftStore> {
   const drafts = memoryDraftStore();
   await saveKeptRun(drafts, {
     id: 'k00001',
@@ -133,6 +137,14 @@ async function seededDrafts(imageIds: number[]): Promise<DraftStore> {
     generatorKey: 'shared:1',
     buttonLabel: 'Cyberpunk',
   });
+  for (const extra of extraRuns) {
+    await saveKeptRun(drafts, {
+      ...extra,
+      generatorName: 'Neon Portrait Studio',
+      generatorKey: 'shared:1',
+      buttonLabel: 'Cyberpunk',
+    });
+  }
   return drafts;
 }
 
@@ -161,10 +173,29 @@ async function renderGallery(opts: {
    * Make every WRITE to the kept-run store fail, AFTER the seed — the shape a
    * per-app row/byte quota produces. Reads still work, so the test can ask the
    * store what it really holds.
+   *
+   * 🔴 THIS FIXTURE LANDS EXACTLY ON THE BOUNDARY, WHICH IS WHY IT CANNOT BE THE
+   * ONLY ONE. When EVERY write fails, `KeptRemovalError.remaining` is byte-equal
+   * to the list that was passed in, so `App`'s `setKeptRuns(err.remaining)` is a
+   * no-op here and deleting that line leaves this whole file green. Use
+   * `failStoreWritesForRuns` for the MIXED shape, where `remaining` is neither
+   * the pre-call list nor the fully-pruned one and the assignment does
+   * observable work.
    */
   failStoreWrites?: boolean;
+  /** Extra kept runs to seed, beyond the `k00001` run built from `keptIds`. */
+  extraRuns?: ReadonlyArray<{ id: string; keptAt: number; imageIds: number[] }>;
+  /**
+   * Reject the store write for exactly these kept-run ids, and let every other
+   * write LAND — a per-row rejection rather than a dead store. This is the
+   * PARTIAL failure `removeKeptImages` was written for: a `set` refused on one
+   * row while another row's `set` is applied.
+   */
+  failStoreWritesForRuns?: readonly string[];
 }): Promise<{ drafts: DraftStore }> {
-  const seeded = await seededDrafts(opts.keptIds);
+  const seeded = await seededDrafts(opts.keptIds, opts.extraRuns ?? []);
+  // Literal `kept:` prefix, per this file's no-imported-constants rule.
+  const rejected = new Set((opts.failStoreWritesForRuns ?? []).map((id) => `kept:${id}`));
   const drafts: DraftStore = opts.failStoreWrites
     ? {
         ...seeded,
@@ -175,7 +206,19 @@ async function renderGallery(opts: {
           throw new Error('quota exceeded');
         },
       }
-    : seeded;
+    : rejected.size > 0
+      ? {
+          ...seeded,
+          set: async (key, value) => {
+            if (rejected.has(key)) throw new Error('quota exceeded');
+            return seeded.set(key, value);
+          },
+          delete: async (key) => {
+            if (rejected.has(key)) throw new Error('quota exceeded');
+            return seeded.delete(key);
+          },
+        }
+      : seeded;
   const shared = fakeShared([]);
   const deps: Partial<AppDeps> = {
     resolveResources: async () => [],
@@ -1041,6 +1084,83 @@ describe('a posted image leaves the durable kept-run store', () => {
     // agrees with it rather than with the correction it failed to make.
     expect(await keptImageIdsInStore(drafts)).toEqual([RATED_ID, RATED_B]);
     expect(screen.getByTestId('kept-summary')).toHaveTextContent('2 images kept from 1 run.');
+  });
+
+  /**
+   * 🔴 THE MIXED PARTIAL FAILURE — THE ONE SHAPE THAT CAN SEE WHETHER `App`
+   * CONSUMES `KeptRemovalError.remaining` AT ALL. The sibling above fails EVERY
+   * write, so `remaining` comes back byte-equal to the list that went in: the
+   * `if (err instanceof KeptRemovalError) setKeptRuns(err.remaining)` line in
+   * `App.handlePostedImages` is a no-op in that fixture, and deleting it left the
+   * whole suite green at 468/468. A fixture whose values cannot distinguish the
+   * mutation is not coverage of it, however loudly the surrounding test reads.
+   *
+   * Here ONE row's write is refused and the OTHER lands, so the three candidate
+   * lists are all different: the pre-call list (4 images), what the store holds
+   * (3), and the fully-pruned list the app asked for (2). Only the middle one is
+   * true, and only the assignment produces it — which is what the `kept-summary`
+   * assertion pins. Drop the line and the header says *4 images kept from 2
+   * runs.* over a store holding three, with the "we couldn't update My gallery"
+   * banner up beside it reading as though the disagreement had been handled:
+   * the pre-round-2 defect, wearing the new sentence as cover.
+   *
+   * ⚠️ The GRID cannot see this. `KeptGallery` masks the ids it just posted for
+   * the life of the mount, so the cell count is 2 either way — the gallery's own
+   * mask subtracts exactly what the assignment was supposed to. The summary is
+   * rendered by `Browse` from the unmasked `keptRuns`, which is why the claim is
+   * made there.
+   */
+  it('matches the screen to the store when only SOME of the prune writes land', async () => {
+    const user = userEvent.setup();
+    const { drafts } = await renderGallery({
+      gatedImages: [ratedImage(RATED_ID), ratedImage(RATED_B), ratedImage(RATED_C), ratedImage(RATED_D)],
+      keptIds: [RATED_ID, RATED_B],
+      extraRuns: [{ id: 'k00002', keptAt: 2_000, imageIds: [RATED_C, RATED_D] }],
+      // One image out of EACH run joins the post, so both rows need rewriting.
+      createPostResult: { postId: 76, url: 'https://civitai.com/posts/76', imageIds: [RATED_ID, RATED_C] },
+      // …and the newer run's rewrite is the one the store refuses.
+      failStoreWritesForRuns: ['k00002'],
+    });
+
+    await user.click(await screen.findByTestId('tab-kept'));
+    const gallery = await screen.findByTestId('browse-kept-gallery');
+    await waitFor(() => expect(within(gallery).getAllByTestId('kept-cell')).toHaveLength(4));
+    await waitFor(() =>
+      expect(within(gallery).getAllByTestId('kept-cell')[0]).toHaveAttribute('data-postable', 'true'),
+    );
+    expect(screen.getByTestId('kept-summary')).toHaveTextContent('4 images kept from 2 runs.');
+
+    await user.click(screen.getByTestId('kept-post-start'));
+    for (const id of [RATED_ID, RATED_C]) {
+      await user.click(
+        within(gallery)
+          .getAllByTestId('kept-cell')
+          .find((el) => el.getAttribute('data-image-id') === String(id))!,
+      );
+    }
+    await waitFor(() => expect(screen.getByTestId('kept-post-count')).toHaveTextContent('2 selected'));
+    await user.click(screen.getByTestId('kept-post-open'));
+    await user.click(within(await screen.findByTestId('kept-post-composer')).getByTestId('kept-post-submit'));
+
+    // The post landed; that half is unchanged.
+    await screen.findByTestId('kept-post-success');
+    expect(await screen.findByTestId('kept-load-error')).toHaveTextContent(
+      'Your post went through, but this app couldn’t update My gallery — some of those images may still be listed here, and won’t load.',
+    );
+
+    // What the store ACTUALLY holds: `k00002` untouched (its write was refused),
+    // `k00001` rewritten to the survivor. Newest run first, as the gallery reads
+    // them.
+    await waitFor(async () =>
+      expect(await keptImageIdsInStore(drafts)).toEqual([RATED_C, RATED_D, RATED_B]),
+    );
+
+    // 🔴 THE MUTATION-SENSITIVE CLAIM. Three, not the four the app went in with
+    // and not the two it asked for — i.e. the app is reporting the store rather
+    // than either of the two lists it could have kept by accident.
+    await waitFor(() =>
+      expect(screen.getByTestId('kept-summary')).toHaveTextContent('3 images kept from 2 runs.'),
+    );
   });
 });
 

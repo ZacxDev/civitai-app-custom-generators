@@ -400,6 +400,52 @@ describe('the image cap is an affordance, not a silent refusal', () => {
 });
 
 /**
+ * 🔴 THE COMPOSER SURVIVES THE GRID EMPTYING UNDER IT — AS ONE MOUNT, NOT AS A
+ * REBUILD. Rendering the composer in BOTH returns stopped it being UNMOUNTED when
+ * the kept set empties mid-post (`App` clears `keptRuns` on a `ready`/`viewer`
+ * flip, on a failed re-list, and by design when you post everything you kept),
+ * which is what used to swallow the refusal. But "built once and rendered in
+ * both" is a fact about the SOURCE: the two returns are different child lists, so
+ * without a stable key React matches the composer against whatever unkeyed
+ * sibling shares its index, tears the Modal down and rebuilds it. Controlled form
+ * state survives that (it lives in the component, not the DOM) — FOCUS does not,
+ * and a viewer mid-sentence in the title field loses the caret for a reason
+ * nothing on screen explains.
+ *
+ * The assertion is node IDENTITY plus `document.activeElement`, because the two
+ * fail differently and only the second is visible to a viewer. A text assertion
+ * would pass over a full remount.
+ */
+describe('the composer is one mount across both returns, not two', () => {
+  it('keeps the title field — and the caret in it — when the grid empties under it', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <KeptGallery {...props({ runs: [run()], posting: { onPosted: vi.fn() } })} />,
+    );
+
+    const cell = await screen.findByTestId('kept-cell');
+    await waitFor(() => expect(cell).toHaveAttribute('data-postable', 'true'));
+    await user.click(screen.getByTestId('kept-post-start'));
+    await user.click(screen.getByTestId('kept-cell'));
+    await user.click(screen.getByTestId('kept-post-open'));
+
+    const title = await screen.findByTestId('kept-post-title');
+    await user.type(title, 'Neon run');
+    expect(document.activeElement).toBe(title);
+
+    // The kept set empties while the composer is open — the non-empty return
+    // swaps to the empty one underneath it.
+    rerender(<KeptGallery {...props({ runs: [], posting: { onPosted: vi.fn() } })} />);
+    expect(await screen.findByTestId(`kept-gallery-empty`)).toBeInTheDocument();
+
+    const after = screen.getByTestId('kept-post-title');
+    expect(after).toBe(title);
+    expect(after).toHaveValue('Neon run');
+    expect(document.activeElement).toBe(title);
+  });
+});
+
+/**
  * 🔴 THE ATTACH FIELD HAS TO BE FILLABLE FROM INSIDE A SANDBOXED IFRAME. It used
  * to be a `NumberInput` asking for a raw `modelVersionId` — a number that exists
  * nowhere a block can see it. The only place a viewer meets one is the

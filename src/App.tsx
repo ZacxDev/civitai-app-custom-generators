@@ -494,10 +494,15 @@ export function App({ deps: depsOverride }: AppProps = {}) {
    * were corrected and some were not, and the ids that were not are exactly the
    * defect this whole path exists to remove: permanently-dead *"No longer
    * available"* tiles, with nothing said. Two things happen instead. The list is
-   * set from {@link KeptRemovalError.remaining} — the runs as the STORE now holds
-   * them — so the screen and the record cannot silently disagree; and the viewer
-   * is told, because this is the one outcome where their gallery is about to look
-   * broken through no action of theirs. NO RETRY: the post itself succeeded and
+   * set from {@link KeptRemovalError.remaining} — the best available account of
+   * what the store now holds, with the one case it can still get wrong bounded on
+   * that field — so the screen and the record do not silently disagree; and the
+   * viewer is told, because this is the one outcome where their gallery is about
+   * to look broken through no action of theirs. That assignment is load-bearing
+   * and is pinned by a MIXED partial failure in
+   * `components/KeptGallery.post.transport.test.tsx`: the all-writes-fail fixture
+   * cannot see it, because `remaining` comes back byte-equal to the list that went
+   * in. NO RETRY: the post itself succeeded and
    * must never be re-sent, and re-attempting the failed STORE write silently
    * would hide the only fact worth reporting. `onRetry` (the alert's own
    * control) re-lists, which is the bounded, viewer-initiated version.

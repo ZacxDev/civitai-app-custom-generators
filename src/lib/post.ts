@@ -110,17 +110,30 @@ export function isPostableGatedState(
  * server's resolution — the tags that will actually land — and the viewer can
  * still decline, so the post can still be stopped after seeing it.
  *
- * ⚠️ VISIBLE IS NOT ANNOUNCED, AND THIS BLOCK USED TO SAY AN OVER-LONG LIST IS
- * "discovered BEFORE anything is published". Nothing on that screen SAYS a name
- * was omitted. Read off civitai's `normalizeBlockPostTagNames` and
- * `buildCreatePostConsentCopy`: the cap check sits on the RESOLVED branch and
- * `break`s the loop, so once `BLOCK_POST_MAX_TAGS` known names have been taken
- * the walk stops dead — every later name lands in neither the resolved list nor
- * `droppedTags`, and `droppedTagsLine` (the one sentence about tags that did not
- * make it) is built from `droppedTags` alone. The consent body then renders the
- * resolved badges, which is at most the cap. So a viewer who types eight known
- * tags sees a shorter row than they typed and no sentence about the rest: what
- * they get is an ABSENCE TO NOTICE, before publishing, not a disclosure.
+ * ⚠️ VISIBLE IS NOT ANNOUNCED, AND THE CUT IS POSITIONAL — THIS PARAGRAPH USED TO
+ * SAY THE WALK STOPS "once `BLOCK_POST_MAX_TAGS` KNOWN names have been taken",
+ * which is a different and milder mechanism, and which contradicted the paragraph
+ * fifty lines above it. Nothing on that screen SAYS a name was omitted, and what
+ * gets omitted is decided before any tag is looked up. Read off civitai:
+ * `normalizeBlockPostTagNames` (`block-post.logic.ts`) trims, lowercases,
+ * de-duplicates and `break`s at `BLOCK_POST_MAX_TAGS` **with no `Tag` lookup in
+ * it at all**, and `resolveExistingPostTags` (`block-post.service.ts`) is only
+ * ever called with the RAW request — so by the time a row is fetched the list is
+ * already at most `BLOCK_POST_MAX_TAGS` names, which makes that function's own
+ * `if (tagIds.length >= BLOCK_POST_MAX_TAGS) break` unreachable. The cap
+ * therefore falls on the viewer's first N DISTINCT names, known or not.
+ *
+ * 🔴 THE WORST CASE IS WORSE THAN "A SHORTER ROW THAN THEY TYPED" — IT IS AN
+ * EMPTY ONE. Type eight tags whose first five match no `Tag` row and whose last
+ * three are real: normalisation keeps the five unknown names and drops the three
+ * real ones on POSITION, the lookup resolves none of what survives, and `tagIds`
+ * comes back empty. The three tags that would have applied were never sent, never
+ * resolved, and appear in neither the resolved badges nor `droppedTags` — so
+ * `droppedTagsLine` (the one sentence about tags that did not make it, built from
+ * `droppedTags` alone) names the five that failed and says nothing about the
+ * three that would have worked, over a consent body rendering ZERO tag badges.
+ * What the viewer gets is an ABSENCE TO NOTICE, before publishing, not a
+ * disclosure.
  *
  * That is still the reversible side of the line — the screen is shown and the
  * decline is available while nothing has been published — and it is what keeps

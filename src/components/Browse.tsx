@@ -140,11 +140,23 @@ export interface BrowseProps {
    */
   keptIncomplete?: boolean;
   /**
-   * The kept-runs read FAILED. 🔴 Not the same fact as "no kept runs", and the
-   * difference is the whole reason this prop exists: rendering the gallery's
-   * empty state over a failed read tells a viewer who has kept things that they
-   * have not, which reads as data loss caused by this app. Set ⇒ the panel says
-   * the load failed and offers `onRetry`, and the empty state is NOT shown.
+   * A viewer-facing sentence about the kept-run STORE, rendered over the gallery
+   * with `onRetry` beside it, and suppressing the empty state.
+   *
+   * 🔴 THE ORIGINATING FAULT IS A FAILED READ. Not the same fact as "no kept
+   * runs", and the difference is the whole reason this prop exists: rendering the
+   * gallery's empty state over a failed read tells a viewer who has kept things
+   * that they have not, which reads as data loss caused by this app.
+   *
+   * ⚠️ IT IS NO LONGER ONLY A READ, AND THIS DOC SAID IT WAS. `App` also sets it
+   * when a post landed but the durable PRUNE could not be written
+   * (`handlePostedImages`) — a *write* failure, where the list beside it is fully
+   * reliable and merely over-reports by the ids that could not be pruned. So this
+   * being set does NOT license treating `keptRuns` as untrustworthy: do not
+   * suppress or grey the grid on the strength of it. If a future caller needs
+   * behaviour that is right for one fault and wrong for the other, SPLIT THE
+   * CHANNEL rather than keying off this string — the two carry the same prop and
+   * different guarantees.
    */
   keptError?: string | null;
   /** Per-viewer gated image read for the gallery. Required alongside `keptRuns`. */
@@ -711,7 +723,12 @@ export function Browse(props: BrowseProps) {
                 about the viewer's history built on a read that never returned —
                 so the failure REPLACES it rather than sitting above it. With
                 runs already in hand (a keep made this session) the list is real
-                but possibly short, so the alert rides above it instead. */}
+                but possibly short, so the alert rides above it instead.
+                ⚠️ The suppression is keyed on there being nothing to show, NOT
+                on the fault: `keptError` also carries the post-prune WRITE
+                failure (see the prop's own doc), where the list is reliable —
+                and that arm can never reach `keptCells.length === 0`, because a
+                rejected write puts its run back into `remaining`. */}
             {keptError && (
               <Alert color="warning" data-testid="kept-load-error">
                 <Stack gap={8}>
@@ -742,7 +759,11 @@ export function Browse(props: BrowseProps) {
               // which meant the gallery's prop shape was consulted after the
               // decision had already been made, and a fail-open mutation of it
               // was invisible to the whole suite. Both props are one object now,
-              // so there is nothing left here to get wrong.
+              // so the pair cannot come apart HERE — which is narrower than "no
+              // mistake is possible": a deliberately-written fallback (`posting
+              // ?? { onPosted: () => {} }`) still type-checks and still silently
+              // drops the prune. The type closes the ordinary call-site error,
+              // not that one.
               posting={posting}
               onRequestSignIn={onRequestSignIn}
               copyToClipboard={copyToClipboard}

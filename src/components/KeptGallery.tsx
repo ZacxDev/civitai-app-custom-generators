@@ -841,6 +841,18 @@ export function KeptGallery({
      waits on a human for up to ten minutes. `postSuccess` was already rendered
      in the empty branch for the same reason; the refusal is the half that was
      missing. */
+  /* 🔴 THE `key` IS WHAT MAKES "ONE MOUNT" TRUE OF THE RUNTIME AND NOT ONLY OF
+     THIS SOURCE FILE. The two returns are different child lists, so `{composer}`
+     sits at a different child index in each; with no key React matched it
+     against whichever unkeyed sibling held that index, tore the Modal down and
+     rebuilt it on every branch switch. Measured before the key: the composer's
+     DOM nodes changed identity and `document.activeElement` fell from the title
+     input to a `DIV` — a viewer mid-sentence lost the caret with nothing on
+     screen to explain it. Controlled form state survived either way (it lives in
+     this component, not in the DOM), which is exactly why a text assertion could
+     not see the defect. A stable key puts the composer in React's keyed-match
+     map, so it is MOVED between the two positions rather than replaced. Pinned
+     by node identity + focus in `KeptGallery.test.tsx`. */
   /* 🔴 `onClose` IS GUARDED FOR THE SAME REASON Cancel IS DISABLED, AND IT
      USED NOT TO BE. An Escape / overlay click / ✕ during an in-flight post
      UNMOUNTED the only place a refusal can be rendered: the request would come
@@ -852,6 +864,7 @@ export function KeptGallery({
      than only from the button. */
   const composer = (
     <Modal
+      key="kept-post-composer"
       opened={canPost && composerOpen}
       onClose={() => {
         if (!postPending) setComposerOpen(false);
