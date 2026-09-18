@@ -25,13 +25,28 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import type { BlockGatedImage } from '@civitai/app-sdk/blocks';
-import { Alert, Button, Group, Stack } from '@civitai/blocks-react/ui';
+import type { BlockCreatePostResult, BlockGatedImage } from '@civitai/app-sdk/blocks';
+import { CreatePostError, useCreatePostFromApp } from '@civitai/blocks-react';
+import { Alert, Badge, Button, Group, Modal, NumberInput, Stack, TextInput, Textarea } from '@civitai/blocks-react/ui';
 import { Image } from '@civitai/components-react';
 
+import {
+  describeCreatePostError,
+  isPostableGatedState,
+  isRatingPending,
+  parseModelVersionId,
+  parsePostTags,
+  postTextLooksLinky,
+  POST_DETAIL_MAX,
+  POST_MAX_IMAGES,
+  POST_MAX_TAGS,
+  POST_SIGN_IN_NOTICE,
+  POST_TITLE_MAX,
+  type PostFailure,
+} from '../lib/post.js';
 import { chunkImageIds, keptImageFeed, type KeptImageCell, type KeptRun } from '../lib/runs.js';
 import { CLASS_LIFT, motionClass, useMotion } from '../motion.js';
-import { elevate, metaText, radius, type Palette } from '../theme.js';
+import { elevate, metaText, radius, token, type Palette } from '../theme.js';
 import { EmptyState } from './EmptyState.js';
 
 /** Cells revealed per "Show more" click. */
@@ -209,6 +224,66 @@ export const HIDDEN_CELL_NOTICE = 'Still being checked, or above your browsing l
  */
 export const GALLERY_RECHECK_MS = 20_000;
 
+/**
+ * The one sentence a viewer MUST read before they confirm a post.
+ *
+ * 🔴 THE IRREVERSIBLE HALF OF THIS FEATURE, AND IT IS NOT A FOOTNOTE. civitai's
+ * app-scoped gated read — the read this very grid is built on — is conjoined
+ * with `postId IS NULL`, so an image that joins a post STOPS RESOLVING HERE. The
+ * SDK states it in capitals: *"an app cannot both keep an image in its shared
+ * grid and let the viewer post it."* Nothing about the grid hints at that, the
+ * host's own confirm is about what is being published rather than what is being
+ * given up, and the loss is discovered only by coming back to My gallery and
+ * finding a hole. So it is said here, in the composer, above the button.
+ */
+export const POST_REMOVES_FROM_GALLERY =
+  'Posting moves these images to your Civitai profile — they leave My gallery here, for good.';
+
+/**
+ * What a cell says when it cannot be selected because nothing has rated it yet.
+ *
+ * 🔴 PREVENTING THE REFUSAL, NOT REPORTING IT. `resolveAppPublishedImages`
+ * refuses an unrated id — and refuses the WHOLE post with it, since unresolvable
+ * ids are refused rather than skipped. One image kept a minute ago would
+ * therefore cost a viewer a nineteen-image post, at the confirm, with the
+ * server's single deliberately-uninformative sentence (*"an image is not
+ * available to post"*, one message for four different causes so the reply cannot
+ * be used to probe which). The wait is short and it resolves itself, which is
+ * exactly the kind of thing worth saying up front rather than discovering.
+ */
+export const POST_PENDING_CELL_NOTICE = 'Still being rated — you can post this once that finishes.';
+
+/**
+ * What the composer says about tags.
+ *
+ * ⚠️ AN APP MAY NOT PROMISE THIS. The server resolves tag names against EXISTING
+ * tags only: an unmatched name is DROPPED, never minted, and the host's consent
+ * screen shows the viewer the RESOLVED list rather than the one typed here. So
+ * the field asks, and the confirm answers.
+ */
+export const POST_TAGS_NOTICE =
+  'Only tags that already exist on Civitai can be applied — anything else is dropped. Civitai shows you the final list before posting.';
+
+/**
+ * What the composer says about the optional model-version attach.
+ *
+ * The attach is gated hard server-side (the version must be published and
+ * public, and an app may not attach to its own publisher's models), and a
+ * refusal comes back as a free-text server message. The control is rendered
+ * unconditionally and the refusal is surfaced verbatim — hiding the control when
+ * it might be refused would mean guessing a server rule this app cannot see.
+ */
+export const POST_ATTACH_NOTICE =
+  'Civitai decides whether the attach is allowed, and will say so if it turns it down.';
+
+/** Warning shown when civitai is likely to refuse the copy for containing a link. */
+export const POST_LINK_WARNING =
+  'Civitai refuses links in a post’s title or description. Leaving it in will get the post turned down.';
+
+/** What the composer says about the host's own confirm, so it is not a surprise. */
+export const POST_CONSENT_NOTICE =
+  'Civitai shows you exactly what it is about to post — the images, and the tags it actually matched — before anything is published.';
+
 /** What the gate said about one id, or `'missing'` when it said nothing at all. */
 export type GatedState = BlockGatedImage | { imageId: number; status: 'missing' };
 
@@ -248,6 +323,43 @@ export interface KeptGalleryProps {
    * {@link GALLERY_RECHECK_MS} — it is a heuristic, and tests set it to 0.
    */
   recheckDelayMs?: number;
+  /**
+   * Offer the multi-select + composer that publishes kept images as a REAL Post
+   * on the viewer's profile (`useCreatePostFromApp()`, scope
+   * `posts:write:self`).
+   *
+   * 🔴 OPT-IN, AND OFF BY DEFAULT ON PURPOSE. Posting is not a variation on
+   * viewing: it is public, feed-visible, reward-earning content under the
+   * viewer's byline, and it REMOVES the image from this grid (see
+   * {@link POST_REMOVES_FROM_GALLERY}). A caller that renders a FILTERED slice
+   * of the viewer's keeps — the Runner, which scopes to one generator — would be
+   * offering that from a surface whose own heading is about something else, so
+   * it does not pass this. My gallery, which is the whole set and the place a
+   * viewer goes to look at what they made, does.
+   *
+   * The hook is mounted unconditionally either way: it holds only local state
+   * until `createPost` is called, so a gallery with posting off sends nothing
+   * and needs no transport.
+   */
+  posting?: boolean;
+  /**
+   * Route an anonymous viewer into the host sign-in flow — the correct response
+   * to the host's `sign in to post` refusal, which is not an error to render.
+   * Absent ⇒ {@link POST_SIGN_IN_NOTICE} is shown instead of routing.
+   */
+  onRequestSignIn?: () => void;
+  /**
+   * Copy text to the clipboard; resolves `true` on success. Used to hand the
+   * viewer the created post's url.
+   *
+   * 🔴 THE ONLY SANCTIONED WAY OUT OF THIS IFRAME. The block's sandbox is
+   * `allow-scripts allow-forms` — no `allow-popups`, no `allow-downloads` — so
+   * `window.open`, `target="_blank"` and a host `navigate(_, 'new_tab')` all
+   * silently do nothing. The url is rendered as selectable text regardless;
+   * this only adds the one-tap copy, and is omitted rather than faked when the
+   * caller has no clipboard path.
+   */
+  copyToClipboard?: (text: string) => Promise<boolean>;
   'data-testid'?: string;
 }
 
@@ -263,10 +375,29 @@ export function KeptGallery({
   truncated = false,
   incomplete = false,
   recheckDelayMs = GALLERY_RECHECK_MS,
+  posting = false,
+  onRequestSignIn,
+  copyToClipboard,
   'data-testid': testId = 'kept-gallery',
 }: KeptGalleryProps) {
   const motion = useMotion();
-  const feed = useMemo(() => keptImageFeed(runs), [runs]);
+  const { createPost, pending: postPending } = useCreatePostFromApp();
+  /**
+   * Ids that have JOINED A POST this session, dropped from the feed below.
+   *
+   * 🔴 NOT AN OPTIMISTIC FLOURISH — IT IS WHAT THE SERVER ALREADY DID. The
+   * app-scoped read is conjoined with `postId IS NULL`, so these ids stop
+   * resolving the moment the post lands: leaving them on screen would show
+   * cells that the very next mount renders as "No longer available", which reads
+   * as breakage rather than as the thing the composer warned about. Dropping
+   * them makes {@link POST_REMOVES_FROM_GALLERY} visibly true instead of merely
+   * stated.
+   */
+  const [postedIds, setPostedIds] = useState<Set<number>>(() => new Set());
+  const feed = useMemo(
+    () => keptImageFeed(runs).filter((cell) => !postedIds.has(cell.imageId)),
+    [runs, postedIds],
+  );
   const [visibleCount, setVisibleCount] = useState(GALLERY_PAGE_SIZE);
   const [gated, setGated] = useState<Record<number, GatedState>>({});
   const [readError, setReadError] = useState<string | null>(null);
@@ -356,6 +487,117 @@ export function KeptGallery({
     setReadTick((n) => n + 1);
   };
 
+  // ---- posting ----------------------------------------------------------
+  const [selecting, setSelecting] = useState(false);
+  /** Selected image ids, in the order the viewer picked them — which is POST ORDER. */
+  const [selected, setSelected] = useState<number[]>([]);
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [postTitle, setPostTitle] = useState('');
+  const [postDetail, setPostDetail] = useState('');
+  const [postTagsText, setPostTagsText] = useState('');
+  const [postVersionId, setPostVersionId] = useState<number | null>(null);
+  const [postFailure, setPostFailure] = useState<PostFailure | null>(null);
+  const [posted, setPosted] = useState<BlockCreatePostResult | null>(null);
+  const [urlCopied, setUrlCopied] = useState(false);
+
+  const postable = useMemo(() => {
+    const ids = new Set<number>();
+    if (!posting) return ids;
+    for (const cell of feed) if (isPostableGatedState(gated[cell.imageId])) ids.add(cell.imageId);
+    return ids;
+  }, [posting, feed, gated]);
+
+  // A cell the viewer had selected can stop being postable underneath them — the
+  // one re-read flips a `hidden` cell, or a post drops ids from the feed. Reading
+  // the selection THROUGH the live postable set means the composer can never send
+  // an id the grid no longer considers eligible.
+  const selectedIds = useMemo(() => selected.filter((id) => postable.has(id)), [selected, postable]);
+  const atImageCap = selectedIds.length >= POST_MAX_IMAGES;
+
+  const tags = useMemo(() => parsePostTags(postTagsText), [postTagsText]);
+  const modelVersionId = parseModelVersionId(postVersionId);
+  const versionLooksWrong = postVersionId != null && modelVersionId === undefined;
+  const linky = postTextLooksLinky(postTitle) || postTextLooksLinky(postDetail);
+
+  function toggleSelected(imageId: number) {
+    setPostFailure(null);
+    setSelected((prev) => {
+      if (prev.includes(imageId)) return prev.filter((id) => id !== imageId);
+      // The cap is enforced at the point of selection rather than at submit so
+      // the viewer is stopped before the host's consent dialog, not after.
+      if (prev.filter((id) => postable.has(id)).length >= POST_MAX_IMAGES) return prev;
+      return [...prev, imageId];
+    });
+  }
+
+  function leaveSelection() {
+    setSelecting(false);
+    setSelected([]);
+    setComposerOpen(false);
+    setPostFailure(null);
+  }
+
+  async function submitPost() {
+    if (selectedIds.length === 0 || postPending) return;
+    setPostFailure(null);
+    const detail = postDetail.trim();
+    const title = postTitle.trim();
+    try {
+      const result = await createPost({
+        // ONE `published` entry: every id in this grid came back from
+        // `usePublishGenerationOutputs()`, which is precisely what that arm
+        // names. `workflow` sources are not offered here — a kept run stores
+        // image ids rather than a workflow id (see `lib/runs.ts`).
+        sources: [{ kind: 'published', imageIds: selectedIds }],
+        ...(title.length > 0 ? { title } : {}),
+        ...(detail.length > 0 ? { detail } : {}),
+        ...(tags.length > 0 ? { tags } : {}),
+        ...(modelVersionId !== undefined ? { modelVersionId } : {}),
+      });
+      setPosted(result);
+      setUrlCopied(false);
+      // The server has already removed these from this app's grid; mirror it.
+      setPostedIds((prev) => new Set([...prev, ...selectedIds]));
+      setPostTitle('');
+      setPostDetail('');
+      setPostTagsText('');
+      setPostVersionId(null);
+      leaveSelection();
+    } catch (err: unknown) {
+      // 🔴 `timedOut` IS READ OFF THE ERROR, NOT OFF THE MESSAGE. It is set
+      // structurally by the SDK (`err instanceof RequestTimeoutError`), and it
+      // is the flag that keeps an SDK-internal string off the screen — see
+      // `describeCreatePostError`.
+      const raw = err instanceof Error ? err.message : String(err);
+      const timedOut = err instanceof CreatePostError ? err.timedOut : false;
+      const outcome = describeCreatePostError(raw, { timedOut });
+      if (outcome.kind === 'declined') {
+        // The viewer dismissed the host confirm and NO POST EXISTS. Say nothing;
+        // the composer stays open so a second look is one click away.
+        return;
+      }
+      if (outcome.kind === 'sign-in') {
+        if (onRequestSignIn) {
+          onRequestSignIn();
+          setComposerOpen(false);
+          return;
+        }
+        setPostFailure({ kind: 'notice', source: 'code', message: POST_SIGN_IN_NOTICE });
+        return;
+      }
+      setPostFailure(outcome);
+    }
+  }
+
+  async function copyPostUrl() {
+    if (!posted || !copyToClipboard) return;
+    try {
+      setUrlCopied(await copyToClipboard(posted.url));
+    } catch {
+      setUrlCopied(false);
+    }
+  }
+
   // 🔴 Rendered ALONGSIDE whatever the grid shows, never instead of it — and in
   // the empty branch too. `truncated` with an empty feed means every hydrated row
   // was unparseable while runs the app never loaded still exist, and "nothing
@@ -369,10 +611,52 @@ export function KeptGallery({
     </span>
   ) : null;
 
+  /**
+   * The created post, and the only way out of the sandbox to reach it.
+   *
+   * 🔴 RENDERED IN THE EMPTY BRANCH TOO, AND THAT IS NOT DEFENSIVENESS. Posting
+   * every remaining kept image is an ordinary thing to do and it EMPTIES this
+   * grid — so the one state in which the viewer most needs to be told where
+   * their images went is exactly the state that would otherwise replace this
+   * panel with "Nothing kept yet".
+   *
+   * 🔴 SELECTABLE TEXT, NOT A LINK. `allow-scripts allow-forms` and nothing else:
+   * `window.open` and `target="_blank"` are inert inside this iframe, so a link
+   * here would be a control that silently does nothing. See `copyToClipboard`.
+   */
+  const postSuccess = posted ? (
+    <Alert color="success" data-testid="kept-post-success">
+      <Stack gap={8}>
+        <span>Posted to your Civitai profile.</span>
+        <span
+          data-testid="kept-post-url"
+          style={{ userSelect: 'all', wordBreak: 'break-all', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
+        >
+          {posted.url}
+        </span>
+        <Group gap={8}>
+          {copyToClipboard && (
+            <Button size="sm" variant="light" data-testid="kept-post-copy" onClick={copyPostUrl}>
+              {urlCopied ? 'Link copied' : 'Copy link'}
+            </Button>
+          )}
+          <Button size="sm" variant="subtle" data-testid="kept-post-dismiss" onClick={() => setPosted(null)}>
+            Dismiss
+          </Button>
+        </Group>
+        <span style={metaText}>
+          {posted.imageIds.length === 1 ? 'That image has' : 'Those images have'} left My gallery — they live on your
+          profile now.
+        </span>
+      </Stack>
+    </Alert>
+  ) : null;
+
   if (feed.length === 0) {
     return (
       <Stack gap={10} data-testid={testId}>
         {notice}
+        {postSuccess}
         <EmptyState data-testid={`${testId}-empty`} title={emptyTitle} body={emptyBody} action={emptyAction} />
       </Stack>
     );
@@ -383,6 +667,7 @@ export function KeptGallery({
   return (
     <Stack gap={10} data-testid={testId}>
       {notice}
+      {postSuccess}
       {readError && (
         <Alert color="warning" data-testid={`${testId}-error`}>
           <Stack gap={8}>
@@ -395,6 +680,45 @@ export function KeptGallery({
           </Stack>
         </Alert>
       )}
+      {/* 🔴 GATED ON A POSTABLE CELL EXISTING, not merely on `posting`. Offering
+          "Select images to post" over a grid where every cell is hidden, missing
+          or still being rated is a control that can only ever refuse — and the
+          per-cell notice already explains why. */}
+      {posting && postable.size > 0 && !selecting && (
+        <Group>
+          <Button size="sm" variant="light" data-testid="kept-post-start" onClick={() => setSelecting(true)}>
+            Select images to post
+          </Button>
+        </Group>
+      )}
+      {posting && selecting && (
+        <Stack gap={6} data-testid="kept-post-bar">
+          <Group gap={8}>
+            <Badge variant="light" data-testid="kept-post-count">
+              {selectedIds.length} selected
+            </Badge>
+            <Button
+              size="sm"
+              data-testid="kept-post-open"
+              disabled={selectedIds.length === 0}
+              onClick={() => {
+                setPostFailure(null);
+                setComposerOpen(true);
+              }}
+            >
+              Post to your profile
+            </Button>
+            <Button size="sm" variant="subtle" data-testid="kept-post-cancel" onClick={leaveSelection}>
+              Cancel
+            </Button>
+          </Group>
+          {atImageCap && (
+            <span style={metaText} role="status" data-testid="kept-post-cap">
+              That’s the most Civitai takes in one post ({POST_MAX_IMAGES}). Deselect one to swap it out.
+            </span>
+          )}
+        </Stack>
+      )}
       <div
         style={{
           display: 'grid',
@@ -406,35 +730,54 @@ export function KeptGallery({
           const state = gated[cell.imageId];
           const url = state && state.status === 'visible' ? state.url : null;
           const resolved = state != null;
+          // 🔴 A `visible` CELL IS NOT AUTOMATICALLY A POSTABLE ONE. An image
+          // nothing has rated yet comes back `visible` WITH a url (it is the
+          // viewer's own), and the post service refuses it — and the whole post
+          // with it. See `isPostableGatedState` and POST_PENDING_CELL_NOTICE.
+          const ratingPending = posting && state != null && state.status === 'visible' && isRatingPending(state);
+          const canSelect = postable.has(cell.imageId);
+          const isSelected = selectedIds.includes(cell.imageId);
+          const capBlocked = selecting && canSelect && !isSelected && atImageCap;
+          const inert = selecting ? !canSelect || capBlocked : !url;
           return (
             <Stack gap={4} key={`${cell.run.id}-${cell.imageId}`}>
+              <div style={{ position: 'relative' }}>
               <button
                 type="button"
                 data-testid="kept-cell"
                 data-image-id={cell.imageId}
                 data-state={state?.status ?? 'loading'}
+                data-postable={posting ? String(canSelect) : undefined}
+                data-selected={selecting ? String(isSelected) : undefined}
                 // Only a resolvable cell opens: a `hidden`/`missing` cell has
                 // nothing to enlarge, so it is inert rather than a button that
-                // opens an empty view.
-                disabled={!url}
+                // opens an empty view. In selection mode the same button selects
+                // instead, and an unpostable cell is inert for that reason.
+                disabled={inert}
+                aria-pressed={selecting && canSelect ? isSelected : undefined}
                 aria-label={
-                  url
-                    ? `View result from ${cell.run.generatorName}`
-                    : `Result from ${cell.run.generatorName} — not available`
+                  selecting
+                    ? canSelect
+                      ? `${isSelected ? 'Deselect' : 'Select'} result from ${cell.run.generatorName}`
+                      : `Result from ${cell.run.generatorName} — can’t be posted`
+                    : url
+                      ? `View result from ${cell.run.generatorName}`
+                      : `Result from ${cell.run.generatorName} — not available`
                 }
-                className={motionClass(motion, url ? CLASS_LIFT : undefined)}
-                onClick={() => onOpenCell(cell, url)}
+                className={motionClass(motion, !inert ? CLASS_LIFT : undefined)}
+                onClick={() => (selecting ? toggleSelected(cell.imageId) : onOpenCell(cell, url))}
                 style={{
                   all: 'unset',
-                  cursor: url ? 'pointer' : 'default',
+                  cursor: inert ? 'default' : 'pointer',
                   display: 'block',
                   width: '100%',
                   aspectRatio: '1 / 1',
                   borderRadius: radius.md,
-                  border: `1px solid ${c.border}`,
+                  border: `${isSelected ? 2 : 1}px solid ${isSelected ? token.primary : c.border}`,
                   overflow: 'hidden',
                   background: elevate(2),
                   boxSizing: 'border-box',
+                  opacity: selecting && !canSelect ? 0.55 : 1,
                 }}
               >
                 {url ? (
@@ -465,6 +808,39 @@ export function KeptGallery({
                   </span>
                 )}
               </button>
+              {selecting && canSelect && (
+                // Aria already carries the state (`aria-pressed`); this is the
+                // same fact for eyes, and is hidden from the tree rather than
+                // announced twice.
+                <span
+                  aria-hidden
+                  data-testid="kept-cell-mark"
+                  style={{
+                    position: 'absolute',
+                    top: 6,
+                    left: 6,
+                    width: 20,
+                    height: 20,
+                    borderRadius: '50%',
+                    display: 'grid',
+                    placeItems: 'center',
+                    fontSize: 12,
+                    lineHeight: 1,
+                    pointerEvents: 'none',
+                    border: `1px solid ${isSelected ? token.primary : c.border}`,
+                    background: isSelected ? token.primary : elevate(6),
+                    color: isSelected ? token.body : c.muted,
+                  }}
+                >
+                  {isSelected ? '✓' : ''}
+                </span>
+              )}
+              </div>
+              {ratingPending && (
+                <span style={metaText} data-testid="kept-cell-pending">
+                  {POST_PENDING_CELL_NOTICE}
+                </span>
+              )}
               {withAttribution && (
                 <span style={metaText} data-testid="kept-cell-attribution">
                   {cell.run.generatorName}
@@ -486,6 +862,98 @@ export function KeptGallery({
           </Button>
         </Group>
       )}
+
+      {/* THE COMPOSER. Everything it collects is ADVISORY — the server bounds it,
+          screens it, and resolves tags against existing tags only — so the fields
+          are bounded here to stop the viewer BEFORE the host's consent dialog,
+          and every refusal is still rendered when one gets past them. */}
+      <Modal
+        opened={posting && composerOpen}
+        onClose={() => setComposerOpen(false)}
+        title="Post to your profile"
+        size="md"
+      >
+        <Stack gap={12} data-testid="kept-post-composer">
+          <Alert color="warning" data-testid="kept-post-removal-warning">
+            {POST_REMOVES_FROM_GALLERY}
+          </Alert>
+          <span style={metaText} data-testid="kept-post-selected-count">
+            {selectedIds.length} image{selectedIds.length === 1 ? '' : 's'}, in the order you picked them.
+          </span>
+          <TextInput
+            label="Title"
+            data-testid="kept-post-title"
+            maxLength={POST_TITLE_MAX}
+            value={postTitle}
+            description={`Optional. Up to ${POST_TITLE_MAX} characters.`}
+            onChange={(e) => setPostTitle(e.currentTarget.value)}
+          />
+          <Textarea
+            label="Description"
+            data-testid="kept-post-detail"
+            maxLength={POST_DETAIL_MAX}
+            minRows={3}
+            value={postDetail}
+            description={`Optional. Up to ${POST_DETAIL_MAX} characters.`}
+            onChange={(e) => setPostDetail(e.currentTarget.value)}
+          />
+          <TextInput
+            label="Tags"
+            data-testid="kept-post-tags"
+            value={postTagsText}
+            placeholder="portrait, neon"
+            description={`Optional, comma separated, up to ${POST_MAX_TAGS}. ${POST_TAGS_NOTICE}`}
+            onChange={(e) => setPostTagsText(e.currentTarget.value)}
+          />
+          {tags.length > 0 && (
+            <Group gap={6} data-testid="kept-post-tag-preview">
+              {tags.map((t) => (
+                <Badge key={t} variant="light">
+                  {t}
+                </Badge>
+              ))}
+            </Group>
+          )}
+          <NumberInput
+            label="Add to a model’s gallery (optional)"
+            data-testid="kept-post-version"
+            min={1}
+            step={1}
+            value={postVersionId}
+            description={POST_ATTACH_NOTICE}
+            error={versionLooksWrong ? 'A model version id is a whole number above zero.' : undefined}
+            onChange={setPostVersionId}
+          />
+          {linky && (
+            <Alert color="warning" data-testid="kept-post-link-warning">
+              {POST_LINK_WARNING}
+            </Alert>
+          )}
+          {postFailure && postFailure.kind === 'notice' && (
+            <Alert color="warning" data-testid="kept-post-error" data-source={postFailure.source}>
+              {postFailure.message}
+            </Alert>
+          )}
+          <span style={metaText}>{POST_CONSENT_NOTICE}</span>
+          <Group gap={8}>
+            <Button
+              data-testid="kept-post-submit"
+              disabled={selectedIds.length === 0 || postPending}
+              onClick={submitPost}
+            >
+              {postPending ? 'Waiting on Civitai…' : `Post ${selectedIds.length} image${selectedIds.length === 1 ? '' : 's'}`}
+            </Button>
+            <Button
+              variant="subtle"
+              data-testid="kept-post-close"
+              disabled={postPending}
+              onClick={() => setComposerOpen(false)}
+            >
+              Cancel
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Stack>
   );
 }

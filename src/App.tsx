@@ -880,6 +880,29 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             keptError={keptError}
             getImages={deps.getImages}
             onOpenGeneratorKey={openPublishedByKey}
+            // 🔴 NOT GATED ON THE TOKEN'S SCOPES, and that is deliberate rather
+            // than an oversight. `posts:write:self` is SENSITIVE and
+            // consent-gated: the host mints the first token without it and adds
+            // it only after the viewer grants it, which the host does as part of
+            // the post call itself. Hiding the control until the scope appeared
+            // would hide it until after a post the viewer could not start. The
+            // gallery is already only rendered for a signed-in viewer, and the
+            // host's own `sign in to post` refusal is routed below for the case
+            // the session lapses mid-session.
+            canPost
+            onRequestSignIn={deps.requestSignIn}
+            copyToClipboard={async (text) => {
+              // Same host-clipboard path as Share, normalised to the true/false
+              // the gallery wants: the post url is the only way out of an
+              // `allow-scripts allow-forms` iframe, so a silent failure there
+              // must be visible.
+              try {
+                await deps.copyToClipboard(text);
+                return true;
+              } catch {
+                return false;
+              }
+            }}
             onRetry={reload}
           />
         )}

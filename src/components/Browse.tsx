@@ -155,6 +155,21 @@ export interface BrowseProps {
    * of presenting a control that does nothing.
    */
   onOpenGeneratorKey?: (key: string) => boolean;
+  /**
+   * Offer the My-gallery post composer (`posts:write:self`).
+   *
+   * 🔴 THIS TAB AND NOWHERE ELSE. My gallery is the viewer's WHOLE kept set and
+   * the surface they come to to look at what they made, so it is the one place
+   * where "post these" is the obvious next thing and where the grid emptying out
+   * afterwards is comprehensible. The Runner's kept strip is one generator's
+   * slice under a heading about that generator, so it deliberately does not get
+   * this — see `KeptGalleryProps.posting`.
+   */
+  canPost?: boolean;
+  /** Route an anonymous viewer into the host sign-in flow (post refusal path). */
+  onRequestSignIn?: () => void;
+  /** Copy text to the clipboard; resolves `true` on success. Hands over a post url. */
+  copyToClipboard?: (text: string) => Promise<boolean>;
   onRetry: () => void;
 }
 
@@ -171,7 +186,7 @@ interface VoteState {
 }
 
 export function Browse(props: BrowseProps) {
-  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, keptTruncated = false, keptIncomplete = false, keptError = null, getImages, onOpenGeneratorKey, onRetry } = props;
+  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, keptTruncated = false, keptIncomplete = false, keptError = null, getImages, onOpenGeneratorKey, canPost = false, onRequestSignIn, copyToClipboard, onRetry } = props;
   const [tab, setTab] = useState<Tab>('discover');
   // Motion gate for the chrome Browse owns directly (draft cards). Cards rendered
   // by PublishedCard/IntroPanel read it themselves.
@@ -694,6 +709,9 @@ export function Browse(props: BrowseProps) {
               withAttribution
               truncated={keptTruncated}
               incomplete={keptIncomplete}
+              posting={canPost}
+              onRequestSignIn={onRequestSignIn}
+              copyToClipboard={copyToClipboard}
               emptyTitle="Nothing kept yet"
               emptyBody="Run a generator and press Keep on a result — the images you keep stay here."
               emptyAction={

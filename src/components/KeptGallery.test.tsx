@@ -278,3 +278,46 @@ describe('the truncation notice', () => {
     );
   });
 });
+
+/**
+ * 🔴 KEEP IS NOT ALLOWED TO HAVE MOVED. Post creation is purely ADDITIVE: the
+ * gallery mounts `useCreatePostFromApp()` unconditionally (the hook holds only
+ * local state until `createPost` is called, so it needs no transport), and every
+ * existing caller that does not opt in must render byte-for-byte the 0.7.1
+ * surface. This suite has no host, which is the point — if any post control
+ * leaked into the default it would be rendered here, and a call into the SDK
+ * transport from a mount would throw.
+ *
+ * The posting path itself is exercised in `KeptGallery.post.transport.test.tsx`,
+ * across the real bridge, because `createPost` is not a seam this component
+ * injects and a mocked one would be asserting against its own stub.
+ */
+describe('posting is opt-in', () => {
+  it('renders no post control, and no transport call, when `posting` is off', async () => {
+    render(<KeptGallery {...props()} />);
+    await screen.findByTestId('kept-cell');
+
+    expect(screen.queryByTestId('kept-post-start')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('kept-post-bar')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('kept-post-composer')).not.toBeInTheDocument();
+    // The per-cell "still being rated" affordance is part of the post surface
+    // too: it only means anything next to a control that would otherwise be
+    // offered, so it is gated the same way.
+    expect(screen.queryByTestId('kept-cell-pending')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The cell keeps opening the lightbox rather than selecting — the one existing
+   * behaviour a selection mode could plausibly have eaten.
+   */
+  it('a cell still opens the lightbox when `posting` is off', async () => {
+    const onOpenCell = vi.fn();
+    render(<KeptGallery {...props({ onOpenCell })} />);
+    const cell = await screen.findByTestId('kept-cell');
+    await waitFor(() => expect(cell).toHaveAttribute('data-state', 'visible'));
+
+    await userEvent.click(cell);
+    expect(onOpenCell).toHaveBeenCalledTimes(1);
+    expect(cell).not.toHaveAttribute('aria-pressed');
+  });
+});
