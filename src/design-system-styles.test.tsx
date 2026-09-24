@@ -17,7 +17,7 @@
 // production injection order — rather than a version number or a tree shape.
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { injectBlocksStyles } from '@civitai/blocks-react/ui';
+import { injectBlocksStyles } from './ui/index.js';
 import { injectStyles as injectComponentStyles } from '@civitai/components-react';
 
 /**

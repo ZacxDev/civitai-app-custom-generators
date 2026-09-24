@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
-import { Harness } from '@civitai/blocks-react/testing';
+import { Harness } from '../platform/testing.js';
 
 import { App, type AppDeps } from '../App.js';
 import {

@@ -12,7 +12,7 @@ import type {
   WorkflowBody,
   WorkflowBodyTextToImage,
 } from '@civitai/app-sdk/blocks';
-import type { SharedAppendValue, SharedListItem, UseSharedStorage } from '@civitai/blocks-react';
+import type { SharedAppendValue, SharedListItem, UseSharedStorage } from './platform/index.js';
 
 import type { DraftStore } from './lib/drafts.js';
 

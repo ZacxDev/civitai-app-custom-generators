@@ -25,21 +25,21 @@ import {
   useBlockToken,
   useBuzzBalance,
   useBuzzPurchase,
-  useBuzzWorkflow,
   useCivitaiNavigate,
-  useGatedImages,
-  useGenerationResources,
   useImageUpload,
   useRequestConsent,
   usePublishGenerationOutputs,
   useRequestSignIn,
   useResourcePicker,
+  useBuzzWorkflow,
+  useGatedImages,
+  useGenerationResources,
   useSharedStorage,
   useAppStorage,
-} from '@civitai/blocks-react';
-import type { SharedAppendValue, SharedListItem, UseSharedStorage } from '@civitai/blocks-react';
+} from './platform/index.js';
+import type { SharedAppendValue, SharedListItem, UseSharedStorage } from './platform/index.js';
 
-import { Loader } from '@civitai/blocks-react/ui';
+import { Loader } from './ui/index.js';
 
 import { AI_WRITE_BUDGETED, hasGenerateScope } from './scopes.js';
 import { palette, pageStyle, contentStyle, metaText } from './theme.js';

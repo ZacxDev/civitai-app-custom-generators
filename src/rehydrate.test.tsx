@@ -1,15 +1,20 @@
-// Exercises the REAL useGenerationResources() hook end-to-end: under the mock
-// host (which supplies the validated host origin + block token) with a stubbed
-// global fetch standing in for `GET /api/v1/blocks/generation-resources`. Proves
-// the rehydrate wiring (buildGenerationResourcesUrl + responseToResources) that
-// the App uses to re-resolve a saved generator's resources on open.
+// Exercises the REAL `useGenerationResources()` hook end-to-end: under the fake
+// platform (which supplies the block token) with a scripted `fetch` standing in
+// for `GET /api/v1/blocks/generation-resources`. Proves the rehydrate wiring the
+// App uses to re-resolve a saved generator's resources on open — the URL it
+// builds, and the projection it maps.
+//
+// The scripted fetch is handed to `<Harness fetch={…}>` rather than left as a
+// global stub: the harness installs the fake SERVER by default, and the fake
+// answers from its own seeded state, which cannot express "return exactly this
+// body". Passing it explicitly is what keeps this a test of the hook.
 
 import { useEffect, useState } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { Harness } from '@civitai/blocks-react/testing';
-import { useGenerationResources } from '@civitai/blocks-react';
+import { Harness } from './platform/testing.js';
+import { useGenerationResources } from './platform/index.js';
 
 function Probe() {
   const { fetch } = useGenerationResources();
@@ -38,7 +43,7 @@ describe('useGenerationResources — real hook, stubbed fetch', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     render(
-      <Harness viewer={{ id: 99, username: 'me' }} showLog={false}>
+      <Harness viewer={{ id: 99, username: 'me' }} showLog={false} fetch={fetchMock as unknown as typeof fetch}>
         <Probe />
       </Harness>,
     );

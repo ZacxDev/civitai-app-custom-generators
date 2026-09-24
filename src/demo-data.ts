@@ -1,7 +1,7 @@
 // Shared demo fixtures: a couple of published generators used to seed the SDK
 // mock host (dev harness + tests) so the browse/run loop has content offline.
 
-import type { MockSharedSeed } from '@civitai/blocks-react/testing';
+import type { MockSharedSeed } from './platform/testing.js';
 
 import { buildPublishPayload, newButton } from './lib/generator.js';
 import type { GeneratorConfig } from './types.js';

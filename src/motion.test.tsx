@@ -37,7 +37,7 @@ import {
 } from './motion.js';
 import { setReducedMotion } from './test-setup.js';
 import type { GeneratorConfig } from './types.js';
-import type { SharedListItem } from '@civitai/blocks-react';
+import type { SharedListItem } from './platform/index.js';
 
 const c = palette();
 

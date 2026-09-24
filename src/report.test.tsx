@@ -18,13 +18,13 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { Harness } from '@civitai/blocks-react/testing';
+import { Harness } from './platform/testing.js';
 
 import { App, type AppDeps } from './App.js';
 import { ANALYTICS_EVENTS } from './lib/analytics.js';
 import { defaultParams } from './lib/generator.js';
 import { CKPT_INFO, LORA_INFO, fakeShared, immediateSleep, memoryDraftStore, mockWorkflow } from './test-helpers.js';
-import type { SharedListItem } from '@civitai/blocks-react';
+import type { SharedListItem } from './platform/index.js';
 
 const VIEWER_ID = 99;
 const SOMEONE_ELSE = 7;

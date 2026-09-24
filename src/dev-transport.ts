@@ -1,23 +1,29 @@
-// Test/dev-only transport wiring. NOT imported by production code (App.tsx uses
-// the SDK hooks, which read the build-time env allowlist via getTransport()).
+// Test/dev-only transport wiring.
 //
-// The SDK's IframeTransport is a process-wide singleton whose FIRST
-// getTransport() call fixes its origin allowlist. The mock host (dev harness AND
-// vitest) replies from `window.location.origin`, and the transport DROPS any
-// inbound message whose origin isn't allowlisted — so in harness/test mode we
-// MUST initialize the transport with `window.location.origin` allowed BEFORE any
-// hook (or the mock host) runs.
+// 🔴 THIS FILE IS NOW ALMOST EMPTY, AND THAT IS THE POINT. Before the port it
+// existed to solve one problem: the bridge SDK's transport was a process-wide
+// singleton whose FIRST `getTransport()` call fixed its origin allowlist, so the
+// harness had to initialise it with `window.location.origin` allowed BEFORE any
+// hook ran, or every inbound mock-host message was dropped on an origin mismatch.
+//
+// After the port there is no mock host posting messages from this origin. The
+// dev harness and the tests INJECT a transport object directly
+// (`__configurePlatform`), so nothing is ever matched against an origin
+// allowlist and there is no initialisation order to get right. The reset below is
+// kept because `test-setup.ts` calls it between tests.
 
-import { getTransport } from '@civitai/blocks-react';
-import { resetTransport } from '@civitai/blocks-react/testing';
+import { __configurePlatform } from './platform/index.js';
+import { __resetTransport } from './platform/testing.js';
 
-/** Initialize the SDK transport with the current page origin allowlisted. */
-export function installHarnessTransport() {
-  getTransport({ allowedParentOrigins: [window.location.origin] });
-}
-
-/** Reset + re-initialize the transport for a single test (call in beforeEach). */
-export function resetHarnessTransport() {
-  resetTransport();
-  getTransport({ allowedParentOrigins: [window.location.origin] });
+/**
+ * Return the platform to its unconfigured state.
+ *
+ * Both halves are needed: `__configurePlatform({})` drops this app's cached
+ * client and transport, and `__resetTransport()` clears the SDK's own
+ * `globalThis` cache so a later real `getTransport()` re-detects rather than
+ * handing back a transport built for a previous test's window.
+ */
+export function resetHarnessTransport(): void {
+  __configurePlatform({});
+  __resetTransport();
 }

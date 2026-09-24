@@ -32,7 +32,7 @@
 
 import { useCallback, useEffect } from 'react';
 
-import { Badge, Button, Group, Modal, Stack } from '@civitai/blocks-react/ui';
+import { Badge, Button, Group, Modal, Stack } from '../ui/index.js';
 import { Image } from '@civitai/components-react';
 
 import { radius, metaText, token, elevate, type Palette } from '../theme.js';

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-import { Harness as SdkHarness } from '@civitai/blocks-react/testing';
+import { Harness as SdkHarness } from './platform/testing.js';
 import { DEMO_SHARED_SEED } from './demo-data.js';
 
 /**

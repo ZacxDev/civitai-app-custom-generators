@@ -20,7 +20,7 @@ import type {
   WorkflowBody,
 } from '@civitai/app-sdk/blocks';
 
-import { Alert, Badge, Button, Card, Collapse, Group, Loader, Modal, NumberInput, Stack, TextInput } from '@civitai/blocks-react/ui';
+import { Alert, Badge, Button, Card, Collapse, Group, Loader, Modal, NumberInput, Stack, TextInput } from '../ui/index.js';
 
 import type { GenButton, GeneratorConfig, GenButtonParams, QueueItem, QueueStatus } from '../types.js';
 import { DEFAULT_PROMPT_PLACEHOLDER, buildSubmitBody, canRunButton, exposesImage, exposesPrompt, missingRequiredInputs, newId } from '../lib/generator.js';

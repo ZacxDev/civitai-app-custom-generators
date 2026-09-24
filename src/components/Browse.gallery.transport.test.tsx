@@ -41,7 +41,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import type { BlockGatedImage } from '@civitai/app-sdk/blocks';
 
-import { Harness } from '@civitai/blocks-react/testing';
+import { Harness } from '../platform/testing.js';
 
 import { App, type AppDeps } from '../App.js';
 import type { DraftStore } from '../lib/drafts.js';

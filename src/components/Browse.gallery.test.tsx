@@ -15,14 +15,14 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { BlockGatedImage } from '@civitai/app-sdk/blocks';
 
-import { Harness } from '@civitai/blocks-react/testing';
+import { Harness } from '../platform/testing.js';
 
 import { App, type AppDeps } from '../App.js';
 import { buildPublishPayload, newButton, newGenerator } from '../lib/generator.js';
 import type { DraftStore } from '../lib/drafts.js';
 import { KEPT_LIST_LIMIT, KEPT_PREFIX, listKeptRuns, saveKeptRun } from '../lib/runs.js';
 import { fakeShared, immediateSleep, memoryDraftStore, mockWorkflow } from '../test-helpers.js';
-import type { SharedListItem } from '@civitai/blocks-react';
+import type { SharedListItem } from '../platform/index.js';
 
 const VIEWER_ID = 99;
 

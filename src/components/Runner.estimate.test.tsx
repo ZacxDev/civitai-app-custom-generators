@@ -17,7 +17,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { WorkflowEstimateError } from '@civitai/blocks-react';
+import { WorkflowEstimateError } from '../platform/index.js';
 import type { BlockWorkflowSnapshot, WorkflowBody } from '@civitai/app-sdk/blocks';
 
 import { Runner } from './Runner.js';

@@ -1,8 +1,9 @@
 import { StrictMode } from 'react';
 import type { ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BlockGate, injectBlocksStyles } from '@civitai/blocks-react/ui';
-import { useBlockAnalytics } from '@civitai/blocks-react';
+import { injectBlocksStyles } from './ui/index.js';
+import { BlockGate } from './platform/index.js';
+import { useBlockAnalytics } from './platform/index.js';
 
 // Design-system tokens (`--civitai-*` custom properties, light/dark via
 // `[data-theme]`). The pack's injectBlocksStyles() also injects these at
@@ -15,7 +16,7 @@ import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { ANALYTICS_EVENTS } from './lib/analytics.js';
 import { Harness } from './Harness.js';
 import { injectMotionStyles } from './motion.js';
-import { installHarnessTransport } from './dev-transport.js';
+
 import './index.css';
 
 // Top-level boundary wrapper that reports caught render crashes to analytics
@@ -53,9 +54,14 @@ injectMotionStyles();
 // serves everything. Never set VITE_DEV_HARNESS in prod.
 const useHarness = import.meta.env.VITE_DEV_HARNESS === 'true';
 
-// The mock host replies from window.location.origin; the SDK transport drops
-// mismatched-origin messages. Allowlist this origin BEFORE any hook runs.
-if (useHarness) installHarnessTransport();
+// 🔴 NOTHING TO INSTALL HERE ANY MORE, AND THE REASON IS THE WHOLE PORT. This
+// used to pre-initialise the transport with `window.location.origin` allowlisted,
+// because the mock host posted messages from this origin and the bridge SDK's
+// transport dropped mismatched ones. The dev harness now INJECTS a transport
+// object directly (`<Harness>` → `__configurePlatform`), so no message is ever
+// origin-matched and there is no initialisation order to get right. `<Harness>`
+// configures the platform during its own render, before <App/> below issues a
+// call — see its docblock for why an effect would be too late.
 
 const container = document.getElementById('root');
 if (!container) throw new Error('#root missing from index.html');

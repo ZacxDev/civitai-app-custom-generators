@@ -25,8 +25,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
-import { Harness } from '@civitai/blocks-react/testing';
-import type { SharedListItem } from '@civitai/blocks-react';
+import { Harness } from '../platform/testing.js';
+import type { SharedListItem } from '../platform/index.js';
 
 import { App, DISCOVER_LIST_LIMIT, type AppDeps } from '../App.js';
 // 🔴 The REAL constant, not a copy. Duplicating it let the boundary case drift
