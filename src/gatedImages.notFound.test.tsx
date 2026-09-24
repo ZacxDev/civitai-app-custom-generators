@@ -1,17 +1,19 @@
 // WHAT THE APP DOES WHEN `blocks/gated-images` IS NOT DEPLOYED (`civitai#5112`).
 //
 // 🔴 THIS IS A MEASUREMENT, NOT A DESIGN. The route answers a Next.js HTML 404 in
-// production today. The PR body asserted a blast radius ("header/banner images")
-// and did not say whether the app DEGRADES or BREAKS. Reading the code suggested
-// it degrades — every call site has a `catch` — but "there is a catch" is not the
-// same claim as "the page is usable", so this file exercises all three call sites
-// and pins what a viewer actually gets.
+// production today (probed unauthenticated 2026-09-24: 404 `text/html`, while five
+// sibling `blocks/*` routes answer 401 — so it is undeployed, not misprobed). The
+// PR body did not enumerate this route's failure mode at all, and the review that
+// raised it named only the header/banner surface; neither said whether the app
+// DEGRADES or BREAKS. Reading the code suggested it degrades — every call site has a
+// `catch` — but "there is a catch" is not the same claim as "the page is usable", so
+// this file exercises all three call sites and pins what a viewer actually gets.
 //
 // 🔴 THE THREE CALL SITES, all reached through `platform/images.ts:66`:
 //   1. `App.tsx:550`        — Browse's DISCOVER COVER GRID (every card's cover)
 //   2. `App.tsx:632`        — the generator HEADER BANNER in the Runner
 //   3. `KeptGallery.tsx:510`— the KEPT-RUNS GALLERY grid
-// The PR body named only the second. The first is the one a signed-in viewer meets
+// Only the second had been named. The first is the one a signed-in viewer meets
 // first, on the landing view, before touching anything.
 //
 // 🔴 WHAT THE 404 DOES MECHANICALLY. `@civitai/sdk`'s http layer reads the body,

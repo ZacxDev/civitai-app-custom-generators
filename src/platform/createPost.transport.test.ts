@@ -26,8 +26,9 @@
 // `platform/testing.tsx` — OUR file — so it keeps answering however the SDK
 // behaves. Control run: deleting the push-listener dispatch from the INSTALLED
 // SDK (`dist/core/transports/iframe-transport.js`) failed 5 cases in this file
-// and left all 43 other test files GREEN, the fake-driven
-// `KeptGallery.post.transport.test.tsx` included. So an SDK-side change to that
+// and left EVERY other test file in the run GREEN — 43 of them at the time of the
+// control run — the fake-driven `KeptGallery.post.transport.test.tsx` included. So
+// an SDK-side change to that
 // routing — the shape a version bump would bring — is visible here and nowhere
 // else.
 //
