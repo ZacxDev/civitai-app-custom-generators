@@ -29,8 +29,6 @@ import type { KeptImageCell, KeptRun } from '../lib/runs.js';
 import { isTerminalSnapshot, mapSnapshotStatus, pollToTerminal, queueStatusLabel } from '../lib/workflow.js';
 import { isInsufficientBuzzError } from '../lib/buzz.js';
 import { ESTIMATE_NO_COST_MESSAGE, estimateFailureMessage, isPricedSnapshot } from '../lib/estimate.js';
-import type { Analytics } from '../lib/analytics.js';
-import { ANALYTICS_EVENTS, noopAnalytics } from '../lib/analytics.js';
 import { Image } from '@civitai/components-react';
 
 import { CLASS_LIFT, motionClass, useMotion } from '../motion.js';
@@ -108,8 +106,6 @@ export interface RunnerProps {
   onBalanceRefresh?: () => void;
   /** Open the on-site Civitai generator (a result action). */
   onOpenInGenerator?: () => void;
-  /** Funnel analytics sink (defaults to a no-op). */
-  analytics?: Analytics;
   /** Non-blocking notice (e.g. resource rehydration failed) shown above the form. */
   rehydrateNotice?: string | null;
   /**
@@ -176,7 +172,6 @@ export interface RunnerProps {
 
 export function Runner(props: RunnerProps) {
   const { config, sharedContentKey, headerUrl, c, canGenerate, buzzBalance, onRequestConsent, uploadSourceImage, estimate, submit, poll, onBack, onTopUp, onBalanceRefresh, onOpenInGenerator, onCopyImageLink, keepOutputs, onKeepRun, keptRuns, getImages, rehydrateNotice, preview = false } = props;
-  const analytics = props.analytics ?? noopAnalytics;
   const motion = useMotion();
 
   const [promptInput, setPromptInput] = useState('');
@@ -365,12 +360,6 @@ export function Runner(props: RunnerProps) {
     // succeeded by a prior confirm) is a no-op — never a second paid submit.
     if (item.status !== 'confirming') return;
     patchItem(item.id, { status: 'submitting', error: undefined, insufficientBuzz: undefined });
-    analytics.track(ANALYTICS_EVENTS.GENERATION_SUBMITTED, {
-      buttonLabel: item.buttonLabel,
-      quantity: item.requested,
-      estimatedCost: item.estimatedCost,
-      sharedContentKey,
-    });
     try {
       const snap = await submit(item.body);
       // A submit that comes straight back failed (e.g. insufficient Buzz) never
@@ -574,11 +563,6 @@ export function Runner(props: RunnerProps) {
     }
 
     patchItem(item.id, { keepStatus: 'kept', keptImageIds: imageIds });
-    analytics.track(ANALYTICS_EVENTS.GENERATION_KEPT, {
-      images: imageIds.length,
-      buttonLabel: item.buttonLabel,
-      sharedContentKey,
-    });
   }
 
   /** Open the payoff view on one of a queue item's result images. */

@@ -1,17 +1,27 @@
-// MY GALLERY, THROUGH THE REAL BRIDGE — the one seam every other gallery test
+// MY GALLERY, THROUGH THE APP'S OWN REST PATH — the seam every other gallery test
 // injects past.
 //
-// 🔴 WHY THIS FILE EXISTS, AND WHY THE SUITE WAS GREEN WHILE THE LIVE APP WAS
-// BROKEN. `Browse.gallery.test.tsx` and `KeptGallery.test.tsx` both hand the
-// component a hand-rolled `getImages`, so the gated read never leaves the test
-// process: no `GET_IMAGES_BY_IDS` message, no host reply, and — the part that
-// mattered — no `IMAGES_RESULT` PAYLOAD VALIDATOR. The defect lived in exactly
-// that gap. Every component was verified in isolation and the thing that broke
-// was the seam between them.
+// 🔴 THIS FILE NO LONGER GOES "THROUGH THE REAL BRIDGE", AND ITS TITLE USED TO SAY
+// IT DID. The gated read was a `GET_IMAGES_BY_IDS` postMessage when this file was
+// written; the port to `@civitai/sdk` made it `GET /api/v1/blocks/gated-images`.
+// The `<Harness>` here installs a fake `fetch` AND a `createFakeTransport()`
+// override, so no frame and no real transport is involved in this read at all.
+// The claim is retracted rather than re-earned.
 //
-// 🔴 THE DEFECT, AS OBSERVED IN PRODUCTION. Opening "My gallery" showed
-// *"Couldn’t load your kept images just now."* on first load; pressing
-// "Try again" a moment later worked, on the same ids. Mechanism, end to end:
+// 🔴 WHAT IT STILL EXERCISES, WHICH IS WHY IT SURVIVES THE RETRACTION. The other
+// gallery suites (`Browse.gallery.test.tsx`, `KeptGallery.test.tsx`) hand the
+// component a hand-rolled `getImages`, so the gated read never leaves the test
+// process. This one does not: it drives the REAL `platform/images.ts` — its URL
+// construction, its comma-joined `?ids=` query, its batching at 100, and its
+// `images ?? []` reading of the response — against a fake server that answers in
+// the route's documented shape. That is a different and larger surface than the
+// injected suites cover, and it is still the only place the app's own gated-read
+// module runs end to end from a click.
+//
+// 🔴 THE DEFECT THIS WAS WRITTEN FOR, AND WHY ITS MECHANISM IS NOW HISTORY.
+// Opening "My gallery" showed *"Couldn’t load your kept images just now."* on
+// first load; pressing "Try again" a moment later worked, on the same ids.
+// Mechanism, end to end, ON THE BRIDGE:
 //
 //   1. A kept image is the VIEWER'S OWN (this app publishes it for them). Until
 //      something rates it, civitai's gate
@@ -20,21 +30,25 @@
 //      `contentRating`, carrying `ratingPending: true`.
 //   2. `@civitai/blocks-react` <= 0.50.0's `isValidGatedImage` REQUIRED both
 //      rating fields on every `visible` entry, so that entry failed — and
-//      `isValidImagesResult` fails the WHOLE reply on one bad entry.
-//   3. `IframeTransport.handleMessage` drops a reply that fails its validator
-//      (console.warn, no rejection), so the pending `GET_IMAGES_BY_IDS` is never
-//      answered and dies at the SDK's 30s `DEFAULT_REQUEST_TIMEOUT_MS`.
-//   4. `KeptGallery`'s catch turns that into the sentence above.
+//      `isValidImagesResult` failed the WHOLE reply on one bad entry.
+//   3. `IframeTransport.handleMessage` dropped a reply that failed its validator
+//      (console.warn, no rejection), so the pending `GET_IMAGES_BY_IDS` was never
+//      answered and died at the SDK's 30s `DEFAULT_REQUEST_TIMEOUT_MS`.
+//   4. `KeptGallery`'s catch turned that into the sentence above.
 //
-// The retry worked because the poison shape is TIME-BOUNDED, not input-bound:
-// once the image is rated the same ids produce a reply that validates. That is
-// what made it read as a race on unchanged input.
+// 🔴 STEPS 2 AND 3 CANNOT RECUR: the package is gone, and `@civitai/sdk` performs
+// NO inbound payload validation on any path. So this file is no longer a
+// regression test for that defect — it cannot be red for that cause. What it is
+// now is a FORWARD guard on the same viewer-visible outcome: it drives the app's
+// gallery against a server reply in the `ratingPending` shape and requires the
+// cell to resolve. Any future SDK, host or app change that stops this app
+// rendering an unrated own-image comes back through here, whatever the cause. The
+// outcome is pinned; the old mechanism is recorded as history, not as a live
+// hazard.
 //
-// 🔴 WHAT THIS TEST PINS IS A RELATIONSHIP, NOT A VERSION. It does not assert a
-// dependency range — it drives the app's own gallery against a host reply in the
-// `ratingPending` shape and requires the cell to resolve. Any future SDK, host
-// or app change that stops this app rendering an unrated own-image comes back
-// through here, whatever the cause.
+// 🔴 A FAKE PASSING IS EVIDENCE ABOUT THE FAKE. The server here is
+// `platform/testing.tsx`, which is ours. Nothing in this file has run against a
+// live civitai server.
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -119,12 +133,14 @@ async function renderGallery(gatedImages: BlockGatedImage[]) {
   );
 }
 
-describe('the gated read, across the real host bridge', () => {
+describe('the gated read, through the app’s own REST module', () => {
   /**
-   * 🔴 THE REGRESSION. Red on the tree that shipped (`2c4252e`,
-   * `@civitai/blocks-react@0.46.0`): the reply is dropped by the validator, the
-   * cell never leaves `loading`, and the app is on its way to the 30s timeout
-   * that produced the operator's banner.
+   * 🔴 THE OUTCOME GUARD. This was RED on the tree that shipped (`2c4252e`,
+   * `@civitai/blocks-react@0.46.0`) for the validator reason in the header. On the
+   * current tree that cause is structurally impossible, so this is no longer
+   * evidence that the old bug is fixed — it is evidence that the viewer-visible
+   * outcome still holds on the REST path. Do not quote it as regression coverage
+   * for the validator defect.
    */
   it('renders the viewer’s own NOT-YET-RATED kept image instead of failing the load', async () => {
     await renderGallery([ratingPendingImage]);

@@ -1,15 +1,24 @@
-// POSTING A KEPT IMAGE, THROUGH THE REAL BRIDGE — every arm of it.
+// POSTING A KEPT IMAGE — every arm of it, against a SCRIPTED FAKE TRANSPORT.
 //
-// 🔴 WHY THIS IS A TRANSPORT TEST AND NOT A COMPONENT TEST. `useCreatePostFromApp()`
-// is not a seam this app injects: the component holds the hook, so a test that
-// mocked `@civitai/blocks-react` or handed in a fake `createPost` would be
-// asserting against its own stub. Everything that can actually go wrong on this
-// path lives between the component and the host — the outbound
-// `CREATE_POST_FROM_APP` payload, the inbound `CREATE_POST_RESULT` validator,
-// and the SDK's error wrapping. So this file drives the REAL `App` inside the
-// REAL mock host and lets all three run. It is the sibling of
-// `Browse.gallery.transport.test.tsx`, written for the same reason: that defect
-// lived in exactly the gap two isolated suites left.
+// 🔴 THIS FILE DOES NOT EXERCISE THE REAL HOST BRIDGE, AND ITS TITLE USED TO SAY
+// IT DID. Before the port to `@civitai/sdk` it drove a mock host over
+// `postMessage` and three of its cases patched `window.parent.postMessage` to
+// swallow or hold the one outbound frame — which genuinely ran `IframeTransport`'s
+// correlation and deadline. Now every case here gets a `createFakeTransport()`
+// override installed by `<Harness>` through `__configurePlatform`, and the real
+// `getTransport()` has exactly one call site (`platform/client.ts`, reached only
+// when no override was supplied). So ZERO cases in this file touch the real
+// transport. The claim was retracted rather than re-earned; the real-transport
+// coverage was rebuilt separately, in
+// `src/platform/createPost.transport.test.ts`.
+//
+// 🔴 WHAT IT DOES EXERCISE, which is still the reason to keep it. The REAL `App`,
+// the REAL `KeptGallery`, the REAL `useCreatePostFromApp()` hook and the REAL
+// `platform/createPost.ts` correlation logic, end to end from a click. The hook is
+// not a seam this app injects — the component holds it — so a test that handed in a
+// fake `createPost` would be asserting against its own stub. What is fake is the
+// HOST at the other end of the transport: the outbound payload is read from a tap
+// on it, and the reply is a frame it pushes back.
 //
 // 🔴 THE PAYLOAD IS READ, NOT ASSUMED — AND THIS HEADER USED TO CLAIM THAT WHILE
 // NOTHING DID IT. The sentence above said this file exercises "the outbound
@@ -32,13 +41,14 @@
 // import reports "no tests", which is indistinguishable from a suite wired to
 // nothing (see the repo's own notes on reassuring zeros).
 //
-// 🔴 WHAT THE MOCK HOST CANNOT PROVE, stated rather than implied. The consent
-// dialog is HOST CHROME: the mock settles immediately where the real host waits
-// on a click, and what that dialog SHOWS — the server's resolution of the
-// request, the tags it actually matched, real thumbnails — has no mock analogue
-// at all. `declined` is the only arm of the viewer's confirm that is exercised
-// here, and never its timing or its content. Nothing in this file has run
-// against the real host.
+// 🔴 WHAT THE FAKE CANNOT PROVE, stated rather than implied. The consent dialog
+// is HOST CHROME: the fake settles immediately where the real host waits on a
+// click, and what that dialog SHOWS — the server's resolution of the request, the
+// tags it actually matched, real thumbnails — has no fake analogue at all.
+// `declined` is the only arm of the viewer's confirm exercised here, and never its
+// timing or its content. And because the transport is a fake, nothing here is
+// evidence about framing, parent origins or the outbound queue. Nothing in this
+// file has run against the real host.
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -77,8 +87,11 @@ function ratedImage(imageId: number): BlockGatedImage {
 const rated: BlockGatedImage = ratedImage(RATED_ID);
 
 /**
- * Tap the mock host's outbound stream and keep every `CREATE_POST_FROM_APP`
- * REQUEST, in send order, with the transport's `requestId` stripped.
+ * Tap the FAKE transport's outbound stream and keep every `CREATE_POST_FROM_APP`
+ * notification, in send order, with the app's own `requestId` stripped.
+ *
+ * This reads frames the app really built (`platform/createPost.ts` constructs
+ * them), handed to a fake transport rather than a real one.
  *
  * 🔴 THIS IS THE INSTRUMENT THE FILE WAS MISSING, so it comes with its own
  * controls rather than being trusted. Positive: the first suite below asserts a
@@ -155,11 +168,17 @@ async function keptImageIdsInStore(drafts: DraftStore): Promise<number[]> {
 }
 
 /**
- * Render the real `App` against the real mock host with the post bridge left
- * ALONE — no injected `createPost`, so `useCreatePostFromApp()` →
- * `CREATE_POST_FROM_APP` → the mock host → `CREATE_POST_RESULT` → the SDK's
- * payload validator all run. The board is empty so the only bridge traffic is
- * the gallery's.
+ * Render the real `App` against the scripted fake with the post path left ALONE —
+ * no injected `createPost`, so `useCreatePostFromApp()` → `platform/createPost.ts`
+ * → `CREATE_POST_FROM_APP` → the fake's reply → the app's own correlation and
+ * error mapping all run. The board is empty so the only transport traffic is the
+ * gallery's.
+ *
+ * NOTE: there is no inbound payload VALIDATOR in this path any more. The old
+ * bridge package validated `IMAGES_RESULT`/`CREATE_POST_RESULT` shapes and dropped
+ * a reply that failed — the mechanism behind the production defect
+ * `Browse.gallery.transport.test.tsx` was written for. `@civitai/sdk` does no such
+ * validation, so nothing here exercises one.
  */
 async function renderGallery(opts: {
   gatedImages: BlockGatedImage[];
@@ -265,7 +284,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('creating a post from My gallery, across the real host bridge', () => {
+describe('creating a post from My gallery, against a scripted host', () => {
   it('posts the selected kept image and hands back the post url', async () => {
     const user = userEvent.setup();
     await renderGallery({ gatedImages: [rated], keptIds: [RATED_ID], createPostResult: POST });
@@ -772,9 +791,10 @@ describe('a model link the app cannot read blocks the post', () => {
  * no success, a selection bar still reading "1 selected", and nothing anywhere
  * saying the post had been turned down.
  *
- * Driven by HOLDING the outbound frame rather than by faking `pending`, so the
- * post really is in flight across the real bridge for the duration of the
- * dismissal attempts.
+ * Driven by HOLDING the reply rather than by faking `pending`, so the app's own
+ * request really is in flight — unsettled inside `platform/createPost.ts` — for
+ * the duration of the dismissal attempts. (The frame itself goes to a fake
+ * transport, not a real parent frame.)
  */
 describe('a refusal that arrives after the viewer tries to leave', () => {
   it('still reaches them — the composer refuses to close while the post is in flight', async () => {
@@ -859,8 +879,8 @@ describe('a refusal that arrives after the viewer tries to leave', () => {
  * SDK's token housekeeping expiring under a fake clock, flipping `ready` false
  * and emptying the kept list.
  *
- * Driven the same way as the dismissal case above: the outbound frame is HELD,
- * so the post really is in flight across the real bridge while the feed empties.
+ * Driven the same way as the dismissal case above: the reply is HELD, so the
+ * app's own request really is unsettled while the feed empties.
  */
 describe('a refusal that arrives after the grid has emptied', () => {
   it('still reaches them — the composer survives the kept set going empty mid-flight', async () => {

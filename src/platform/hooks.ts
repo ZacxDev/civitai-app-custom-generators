@@ -358,28 +358,20 @@ export function useBuzzPurchase(): UseBuzzPurchase {
 }
 
 // ---------------------------------------------------------------- analytics
-
-export interface UseBlockAnalytics {
-  track: (event: string, props?: Record<string, unknown>) => void;
-}
-
-/**
- * Funnel analytics.
- *
- * 🔴 THIS IS A NO-OP SHIM, AND IT WAS ALREADY A NO-OP BEFORE THE PORT. The
- * `TRACK_EVENT` message it used to send has NO HOST HANDLER on either host —
- * `hostHandlerParity.ts` marks both N/A, "analytics fire-and-forget; no
- * host-side sink wired (dropped, never hangs)". So the twelve `track()` call
- * sites in this app were already going nowhere, and this changes nothing about
- * what is recorded. It is kept as a shim rather than deleted so that wiring a
- * real sink later is one function body rather than twelve call sites.
- */
-export function useBlockAnalytics(): UseBlockAnalytics {
-  const track = useCallback((event: string, props?: Record<string, unknown>) => {
-    if (import.meta.env.DEV) console.debug('[analytics]', event, props ?? {});
-  }, []);
-  return useMemo(() => ({ track }), [track]);
-}
+//
+// THERE IS NO ANALYTICS SURFACE HERE ANY MORE, AND NOTHING REPLACED IT.
+//
+// `useBlockAnalytics()` was a no-op shim (`if (import.meta.env.DEV)
+// console.debug(...)`) behind eleven `track()` call sites and an eleven-name event
+// vocabulary in `src/lib/analytics.ts`. It recorded nothing in production by
+// construction, nothing consumed the events, and the requirement for them was
+// unattributed — so the shim, the vocabulary and the call sites were deleted
+// rather than kept against a sink that might arrive.
+//
+// The consequence, stated rather than softened: this app now emits NO funnel
+// telemetry at all, and a render error caught by the top-level `ErrorBoundary` is
+// reported nowhere (React's own console output is what remains). Wiring a real
+// sink means re-adding the emit sites, not filling in a hook body.
 
 // ---------------------------------------------------------------- buzz
 

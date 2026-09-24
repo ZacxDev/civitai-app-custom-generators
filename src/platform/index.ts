@@ -22,7 +22,6 @@ export { getClient, getPlatformTransport, getSnapshot, __configurePlatform } fro
 export type { PlatformOverrides } from './client.js';
 
 export {
-  useBlockAnalytics,
   useBlockContext,
   useBlockResize,
   useBlockToken,
@@ -40,7 +39,6 @@ export type {
   BlockContextValue,
   BlockTokenValue,
   PurchaseResult,
-  UseBlockAnalytics,
   UseBuzzBalance,
   UseBuzzPurchase,
   UseCivitaiNavigate,

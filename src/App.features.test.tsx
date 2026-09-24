@@ -1,7 +1,17 @@
-// App-level feature wiring: funnel analytics, `?g=` deeplink open, fork into a
-// draft, share-link copy, voting, and the rehydration-failure notice. Drives the
-// real App with injected deps (analytics/deeplink/clipboard mocked) + a spied
-// in-memory shared store.
+// App-level feature wiring: build → publish → run, `?g=` deeplink open, fork into
+// a draft, share-link copy, voting, and the rehydration-failure notice. Drives the
+// real App with injected deps (deeplink/clipboard mocked) + a spied in-memory
+// shared store.
+//
+// THIS FILE USED TO BE THE FUNNEL-ANALYTICS SUITE. Nine of its assertions read an
+// `analytics.track` spy, and the sink behind it recorded nothing in production —
+// the hook body was `if (import.meta.env.DEV) console.debug(...)`. The shim, the
+// event vocabulary and every emit site are deleted, so those assertions are gone
+// rather than re-pointed. Two tests whose ONLY assertion was the spy went with
+// them: `build_started` (the click it made is covered incidentally by the publish
+// journey below) and `generation_submitted` (whose behaviour the `Runner.*` suites
+// own). The rest kept their behavioural assertions and were renamed to claim only
+// those.
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -10,7 +20,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { Harness } from './platform/testing.js';
 
 import { App, type AppDeps } from './App.js';
-import { ANALYTICS_EVENTS } from './lib/analytics.js';
 import { defaultParams } from './lib/generator.js';
 import { CKPT_INFO, LORA_INFO, fakeShared, immediateSleep, memoryDraftStore, mockWorkflow } from './test-helpers.js';
 import type { SharedListItem } from './platform/index.js';
@@ -47,7 +56,6 @@ function publishedSeed(key: string, title: string, authorUserId = 7): SharedList
 }
 
 function setup(seed: SharedListItem[] = [], depsOver: Partial<AppDeps> = {}) {
-  const analytics = { track: vi.fn() };
   const shared = fakeShared(seed);
   const wf = mockWorkflow({ cost: 12, images: ['https://image.civitai.com/out.jpeg'] });
   const copyToClipboard = vi.fn(async (_text: string) => {});
@@ -63,7 +71,6 @@ function setup(seed: SharedListItem[] = [], depsOver: Partial<AppDeps> = {}) {
     poll: wf.poll,
     pollIntervalMs: 0,
     sleep: immediateSleep,
-    analytics,
     copyToClipboard,
     navigate,
     openPurchaseModal,
@@ -85,18 +92,12 @@ function setup(seed: SharedListItem[] = [], depsOver: Partial<AppDeps> = {}) {
       <App deps={deps} />
     </Harness>,
   );
-  return { analytics, shared, copyToClipboard, navigate, openPurchaseModal };
+  return { shared, copyToClipboard, navigate, openPurchaseModal };
 }
 
-describe('App — funnel analytics (feature #5)', () => {
-  it('tracks build_started when Create is clicked', async () => {
-    const { analytics } = setup();
-    await userEvent.click(await screen.findByTestId('create-generator'));
-    expect(analytics.track).toHaveBeenCalledWith(ANALYTICS_EVENTS.BUILD_STARTED);
-  });
-
-  it('tracks published on a full build → publish', async () => {
-    const { analytics } = setup();
+describe('App — build → publish → run → vote wiring', () => {
+  it('publishes a full build and confirms it on screen', async () => {
+    setup();
     await userEvent.click(await screen.findByTestId('create-generator'));
     await screen.findByTestId('builder');
     await userEvent.type(screen.getByTestId('gen-name'), 'Neon');
@@ -107,56 +108,32 @@ describe('App — funnel analytics (feature #5)', () => {
     fireEvent.change(within(editor).getByTestId('btn-prompt-template'), { target: { value: 'neon {prompt}' } });
     await userEvent.click(screen.getByTestId('publish'));
     await screen.findByTestId('builder-notice');
-    expect(analytics.track).toHaveBeenCalledWith(
-      ANALYTICS_EVENTS.PUBLISHED,
-      expect.objectContaining({ republish: false }),
-    );
   });
 
-  it('tracks run_opened when a published generator is opened', async () => {
-    const { analytics } = setup([publishedSeed('shared:x', 'Openable')]);
+  it('opens a published generator into the Runner', async () => {
+    setup([publishedSeed('shared:x', 'Openable')]);
     await userEvent.click(await within(await screen.findByTestId('published-card')).findByTestId('published-open'));
     await screen.findByTestId('runner');
-    expect(analytics.track).toHaveBeenCalledWith(
-      ANALYTICS_EVENTS.RUN_OPENED,
-      expect.objectContaining({ source: 'published', published: true }),
-    );
   });
 
-  it('tracks generation_submitted when a gen is confirmed', async () => {
-    const { analytics } = setup([publishedSeed('shared:x', 'Runnable')]);
-    await userEvent.click(await within(await screen.findByTestId('published-card')).findByTestId('published-open'));
-    await screen.findByTestId('runner');
-    await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
-    await userEvent.click(screen.getByTestId('gen-button'));
-    await userEvent.click(await screen.findByTestId('queue-confirm'));
-    await waitFor(() =>
-      expect(analytics.track).toHaveBeenCalledWith(ANALYTICS_EVENTS.GENERATION_SUBMITTED, expect.any(Object)),
-    );
-  });
-
-  it('tracks voted (and calls shared.vote) on a Discover up-vote', async () => {
-    const { analytics, shared } = setup([publishedSeed('shared:v', 'Votable')]);
+  it('up-votes through the shared seam and shows the authoritative new count', async () => {
+    setup([publishedSeed('shared:v', 'Votable')]);
     const card = await screen.findByTestId('published-card');
     await userEvent.click(within(card).getByTestId('vote-button'));
-    await waitFor(() =>
-      expect(analytics.track).toHaveBeenCalledWith(ANALYTICS_EVENTS.VOTED, expect.objectContaining({ voted: true })),
-    );
-    // the real host vote seam was exercised
+    // The count comes back from the fake server's own row rather than an
+    // optimistic flash — the seam assertion the deleted spy assertion sat beside.
     expect(await within(card).findByTestId('published-votes')).toHaveTextContent('1');
-    void shared;
   });
 });
 
 describe('App — deeplink open (feature #8)', () => {
   it('deep-opens a ?g=<key> generator directly into the Runner', async () => {
-    const { analytics } = setup([publishedSeed('shared:deep', 'Deep Linked')], {
+    setup([publishedSeed('shared:deep', 'Deep Linked')], {
       getDeeplinkKey: () => 'shared:deep',
     });
     // no click — the deeplink effect opens the runner once the list loads
     await screen.findByTestId('runner');
     expect(screen.getByTestId('runner-title')).toHaveTextContent('Deep Linked');
-    expect(analytics.track).toHaveBeenCalledWith(ANALYTICS_EVENTS.DEEPLINK_OPENED, { key: 'shared:deep' });
   });
 
   it('stays on Browse when the deeplink key is not in the loaded list', async () => {
@@ -191,7 +168,6 @@ describe('App — deeplink open (feature #8)', () => {
 
 describe('App — anonymous vote gate (audit fix #2)', () => {
   it('an anonymous viewer voting triggers sign-in and never mutates the shared store', async () => {
-    const analytics = { track: vi.fn() };
     const shared = fakeShared([publishedSeed('shared:v', 'Votable')]);
     const requestSignIn = vi.fn();
     render(
@@ -202,7 +178,6 @@ describe('App — anonymous vote gate (audit fix #2)', () => {
             shared: shared.shared,
             updateSharedGenerator: shared.update,
             drafts: memoryDraftStore(),
-            analytics,
             requestSignIn,
             getDeeplinkKey: () => null,
           }}
@@ -212,33 +187,30 @@ describe('App — anonymous vote gate (audit fix #2)', () => {
     const card = await screen.findByTestId('published-card');
     await userEvent.click(within(card).getByTestId('vote-button'));
     await waitFor(() => expect(requestSignIn).toHaveBeenCalled());
-    // no optimistic flash, no analytics vote, no host mutation
+    // no optimistic flash, no host mutation — the count is still the seeded 2
     expect(within(card).getByTestId('published-votes')).toHaveTextContent('2');
-    expect(analytics.track).not.toHaveBeenCalledWith(ANALYTICS_EVENTS.VOTED, expect.anything());
   });
 });
 
 describe('App — share link (feature #8)', () => {
   it('copies a self-referential ?g=<key> link to the clipboard', async () => {
-    const { copyToClipboard, analytics } = setup([publishedSeed('shared:s', 'Shareable')]);
+    const { copyToClipboard } = setup([publishedSeed('shared:s', 'Shareable')]);
     const card = await screen.findByTestId('published-card');
     await userEvent.click(within(card).getByTestId('published-share'));
     await waitFor(() => expect(copyToClipboard).toHaveBeenCalled());
     const url = copyToClipboard.mock.calls[0][0];
     expect(new URL(url).searchParams.get('g')).toBe('shared:s');
-    expect(analytics.track).toHaveBeenCalledWith(ANALYTICS_EVENTS.SHARED, { key: 'shared:s' });
   });
 });
 
 describe('App — fork / duplicate (feature #9)', () => {
   it('forks a published generator into an editable draft named "(copy)"', async () => {
-    const { analytics } = setup([publishedSeed('shared:f', 'Original')]);
+    setup([publishedSeed('shared:f', 'Original')]);
     const card = await screen.findByTestId('published-card');
     await userEvent.click(within(card).getByTestId('published-fork'));
     // lands in the Builder editing the forked draft
     await screen.findByTestId('builder');
     expect(screen.getByTestId('gen-name')).toHaveValue('Original (copy)');
-    expect(analytics.track).toHaveBeenCalledWith(ANALYTICS_EVENTS.FORKED, { from: 'shared:f' });
     // it is a NEW unpublished draft — saving it must not touch the source row
     await userEvent.click(screen.getByTestId('save-draft'));
     await screen.findByTestId('builder-notice');

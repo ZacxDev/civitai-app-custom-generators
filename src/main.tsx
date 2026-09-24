@@ -1,9 +1,7 @@
 import { StrictMode } from 'react';
-import type { ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { injectBlocksStyles } from './ui/index.js';
 import { BlockGate } from './platform/index.js';
-import { useBlockAnalytics } from './platform/index.js';
 
 // Design-system tokens (`--civitai-*` custom properties, light/dark via
 // `[data-theme]`). The pack's injectBlocksStyles() also injects these at
@@ -13,27 +11,18 @@ import '@civitai/theme/styles.css';
 
 import { App } from './App.js';
 import { ErrorBoundary } from './components/ErrorBoundary.js';
-import { ANALYTICS_EVENTS } from './lib/analytics.js';
 import { Harness } from './Harness.js';
 import { injectMotionStyles } from './motion.js';
 
 import './index.css';
 
-// Top-level boundary wrapper that reports caught render crashes to analytics
-// (fire-and-forget) so a malformed shared row that crashes a child is visible in
-// telemetry, not just recovered silently. Mounted INSIDE <BlockGate> (only the
-// embedded path renders it), so `useBlockAnalytics()` always has host context.
-function RootBoundary({ children }: { children: ReactNode }) {
-  const { track } = useBlockAnalytics();
-  return (
-    <ErrorBoundary
-      onError={(error) => track(ANALYTICS_EVENTS.APP_CRASHED, { message: error.message, stack: error.stack })}
-    >
-      {children}
-    </ErrorBoundary>
-  );
-}
-
+// `<ErrorBoundary>` is mounted bare, with NO `onError`. It used to carry one that
+// fed an `APP_CRASHED` event into `useBlockAnalytics()` — a no-op shim nothing
+// consumed — so the wrapper component that existed only to call that hook is gone
+// with it. A caught render crash is now recovered on screen and reported NOWHERE:
+// the boundary's fallback is the only signal, plus whatever React logs itself.
+// `ErrorBoundary`'s `onError` prop stays (it has its own coverage in
+// `ErrorBoundary.test.tsx`); it simply has no caller in production.
 // Inject the /ui pack's themed stylesheet once up-front (idempotent; the pack
 // components also self-inject on first render — this just guarantees tokens
 // exist before the first paint).
@@ -71,11 +60,11 @@ if (!container) throw new Error('#root missing from index.html');
 // instead of hanging on the app's loading state. It's inert on the embedded
 // happy path and the dev harness (both post BLOCK_INIT), so it renders the app
 // unchanged there. The run slug is derived from `location.hostname`. The
-// RootBoundary error boundary wraps the actual app inside the gate.
+// ErrorBoundary wraps the actual app inside the gate.
 createRoot(container).render(
   <StrictMode>
     <BlockGate>
-      <RootBoundary>{useHarness ? <Harness><App /></Harness> : <App />}</RootBoundary>
+      <ErrorBoundary>{useHarness ? <Harness><App /></Harness> : <App />}</ErrorBoundary>
     </BlockGate>
   </StrictMode>,
 );

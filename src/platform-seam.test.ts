@@ -1,15 +1,28 @@
 // The guard that makes `src/platform/` a SEAM rather than just a folder.
 //
-// Four assertions, and the first exists only to make the other three mean
-// something: a scan that silently matched nothing would satisfy "no file imports
-// the bridge package" vacuously, and would go on satisfying it forever.
+// THREE assertions. There used to be a fourth — "no file imports
+// `@civitai/blocks-react`" — and it was DELETED because it could not fail
+// independently of the `package.json` assertion below: with the package absent
+// from `package.json` at all, an import of it cannot resolve, so the suite would
+// already be red at module load. It read as a second, stronger guard and was
+// really the same one spelled twice.
+//
+// What the three do:
+//   1. POSITIVE CONTROL for the file scan. A scan that silently matched nothing
+//      would satisfy assertion 3 vacuously and go on doing so forever.
+//   2. `package.json` declares `@civitai/sdk` and NOT `@civitai/blocks-react`.
+//      This is the one that actually keeps the bridge package out of the tree,
+//      and it reads the manifest rather than the sources — so assertion 1 is not
+//      its control, and it needs none.
+//   3. The SDK is reachable from `src/platform/` only, as an exact ledger.
 //
 // 🔴 MATCHES MODULE SPECIFIERS, NOT SUBSTRINGS. This port's own comments name
-// `@civitai/blocks-react` constantly — deliberately, because explaining what
-// moved and why is most of the value of the diff. A substring scan therefore
-// reports ~27 "importers" that are prose. What is being asserted is what the
-// module graph does, so the pattern is anchored to `from`/`import`/`require`/
-// `vi.mock` followed by a quoted specifier.
+// `@civitai/blocks-react` and `@civitai/sdk` constantly — deliberately, because
+// explaining what moved and why is most of the value of the diff. A substring
+// scan for `@civitai/blocks-react` therefore reports files that only mention it
+// in prose (the count is quoted in the PR body, and it is not zero). What is
+// asserted here is what the module GRAPH does, so the pattern is anchored to
+// `from`/`import`/`require`/`vi.mock` followed by a quoted specifier.
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -57,12 +70,16 @@ const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')) as {
 
 describe('the platform seam', () => {
   /**
-   * POSITIVE CONTROL for the three assertions below.
+   * POSITIVE CONTROL for the file-scanning assertion below (`confines
+   * @civitai/sdk to src/platform/`).
    *
-   * Every one of them is satisfied by a scan that found nothing, so each would
-   * pass against an empty file list — and `readdirSync` on a mistyped path, or a
-   * regex that never matches, produces exactly that. This pins the scan's own
-   * reach: a real number of files, and two specific ones that MUST be in it.
+   * That assertion is satisfied by a scan that found nothing, so it would pass
+   * against an empty file list — and `readdirSync` on a mistyped path, or a regex
+   * that never matches, produces exactly that. This pins the scan's own reach: a
+   * real number of files, and two specific ones that MUST be in it.
+   *
+   * It is NOT a control for the `package.json` assertion, which reads the
+   * manifest and never touches `FILES`.
    */
   it('scans the real source tree', () => {
     expect(FILES.length).toBeGreaterThan(20);
@@ -74,10 +91,11 @@ describe('the platform seam', () => {
     expect(importersOf('./platform/index.js').length).toBeGreaterThan(0);
   });
 
-  it('no file imports @civitai/blocks-react', () => {
-    expect(importersOf('@civitai/blocks-react')).toEqual([]);
-  });
-
+  /**
+   * The guard that keeps the bridge package out. An import of it cannot resolve
+   * while it is absent here, so this subsumes the source-scan version of the same
+   * claim that used to sit above it.
+   */
   it('declares @civitai/sdk and not @civitai/blocks-react', () => {
     const all = { ...pkg.dependencies, ...pkg.devDependencies };
     expect(Object.keys(all)).not.toContain('@civitai/blocks-react');

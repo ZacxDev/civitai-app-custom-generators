@@ -27,6 +27,7 @@ import type { ReactNode } from 'react';
 
 import { createFakeTransport, __resetTransport } from '@civitai/sdk/testing';
 import type { FakeTransport } from '@civitai/sdk/testing';
+import { getTransport } from '@civitai/sdk';
 import type { BlockTransport } from '@civitai/sdk';
 import type {
   BlockCreatePostResult,
@@ -112,6 +113,21 @@ export interface FakeCivitaiOptions {
     | { status: 'error'; message?: string };
   gatedImages?: BlockGatedImage[];
   gatedImagesError?: boolean | string;
+  /**
+   * Answer `blocks/gated-images` with the Next.js HTML 404 a route miss really
+   * returns — the PRODUCTION STATE of that route as of 2026-09-24, filed as
+   * `civitai/civitai#5112`.
+   *
+   * 🔴 DISTINCT FROM {@link FakeCivitaiOptions.gatedImagesError}, WHICH IS A JSON
+   * 500, AND THE DIFFERENCE IS THE POINT. A 500 carries `{ message }`, so the
+   * SDK's http layer builds an `ApiError` whose `.message` is the server's own
+   * sentence. A 404 HTML page is not JSON, so `messageOf()` returns undefined and
+   * `.message` falls back to `statusText` while `.body` holds the raw markup — a
+   * different object reaching the app's catch blocks, with untrusted HTML in it.
+   * Both throw; only this one is what the app will actually meet in production
+   * until #5112 is deployed.
+   */
+  gatedImagesNotFound?: boolean;
   publishImageIds?: number[];
   publishError?: boolean | string;
   createPostResult?: BlockCreatePostResult;
@@ -381,6 +397,9 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
 
     // ---- images / resources / buzz
     if (path === 'blocks/gated-images') {
+      // The route is UNDEPLOYED in production (#5112) — a miss, before any
+      // auth/scope/param handling, exactly as Next.js orders it.
+      if (options.gatedImagesNotFound) return notFound(path);
       if (options.gatedImagesError) {
         return json(500, {
           message: typeof options.gatedImagesError === 'string' ? options.gatedImagesError : 'gated image read failed',
@@ -651,4 +670,138 @@ export function Harness({
     configuredFor.current = resetKey;
   }
   return <>{children}</>;
+}
+
+
+// ---------------------------------------------------------------------------
+// THE REAL TRANSPORT
+// ---------------------------------------------------------------------------
+
+/**
+ * The parent origin the real transport is configured to trust below. A concrete
+ * origin, not a wildcard, because `IframeTransport` can only use an EXACT entry
+ * as a `postMessage` targetOrigin.
+ */
+export const REAL_HOST_ORIGIN = 'https://civitai.com';
+
+export interface RealTransportHarness {
+  /** A REAL `IframeTransport` from `@civitai/sdk` — not `createFakeTransport`. */
+  transport: BlockTransport;
+  /**
+   * Every frame the block posted to its parent, in order, as the real transport
+   * posted it. `BLOCK_HELLO` and `BLOCK_READY` appear here too — they are the
+   * transport's own traffic, and their presence is the cheapest proof that the
+   * thing under test is the real one.
+   */
+  sent: { type: string; payload?: unknown }[];
+  /**
+   * Deliver a host→block frame as a genuine `message` event at
+   * {@link REAL_HOST_ORIGIN}, so the transport's origin check, framing check and
+   * requestId correlation all run for real.
+   */
+  deliver(data: unknown, origin?: string): void;
+  /** Deliver a minimal valid `BLOCK_INIT`, which is what flushes the outbound queue. */
+  handshake(opts?: { scopes?: string[] }): void;
+  dispose(): void;
+}
+
+/**
+ * Build a REAL `IframeTransport` and the two controls needed to drive it.
+ *
+ * 🔴 WHY THIS EXISTS. Every other suite in this repo injects a
+ * `createFakeTransport()` through `__configurePlatform`, so the real transport's
+ * code runs in NO test — and `CREATE_POST_FROM_APP` is the one surface still on
+ * the bridge in production. Three properties matter there and are structurally
+ * invisible to an in-memory fake, because the fake has no origins, no frames and
+ * no queue:
+ *
+ *   1. A reply type that is NOT in the SDK's `LEGACY_REPLIES` ledger
+ *      (`CREATE_POST_RESULT` answering `CREATE_POST_FROM_APP`) reaches `on()`
+ *      push listeners rather than a pending request. `platform/createPost.ts` is
+ *      built entirely on that behaviour; if the SDK ever routed it elsewhere,
+ *      every fake-transport test would stay green and the app would hang.
+ *   2. A frame from a DISALLOWED origin is dropped.
+ *   3. `notify()` before `BLOCK_INIT` is QUEUED and flushed after it, not lost.
+ *
+ * 🔴 WHY IT LIVES IN THIS FILE. `src/platform-seam.test.ts` asserts that only
+ * files under `src/platform/` import `@civitai/sdk`, as an exact ledger. A test
+ * under `src/components/` reaching for `getTransport` itself would break that
+ * guard, so the SDK access stays behind this seam and the test imports the
+ * harness.
+ *
+ * 🔴 WHAT IT STILL IS NOT. There is no real parent frame and no real host: the
+ * parent is a recorder and every inbound frame is one a test wrote. It proves the
+ * transport's framing, origin check, queue and correlation behave as
+ * `createPost.ts` assumes — NOT that civitai's host sends these shapes. Nothing
+ * here has run against a live server.
+ */
+export function createRealTransport(): RealTransportHarness {
+  // The SDK caches its transport on `globalThis`, so a previous test's instance
+  // would otherwise be handed back with its listeners still attached.
+  __resetTransport();
+
+  const sent: { type: string; payload?: unknown }[] = [];
+  const parent = {
+    postMessage: (msg: unknown) => {
+      sent.push(msg as { type: string; payload?: unknown });
+    },
+  };
+
+  // 🔴 A PLAIN `EventTarget`, NOT THE AMBIENT `window` — so this works in BOTH
+  // vitest tiers. `vite.config.ts` runs `*.test.ts` under `environment: 'node'`,
+  // where there is no `window` at all; binding to `globalThis.window` made every
+  // case here die at setup with `Cannot read properties of undefined`. Nothing is
+  // lost by not using jsdom: the transport's real behaviour under test is its
+  // origin matching, framing, outbound queue and requestId correlation, none of
+  // which touch the DOM. A stubbed `parent` was always going to be a stand-in.
+  const bus = new EventTarget();
+
+  const win = {
+    parent,
+    // An empty hash: `#seedFromFragment` parses it, finds no host fragment and
+    // returns without touching `history`.
+    location: { hash: '' },
+    addEventListener: (type: string, listener: EventListenerOrEventListenerObject) =>
+      bus.addEventListener(type, listener),
+    removeEventListener: (type: string, listener: EventListenerOrEventListenerObject) =>
+      bus.removeEventListener(type, listener),
+  };
+
+  const transport = getTransport({
+    allowedParentOrigins: [REAL_HOST_ORIGIN],
+    window: win as unknown as Window,
+  });
+
+  const deliver = (data: unknown, origin: string = REAL_HOST_ORIGIN) => {
+    bus.dispatchEvent(new MessageEvent('message', { data, origin }));
+  };
+
+  const handshake = (opts: { scopes?: string[] } = {}) => {
+    deliver({
+      type: 'BLOCK_INIT',
+      payload: {
+        renderMode: 'iframe',
+        context: { slotId: 'app.page' },
+        token: {
+          raw: 'real-transport-test-token',
+          scopes: opts.scopes ?? DEFAULT_SCOPES,
+          expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+        },
+        settings: { publisherSettings: {}, userSettings: {} },
+        viewer: { id: 99, username: 'me' },
+        theme: 'dark',
+        blockInstanceId: 'real-transport-test',
+      },
+    });
+  };
+
+  return {
+    transport,
+    sent,
+    deliver,
+    handshake,
+    dispose: () => {
+      __resetTransport();
+    },
+  };
 }
