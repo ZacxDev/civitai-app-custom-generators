@@ -21,8 +21,8 @@ importers:
         specifier: ^0.3.0
         version: 0.3.0
       '@civitai/theme':
-        specifier: ^0.3.1
-        version: 0.3.1
+        specifier: ^0.4.0
+        version: 0.4.0
       react:
         specifier: ^19.0.0
         version: 19.2.7
@@ -115,10 +115,6 @@ packages:
 
   '@civitai/sdk@0.3.0':
     resolution: {integrity: sha512-XeB7M8esSw3WbJTWeNlGCmmbZB1INc8wssr74KWJ3/pkYZXJW+/CGiJE7zHEEHVq19eEyIDJhcZBjp8kB7oMHQ==}
-    engines: {node: '>=20'}
-
-  '@civitai/theme@0.3.1':
-    resolution: {integrity: sha512-S/ibSOGDkXyskNSqbDxXO2sh3bsa+zhm7qPwM8mr5br218osPwBVmca7WI1uSZDd0ij6CZviOaw8kJ92TYkeog==}
     engines: {node: '>=20'}
 
   '@civitai/theme@0.4.0':
@@ -1015,8 +1011,6 @@ snapshots:
   '@civitai/sdk@0.3.0':
     dependencies:
       '@civitai/orchestration-client': 0.2.0-beta.101
-
-  '@civitai/theme@0.3.1': {}
 
   '@civitai/theme@0.4.0': {}
 

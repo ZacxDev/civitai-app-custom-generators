@@ -9,10 +9,16 @@
 // `catch` — but "there is a catch" is not the same claim as "the page is usable", so
 // this file exercises all three call sites and pins what a viewer actually gets.
 //
-// 🔴 THE THREE CALL SITES, all reached through `platform/images.ts:66`:
-//   1. `App.tsx:550`        — Browse's DISCOVER COVER GRID (every card's cover)
-//   2. `App.tsx:632`        — the generator HEADER BANNER in the Runner
-//   3. `KeptGallery.tsx:510`— the KEPT-RUNS GALLERY grid
+// 🔴 THE THREE CALL SITES, all reached through `platform/images.ts`'s
+// `fetchGatedImages()`. Named by ANCHOR, not by line number, deliberately: an earlier
+// revision of this header pinned `App.tsx:550` and `App.tsx:632` and BOTH had already
+// moved by the time anyone read them (543 and 619 as this is written). Nothing asserts
+// on a line number in prose, so it rots silently.
+//   1. `App.tsx`'s cover-grid `useEffect` — the one whose only writer is
+//      `setCoverUrls()` — Browse's DISCOVER COVER GRID (every card's cover)
+//   2. `App.tsx`'s `openConfig()` — the generator HEADER BANNER in the Runner
+//   3. `KeptGallery.tsx`'s gated-read effect — the `chunkImageIds(missing)` loop —
+//      the KEPT-RUNS GALLERY grid
 // Only the second had been named. The first is the one a signed-in viewer meets
 // first, on the landing view, before touching anything.
 //
@@ -22,6 +28,16 @@
 // is `'Not Found'` and `.body` is untrusted markup. Both are things a careless
 // `catch` could render. THAT is the risk this file pins, not the missing image.
 //
+//   🔴 AND `.message` IS ONLY `'Not Found'` BECAUSE THE FAKE NOW SETS `statusText`.
+//   Per Fetch, `new Response(body, { status: 404 })` defaults `statusText` to the
+//   EMPTY string — it is not derived from the status code. `platform/testing.tsx`'s
+//   `notFound()` omitted it, so every `.message` reaching this file was `''`: the
+//   sentence above named its own variable and then asserted a value its own fixture
+//   could not produce, and `expectNoServerInternalsOnScreen()`'s
+//   `not.toContain('Not Found')` was UNKILLABLE — no mutation could put that string
+//   on screen. `notFound()` now sends `statusText: 'Not Found'`, which is what a real
+//   Next.js 404 sends, so the clause is live and the assertion has something to test.
+//
 // 🔴 WHAT THIS FILE DOES AND DOES NOT PIN — mutation-measured, so the sentence
 // above cannot drift into a stronger claim than the tests support.
 //   KILLED (the file goes red):
@@ -30,15 +46,35 @@
 //       when resolution fails" already owned that rule and died to the same
 //       mutation, so this file is not its only guard;
 //     · `KeptGallery` swallowing the failed read silently;
-//     · `KeptGallery` rendering the `ApiError`'s own `.message` instead of its
-//       fixed sentence (the leak this file's helper exists for).
-//   SURVIVED (the file stays GREEN — stated because a reader would assume otherwise):
-//     · DELETING the `try/catch` at `App.tsx:550` entirely. Without it the gated
-//       read rejects out of an async IIFE inside a `useEffect`: React does not treat
-//       that as a render error, the board still paints, and the covers are simply
-//       never resolved — the same thing a viewer sees WITH the catch. So this file
-//       answers "does a 404 break the page?" (it does not) but it is NOT a guard on
-//       that catch's existence, and nothing here should be quoted as one.
+//     · `KeptGallery` rendering the `ApiError`'s own `.message` instead of its fixed
+//       sentence. RE-MEASURED, because the record used to attribute this kill to
+//       `expectNoServerInternalsOnScreen()` and that is not where it dies. WHICH
+//       assertion kills it depends on HOW the message leaks, and both shapes were run:
+//         – REPLACING the fixed sentence with `.message` dies at the
+//           `toHaveTextContent('Couldn’t load your kept images just now.')`
+//           assertion, because the banner then reads `Not Found` instead. The helper
+//           below it never executes.
+//         – APPENDING `.message` to the fixed sentence slips PAST that assertion
+//           (`toHaveTextContent` matches a SUBSTRING, and the sentence is still
+//           there) and dies inside `expectNoServerInternalsOnScreen()` on
+//           `not.toContain('Not Found')`.
+//       So the helper is the net for the APPEND shape specifically — that is the case
+//       it earns its keep on, and before the `statusText` fix above it caught neither.
+//     · DELETING the `try/catch` in the cover-grid effect (site 1). 🔴 RELABELLED —
+//       THIS WAS RECORDED AS "SURVIVED", AND THAT WAS BACKWARDS. It is KILLED, but
+//       NOT by an assertion, which is why it was misread: every per-test line still
+//       reads "passed" and the summary still says all tests passed. The run
+//       nevertheless EXITS 1, on unhandled promise rejections. Without the catch the
+//       rejected `getImages` escapes the async IIFE inside the `useEffect`; React does
+//       not treat that as a render error, so the board still paints and every
+//       viewer-visible assertion here genuinely passes — but vitest reports
+//       `Errors 4 errors` (`ApiError: Not Found`, `{ status: 404 }`) on a full-suite
+//       run, 3 attributed to this file and 1 to `components/Browse.test.tsx`, and
+//       fails the run. This file alone exits 1 with 3 such rejections. So it IS a
+//       guard on that catch's existence — but only if you read the EXIT CODE and
+//       never the per-test counter. What it is still NOT is a guard on any
+//       viewer-visible difference, because there is none: covers are simply never
+//       resolved, exactly as a viewer sees WITH the catch.
 //
 // 🔴 EVERY EXPECTATION IS A LITERAL, never an imported constant.
 //
@@ -159,7 +195,7 @@ function expectNoServerInternalsOnScreen() {
   expect(text).not.toContain('ApiError');
 }
 
-describe('the Browse cover grid (App.tsx:550) when the gated-images route 404s', () => {
+describe('the Browse cover grid (App.tsx setCoverUrls effect) when the gated-images route 404s', () => {
   /**
    * POSITIVE CONTROL — and the whole file leans on it. Every "no cover is shown"
    * assertion below would pass against an app that never renders a cover at all,
@@ -199,7 +235,7 @@ describe('the Browse cover grid (App.tsx:550) when the gated-images route 404s',
   });
 });
 
-describe('the generator header banner (App.tsx:632) when the gated-images route 404s', () => {
+describe('the generator header banner (App.tsx openConfig) when the gated-images route 404s', () => {
   it('CONTROL: renders the banner when the route ANSWERS', async () => {
     await renderApp({ notFound: false });
     const card = await screen.findByTestId('published-card');
@@ -237,7 +273,7 @@ describe('the generator header banner (App.tsx:632) when the gated-images route 
   });
 });
 
-describe('the kept-runs gallery (KeptGallery.tsx:510) when the gated-images route 404s', () => {
+describe('the kept-runs gallery (KeptGallery chunkImageIds loop) when the gated-images route 404s', () => {
   it('CONTROL: resolves the kept cell when the route ANSWERS', async () => {
     await renderApp({ notFound: false, kept: true });
     await userEvent.click(await screen.findByTestId('tab-kept'));

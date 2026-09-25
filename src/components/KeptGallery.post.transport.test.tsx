@@ -416,7 +416,11 @@ describe('creating a post from My gallery, against a scripted host', () => {
   });
 
   /**
-   * 🔴 THE ORDERING GUARD, DRIVEN THROUGH THE REAL TRANSPORT. A timeout has
+   * 🔴 THE ORDERING GUARD, DRIVEN THROUGH THE SCRIPTED FAKE. (This title read "THROUGH
+   * THE REAL TRANSPORT" until it was caught contradicting its own third paragraph
+   * below, which has retracted exactly that since the `@civitai/sdk` port. The F2
+   * sweep rewrote four other docblocks in this file and missed the one that was a
+   * TITLE.) A timeout has
    * `code === undefined` exactly like a forwarded server message does, so the
    * natural reading — "no code ⇒ render `.message`" — puts the SDK-internal
    * string `IframeTransport: request "CREATE_POST_FROM_APP" timed out after

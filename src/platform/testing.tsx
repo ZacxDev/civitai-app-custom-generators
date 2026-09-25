@@ -224,10 +224,21 @@ function json(status: number, body: unknown): Response {
  * Spelled as HTML on purpose — it is what a Next.js route miss actually returns in
  * production, and a JSON 404 here would make the fake kinder than the thing it
  * stands in for.
+ *
+ * 🔴 `statusText` IS SET DELIBERATELY, AND OMITTING IT MADE A TEST UNKILLABLE. Per
+ * Fetch, `new Response(body, { status: 404 })` defaults `statusText` to the EMPTY
+ * string — it is not derived from the status code. `@civitai/sdk` throws
+ * `ApiError(status, response.statusText, body)`, so without this line every 404 the
+ * fake produced carried `.message === ''`, and
+ * `gatedImages.notFound.test.tsx`'s `expect(text).not.toContain('Not Found')` could
+ * never fail however carelessly the app rendered `.message`. A real Next.js 404 does
+ * send `Not Found`, so this makes the fake match it AND gives that assertion a truthy
+ * string to actually be tested against.
  */
 function notFound(path: string): Response {
   return new Response(`<!DOCTYPE html><h1>404</h1><p>${path}</p>`, {
     status: 404,
+    statusText: 'Not Found',
     headers: { 'content-type': 'text/html' },
   });
 }

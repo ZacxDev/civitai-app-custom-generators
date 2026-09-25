@@ -289,8 +289,12 @@ describe('the truncation notice', () => {
  * transport from a mount would throw.
  *
  * The posting path itself is exercised in `KeptGallery.post.transport.test.tsx`,
- * across the real bridge, because `createPost` is not a seam this component
- * injects and a mocked one would be asserting against its own stub.
+ * against a SCRIPTED FAKE TRANSPORT, because `createPost` is not a seam this component
+ * injects and a mocked one would be asserting against its own stub. (This said "across
+ * the real bridge" — a third instance of the claim that file's own header retracted,
+ * and one the earlier F2 pass did not reach because it was in a DIFFERENT file.
+ * `platform/createPost.transport.test.ts` is the suite that does drive the real
+ * `IframeTransport`.)
  */
 describe('posting is opt-in', () => {
   it('renders no post control, and no transport call, when `posting` is off', async () => {

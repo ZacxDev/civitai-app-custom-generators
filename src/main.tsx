@@ -23,6 +23,7 @@ import './index.css';
 // the boundary's fallback is the only signal, plus whatever React logs itself.
 // `ErrorBoundary`'s `onError` prop stays (it has its own coverage in
 // `ErrorBoundary.test.tsx`); it simply has no caller in production.
+
 // Inject the /ui pack's themed stylesheet once up-front (idempotent; the pack
 // components also self-inject on first render — this just guarantees tokens
 // exist before the first paint).

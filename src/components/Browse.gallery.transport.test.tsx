@@ -105,10 +105,19 @@ async function seededDrafts(): Promise<DraftStore> {
 }
 
 /**
- * Render the real `App` against the real mock host, with the gated read left
- * ALONE — no `getImages` in `deps`, so `useGatedImages()` → `GET_IMAGES_BY_IDS`
- * → the mock host → `IMAGES_RESULT` → the SDK's payload validator all run. The
- * board is empty on purpose: it keeps this file's only gated read the gallery's.
+ * Render the real `App` against the fake SERVER, with the gated read left ALONE — no
+ * `getImages` in `deps`, so `useGatedImages()` → `platform/images.ts` →
+ * `GET /api/v1/blocks/gated-images?ids=` → the `<Harness>`'s fake `fetch` → the app's
+ * own `images ?? []` reading all run. The board is empty on purpose: it keeps this
+ * file's only gated read the gallery's.
+ *
+ * 🔴 THIS DOCBLOCK USED TO DESCRIBE THE PRE-PORT CHAIN and every clause of it was
+ * already retracted by this file's own header: it said `GET_IMAGES_BY_IDS` → the mock
+ * host → `IMAGES_RESULT` → "the SDK's payload validator". There is no postMessage in
+ * this path (the read is REST), no mock host answering it (a fake `fetch` does), and
+ * no inbound payload validator anywhere in `@civitai/sdk`. The header was rewritten
+ * and this block was missed — which is the whole reason the header now says to sweep
+ * rather than spot-edit.
  */
 async function renderGallery(gatedImages: BlockGatedImage[]) {
   const drafts = await seededDrafts();
@@ -164,7 +173,7 @@ describe('the gated read, through the app’s own REST module', () => {
    * 🔴 THE DISCRIMINATING CONTROL, and it is what makes the test above an
    * attribution rather than an observation. This one passes on BOTH trees, so a
    * red run above is a fact about the `ratingPending` SHAPE — not about the
-   * harness, the seeding, the tab, or the bridge being wired at all.
+   * harness, the seeding, the tab, or the REST path being wired at all.
    */
   it('CONTROL: the same journey with a RATED image resolves on every tree', async () => {
     await renderGallery([ratedImage]);
@@ -177,11 +186,11 @@ describe('the gated read, through the app’s own REST module', () => {
   /**
    * 🔴 POSITIVE CONTROL FOR THE ASSERTION ITSELF. The first test asserts an
    * ABSENCE (no error banner); an absence proves nothing until the same wiring
-   * has been watched to PRODUCE the thing. A host that answers the gated read
-   * with an error must surface exactly the operator's sentence, through the same
-   * bridge.
+   * has been watched to PRODUCE the thing. A server that answers the gated read
+   * with an error must surface exactly the operator's sentence, over the same
+   * REST path.
    */
-  it('POSITIVE CONTROL: a host-side gated-read failure DOES raise the banner', async () => {
+  it('POSITIVE CONTROL: a SERVER-side gated-read failure DOES raise the banner', async () => {
     const drafts = await seededDrafts();
     const shared = fakeShared([]);
     render(
