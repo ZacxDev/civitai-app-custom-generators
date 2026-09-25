@@ -6,7 +6,7 @@
 // special-casing. They never appear in the real Discover list; they only live
 // inside the intro panel.
 
-import type { SharedListItem } from '@civitai/blocks-react';
+import type { SharedListItem } from '../platform/index.js';
 
 import type { GeneratorConfig } from '../types.js';
 import { buildPublishPayload, newButton } from './generator.js';

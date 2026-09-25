@@ -139,10 +139,12 @@
           -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
 
         /* DARK — the base, unconditioned values, from @civitai/theme
-           [data-theme='dark']. */
+           [data-theme='dark']. NOTE that `surface` is NOT `body` here: they were
+           the same literal up to @civitai/theme@0.3.1 and diverged in 0.4.0
+           (surface #1a1b1e → #25262b, body unchanged). */
         --cg-boot-body: #1a1b1e;
         --cg-boot-text: #c1c2c5;
-        --cg-boot-surface: #1a1b1e;
+        --cg-boot-surface: #25262b;
       }
 
       @media (prefers-color-scheme: light) {
@@ -185,7 +187,7 @@
 
         --cg-boot-body: #1a1b1e;
         --cg-boot-text: #c1c2c5;
-        --cg-boot-surface: #1a1b1e;
+        --cg-boot-surface: #25262b;
       }
 
       :root[data-civitai-boot-theme='light'] {

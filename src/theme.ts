@@ -1,13 +1,13 @@
-// Design tokens for the app chrome the `@civitai/blocks-react/ui` pack doesn't
-// cover (page background, muted text, card scaffolding, the prompt-template
-// editor, inline states). Every value resolves to a `@civitai/theme` CSS custom
+// Design tokens for the app chrome the `src/ui/` pack doesn't cover (page
+// background, muted text, card scaffolding, the prompt-template editor, inline
+// states). Every value resolves to a `@civitai/theme` CSS custom
 // property (`--civitai-*`) so there are ZERO hardcoded colors and light/dark is
 // driven entirely by the `[data-theme]` attribute the host sets on the block
 // root (see App.tsx). The pack (Button/Card/Badge/…) is self-themed off the same
 // tokens, so the hand-rolled chrome reads as one system with it.
 //
-// Token source: `@civitai/theme@0.2.0` — imported once in main.tsx via
-// `@civitai/theme/styles.css` (and also injected at runtime by the pack's
+// Token source: `@civitai/theme@0.4.0` — imported once in main.tsx via
+// `@civitai/theme/styles.css` (and also injected at runtime by `src/ui/styles.ts`'s
 // injectBlocksStyles()). Two traps this module deliberately avoids:
 //   • the `--civitai-color-gray-*` ramp is theme-INVARIANT (not redefined under
 //     [data-theme='dark']) — never used here for a theme-responsive surface.
@@ -15,6 +15,18 @@
 //     card never gets FILL contrast in light — panels are separated by a `border`,
 //     and any recess uses `elevate()` (a text-into-surface mix that reads in
 //     BOTH themes), never `surface-2` as a background.
+//
+// 🔴 THE SECOND TRAP IS NOW LIGHT-ONLY, AND IT USED TO BE BOTH. Up to
+// `@civitai/theme@0.3.1` dark `body == surface == #1A1B1E`, so a card got no fill
+// contrast in EITHER theme. 0.4.0 moved dark `surface` to `#25262B` and left `body`
+// at `#1A1B1E`, so in dark a card now does read as a raised panel. ONE token moved,
+// not two: dark `surface-2` was already `#25262B` in 0.3.1 and is unchanged — only
+// `surface` is the difference. (`bootTokens.test.ts` pins the three the boot
+// placeholder duplicates — `body`, `text`, `surface` — against the resolved package,
+// so of the three it is `surface` that moved.)
+// Nothing here had to change — every value is a `var()`, which is the whole point of
+// the rule above — but the border-and-`elevate()` approach is now belt-and-braces in
+// dark rather than the only thing separating a panel from the page.
 
 import type { CSSProperties } from 'react';
 

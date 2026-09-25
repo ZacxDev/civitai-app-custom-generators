@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
-import { Harness } from '@civitai/blocks-react/testing';
+import { Harness } from '../platform/testing.js';
 
 import { App, type AppDeps } from '../App.js';
 import {
@@ -360,7 +360,7 @@ describe('Builder — inferred inputs + {prompt} editor (no expose checkboxes)',
   });
 });
 
-describe('Builder — pack primitives (blocks-react 0.23 UI)', () => {
+describe('Builder — pack primitives (the `src/ui/` seam)', () => {
   it('uses Select (workflow), Collapse (advanced), and NumberInput (params)', async () => {
     setup();
     await openBuilder();
@@ -435,9 +435,10 @@ describe('Builder — draft save + load', () => {
 // The tests above drive the injectable seam directly. These exercise the REAL
 // App.tsx wiring end-to-end: `uploadImage: imageUpload.open` (early-resolve
 // pending handle) + the default `scanBackground` mapping `imageUpload.scanStatus`
-// verdicts, both served by the SDK mock host — NO uploadImage/scanBackground
-// overrides. The verdict is chosen via the Harness `cannedImageScan` prop.
-describe('Builder — real SDK scanStatus wiring (mock host)', () => {
+// verdicts, both served by the app's own fake platform (`<Harness>`'s scripted
+// `OPEN_IMAGE_UPLOAD` handler) — NO uploadImage/scanBackground overrides. The
+// verdict is chosen via the Harness `cannedImageScan` prop.
+describe('Builder — real SDK scanStatus wiring (app fake platform)', () => {
   function renderReal(cannedImageScan?: 'scanned' | { status: 'blocked'; reason?: string } | 'error') {
     render(
       <Harness

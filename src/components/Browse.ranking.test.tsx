@@ -25,8 +25,8 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
-import { Harness } from '@civitai/blocks-react/testing';
-import type { SharedListItem } from '@civitai/blocks-react';
+import { Harness } from '../platform/testing.js';
+import type { SharedListItem } from '../platform/index.js';
 
 import { App, DISCOVER_LIST_LIMIT, type AppDeps } from '../App.js';
 // 🔴 The REAL constant, not a copy. Duplicating it let the boundary case drift
@@ -115,7 +115,8 @@ function setup(hasMore: boolean, rows?: SharedListItem[]) {
 }
 
 /** Same harness, no viewer — `null` is the anon path; `undefined` would give the
- *  mock host's default dev-viewer and silently make this a signed-IN case. */
+ *  fake platform's default dev-viewer (`{ id: 99 }`) and silently make this a
+ *  signed-IN case. */
 function setupAnon(hasMore: boolean, rows?: SharedListItem[]) {
   const { rows: seed, pageLimit } = withHorizon(rows ?? [], hasMore);
   const shared = fakeShared(seed);

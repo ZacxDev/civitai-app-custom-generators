@@ -3,8 +3,8 @@
 // "Make a copy" of a seeded example to learn by remixing. Dismissible. Styled
 // entirely off `--civitai-*` tokens (via ../theme) so it flips with `[data-theme]`.
 
-import { Button, Card, Group, Stack } from '@civitai/blocks-react/ui';
-import type { SharedListItem } from '@civitai/blocks-react';
+import { Button, Card, Group, Stack } from '../ui/index.js';
+import type { SharedListItem } from '../platform/index.js';
 
 import { token, radius, metaText, type Palette } from '../theme.js';
 import { CLASS_RISE, motionClass, useMotion } from '../motion.js';

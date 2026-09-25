@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.8.0",
   "type": "module",
-  "description": "Custom Generators — a Civitai App Block (full-page) authoring app. Users BUILD named 'generators' (a set of buttons, each carrying an image-generation payload: pinned checkpoint + weighted LoRA stack + prompt template + params), with a live preview and inferred runtime inputs (prompt box from a {prompt} token, image box from img2img); publish them app-scoped, and RUN them (buttons + prompt input + img2img source + advanced params + an output queue). Mobile-first + desktop-responsive. Phase 2a = image generation (txt2img + img2img).",
+  "description": "Custom Generators \u2014 a Civitai App Block (full-page) authoring app. Users BUILD named 'generators' (a set of buttons, each carrying an image-generation payload: pinned checkpoint + weighted LoRA stack + prompt template + params), with a live preview and inferred runtime inputs (prompt box from a {prompt} token, image box from img2img); publish them app-scoped, and RUN them (buttons + prompt input + img2img source + advanced params + an output queue). Mobile-first + desktop-responsive. Phase 2a = image generation (txt2img + img2img).",
   "license": "MIT",
   "scripts": {
     "dev": "vite",
@@ -15,10 +15,10 @@
   },
   "dependencies": {
     "@civitai/app-sdk": "^0.42.0",
-    "@civitai/blocks-react": "^0.51.0",
-    "@civitai/components": "^0.4.1",
-    "@civitai/components-react": "^0.4.1",
-    "@civitai/theme": "^0.3.1",
+    "@civitai/components": "^0.5.0",
+    "@civitai/components-react": "^0.5.0",
+    "@civitai/sdk": "^0.3.0",
+    "@civitai/theme": "^0.4.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

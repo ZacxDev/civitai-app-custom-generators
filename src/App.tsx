@@ -5,7 +5,7 @@
 // storage, consent) and routes between three screens: Browse → Builder / Runner.
 // The hooks are collapsed into an injectable `deps` bag so component + e2e tests
 // can drive the exact same App with canned picks/uploads/workflows, OR against
-// the real SDK mock host.
+// the app's own fake platform (`src/platform/testing.tsx`).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
@@ -19,27 +19,26 @@ import type {
 } from '@civitai/app-sdk/blocks';
 
 import {
-  useBlockAnalytics,
   useBlockContext,
   useBlockResize,
   useBlockToken,
   useBuzzBalance,
   useBuzzPurchase,
-  useBuzzWorkflow,
   useCivitaiNavigate,
-  useGatedImages,
-  useGenerationResources,
   useImageUpload,
   useRequestConsent,
   usePublishGenerationOutputs,
   useRequestSignIn,
   useResourcePicker,
+  useBuzzWorkflow,
+  useGatedImages,
+  useGenerationResources,
   useSharedStorage,
   useAppStorage,
-} from '@civitai/blocks-react';
-import type { SharedAppendValue, SharedListItem, UseSharedStorage } from '@civitai/blocks-react';
+} from './platform/index.js';
+import type { SharedAppendValue, SharedListItem, UseSharedStorage } from './platform/index.js';
 
-import { Loader } from '@civitai/blocks-react/ui';
+import { Loader } from './ui/index.js';
 
 import { AI_WRITE_BUDGETED, hasGenerateScope } from './scopes.js';
 import { palette, pageStyle, contentStyle, metaText } from './theme.js';
@@ -54,8 +53,6 @@ import {
   parsePublishedGenerator,
   rehydrateConfig,
 } from './lib/generator.js';
-import type { Analytics } from './lib/analytics.js';
-import { ANALYTICS_EVENTS } from './lib/analytics.js';
 import { buildShareUrl, parseDeeplinkKey, stripDeeplinkParam } from './lib/deeplink.js';
 import { setGeneratorMeta } from './lib/meta.js';
 import type { DraftStore, StoredDraft } from './lib/drafts.js';
@@ -140,8 +137,6 @@ export interface AppDeps {
   drafts: DraftStore;
   requestConsent: (opts: { scopes: string[] }) => void;
   requestSignIn: () => void;
-  /** Fire-and-forget funnel analytics (default: `useBlockAnalytics()`). */
-  analytics: Analytics;
   /** Open the host Buzz-purchase modal (insufficient-Buzz recovery). */
   openPurchaseModal: (suggestedAmount?: number) => Promise<PurchaseResult>;
   /** Re-request the viewer's Buzz balance (after a spend / top-up). */
@@ -250,7 +245,6 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   const buzz = useBuzzBalance();
   const { requestConsent } = useRequestConsent();
   const { requestSignIn } = useRequestSignIn();
-  const { track } = useBlockAnalytics();
   const { openPurchaseModal } = useBuzzPurchase();
   const { navigate } = useCivitaiNavigate();
 
@@ -291,7 +285,6 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       drafts: appStorage as unknown as DraftStore,
       requestConsent,
       requestSignIn,
-      analytics: { track },
       openPurchaseModal,
       refreshBalance: buzz.refetch,
       navigate,
@@ -589,7 +582,6 @@ export function App({ deps: depsOverride }: AppProps = {}) {
 
   // ---- navigation ----
   const openBuilderNew = useCallback(() => {
-    depsRef.current.analytics.track(ANALYTICS_EVENTS.BUILD_STARTED);
     setEditing({ id: newId('gen'), config: newGenerator() });
     setView('builder');
   }, []);
@@ -600,7 +592,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   }, []);
 
   const openConfig = useCallback(
-    async (config: GeneratorConfig, sharedContentKey?: string, source: 'published' | 'draft' | 'deeplink' = 'published') => {
+    async (config: GeneratorConfig, sharedContentKey?: string) => {
       let resolved = config;
       setRehydrateNotice(null);
       try {
@@ -617,11 +609,6 @@ export function App({ deps: depsOverride }: AppProps = {}) {
           "Couldn't refresh this generator's model details — names or weight limits may be out of date. You can still run it.",
         );
       }
-      depsRef.current.analytics.track(ANALYTICS_EVENTS.RUN_OPENED, {
-        source,
-        buttons: resolved.buttons.length,
-        published: !!sharedContentKey,
-      });
       // 🔴 Resolve the MODERATED cover url from the stored `imageId` (never the
       // unmoderated stored `url`). Fail-closed to null (no banner) on hidden /
       // unresolved / error.
@@ -662,7 +649,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
 
   const openDraft = useCallback(
     (draft: StoredDraft) => {
-      void openConfig(draft.config, draft.publishedKey, 'draft');
+      void openConfig(draft.config, draft.publishedKey);
     },
     [openConfig],
   );
@@ -726,7 +713,6 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       // upserts the SAME draft id, carrying any existing publishedKey.
       const draft = await persistDraft(config);
       const payload = buildPublishPayload(config);
-      let republish = true;
       if (draft.publishedKey) {
         // Already published → UPDATE the same shared row in place. This is the
         // fix for "editing creates a new one": never append a duplicate.
@@ -736,13 +722,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         // future edit updates in place instead of duplicating.
         const { key } = await depsRef.current.shared.append(payload);
         await persistDraft(config, key);
-        republish = false;
       }
-      depsRef.current.analytics.track(ANALYTICS_EVENTS.PUBLISHED, {
-        buttons: config.buttons.length,
-        republish,
-        hasHeaderImage: !!config.headerImageRef,
-      });
       reload();
     },
     [persistDraft, reload],
@@ -777,7 +757,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
 
   // Cast/remove this viewer's up-vote on a published generator. Returns the
   // authoritative post-vote count (the Browse card drives the optimistic update
-  // + rollback around this call). Tracks the vote funnel event.
+  // + rollback around this call).
   const handleVote = useCallback(async (item: SharedListItem, nextVoted: boolean): Promise<number> => {
     // Anonymous viewers can't vote (the host rejects the mutation). Prompt a
     // sign-in and reject here instead of letting an optimistic +1 flash and then
@@ -789,7 +769,6 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     const count = nextVoted
       ? await depsRef.current.shared.vote(item.key)
       : await depsRef.current.shared.unvote(item.key);
-    depsRef.current.analytics.track(ANALYTICS_EVENTS.VOTED, { voted: nextVoted, key: item.key });
     // Reflect the authoritative count back into the App's list so a re-render
     // (or a sort-by-popularity) sees it without a full reload.
     setShared((list) => list.map((s) => (s.key === item.key ? { ...s, count } : s)));
@@ -810,7 +789,6 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   // never filed.
   const handleReport = useCallback(async (item: SharedListItem): Promise<void> => {
     await depsRef.current.shared.report(item.key);
-    depsRef.current.analytics.track(ANALYTICS_EVENTS.REPORTED, { key: item.key });
   }, []);
 
   // "Make a copy" of a published generator into the viewer's own draft so they
@@ -837,7 +815,6 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       setError(errMsg(e));
       return;
     }
-    depsRef.current.analytics.track(ANALYTICS_EVENTS.FORKED, { from: item.key });
     setEditing({ id, config: forked });
     setView('builder');
   }, [viewer]);
@@ -847,7 +824,6 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     const url = buildShareUrl(depsRef.current.getHref(), item.key);
     try {
       await depsRef.current.copyToClipboard(url);
-      depsRef.current.analytics.track(ANALYTICS_EVENTS.SHARED, { key: item.key });
       return true;
     } catch {
       return false;
@@ -871,14 +847,13 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     if (!item) return; // key not on the loaded page — stay on Browse
     const config = parsePublishedGenerator(item.value);
     if (!config) return;
-    depsRef.current.analytics.track(ANALYTICS_EVENTS.DEEPLINK_OPENED, { key });
     // Clean the address bar so a reload / re-share doesn't re-trigger.
     try {
       window.history?.replaceState?.(null, '', stripDeeplinkParam(depsRef.current.getHref()));
     } catch {
       /* history API may be unavailable — non-fatal. */
     }
-    void openConfig(config, item.key, 'deeplink');
+    void openConfig(config, item.key);
   }, [ready, loading, shared, openConfig]);
 
   const requestGenerateConsent = useCallback(() => {
@@ -1018,7 +993,6 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             // docblock in `components/Runner.tsx`.
             keptRuns={runnerKeptRuns}
             getImages={deps.getImages}
-            analytics={deps.analytics}
             rehydrateNotice={rehydrateNotice}
             pollIntervalMs={deps.pollIntervalMs}
             sleep={deps.sleep}

@@ -8,7 +8,14 @@ import { Component, type ErrorInfo, type ReactNode } from 'react';
 
 export interface ErrorBoundaryProps {
   children: ReactNode;
-  /** Optional analytics/logging sink for the caught error (fire-and-forget). */
+  /**
+   * Optional logging sink for the caught error (fire-and-forget).
+   *
+   * NO PRODUCTION CALLER PASSES THIS. `main.tsx` used to, feeding an
+   * `APP_CRASHED` event into an analytics shim that recorded nothing; both are
+   * deleted. Kept because it is the seam a real crash reporter would attach to,
+   * and it has its own coverage in `ErrorBoundary.test.tsx`.
+   */
   onError?: (error: Error, info: ErrorInfo) => void;
   /**
    * Render prop for a custom fallback. Receives the error + a `reset` that

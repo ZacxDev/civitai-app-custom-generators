@@ -12,7 +12,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react';
 
-import { Alert, Badge, Button, Card, Group, Loader, Modal, Stack, TextInput } from '@civitai/blocks-react/ui';
+import { Alert, Badge, Button, Card, Group, Loader, Modal, Stack, TextInput } from '../ui/index.js';
 // Design-system primitives (`@civitai/components-react` 0.3.1): the accessible
 // SegmentedControl, hover/focus Tooltip, and the Toast notification system. These
 // render the same `data-civitai-ui` + `--civitai-*` token contract as the
@@ -20,7 +20,7 @@ import { Alert, Badge, Button, Card, Group, Loader, Modal, Stack, TextInput } fr
 import { SegmentedControl, Tooltip, ToastProvider, useToast } from '@civitai/components-react';
 
 import type { BlockGatedImage } from '@civitai/app-sdk/blocks';
-import type { SharedListItem } from '@civitai/blocks-react';
+import type { SharedListItem } from '../platform/index.js';
 import type { StoredDraft } from '../lib/drafts.js';
 import { keptImageCount, type KeptImageCell, type KeptRun } from '../lib/runs.js';
 import { KeptGallery } from './KeptGallery.js';
@@ -34,7 +34,7 @@ import { EXAMPLE_SHARED_ITEMS } from '../lib/examples.js';
 import { EmptyState } from './EmptyState.js';
 import { IntroPanel } from './IntroPanel.js';
 import { SafeImage } from './SafeImage.js';
-import { ReportButton } from '@civitai/blocks-react/ui';
+import { ReportButton } from '../ui/index.js';
 
 type Tab = 'discover' | 'mine' | 'kept';
 type SortMode = 'new' | 'top';

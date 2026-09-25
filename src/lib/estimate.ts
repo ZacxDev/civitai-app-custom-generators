@@ -18,7 +18,7 @@
 //     wording is explicitly not a contract.
 //   - `.code` is the only stable branch target.
 
-import { WorkflowEstimateError } from '@civitai/blocks-react';
+import { WorkflowEstimateError } from '../platform/index.js';
 
 /**
  * Shown when the estimate did not succeed. Says the two things a viewer needs:

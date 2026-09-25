@@ -19,7 +19,7 @@
 // mechanism. The one bound that survives is {@link POST_MAX_IMAGES}, which is a
 // live selection affordance rather than a copied validation.
 
-import { isCreatePostErrorCode } from '@civitai/blocks-react';
+import { isCreatePostErrorCode } from '../platform/index.js';
 import type { BlockCreatePostHostError, BlockGatedImage } from '@civitai/app-sdk/blocks';
 
 /**

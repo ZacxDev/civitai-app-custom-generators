@@ -1,20 +1,25 @@
 import type { ReactNode } from 'react';
 
-import { Harness as SdkHarness } from '@civitai/blocks-react/testing';
+import { Harness as SdkHarness } from './platform/testing.js';
 import { DEMO_SHARED_SEED } from './demo-data.js';
 
 /**
- * Local dev mock host for the Custom Generators PAGE app.
+ * Local dev wiring for the Custom Generators PAGE app.
  *
  * The real full-page surface mounts the block in an iframe at
- * /apps/run/custom-generators and brokers the protocol (BLOCK_INIT, viewer,
- * consent, resource picker, image upload, workflow, shared storage). Locally
- * there's no host, so the published SDK mock host (`createMockHost`) plays one —
- * it answers ALL of those (unlike the KV-only harness of simpler apps), so the
- * dev harness needs no injected fakes.
+ * /apps/run/custom-generators, brokers the host-UI messages (BLOCK_INIT, token,
+ * resource picker, image upload, publish) and serves the data surface over
+ * `/api/v1/blocks/*`. Locally there is neither, so this mounts the app's OWN fake
+ * platform — `./platform/testing.tsx`'s `<Harness>`, a fake `fetch` for the REST
+ * surface plus a scripted transport for the host-UI ops. No published mock host
+ * is involved: `@civitai/sdk/testing` ships `createFakeTransport` and
+ * `__resetTransport` and nothing else. (It is imported below as `SdkHarness`,
+ * which is a historical alias — the component is this app's, not the SDK's.)
  *
- * We seed it consent-granted with a demo published generator + a plausible Buzz
- * wallet so the full build → publish → run loop is exercisable offline.
+ * We seed it with a demo published generator + a plausible Buzz wallet so the
+ * full build → publish → run loop is exercisable offline. `consentGranted` is
+ * passed for call-site compatibility and is INERT — see
+ * `FakeCivitaiOptions.consentGranted`; what the app gates on now is `scopes`.
  */
 export function Harness({ children }: { children: ReactNode }) {
   return (

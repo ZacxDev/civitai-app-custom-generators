@@ -26,8 +26,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { BlockCreatePostResult, BlockGatedImage } from '@civitai/app-sdk/blocks';
-import { CreatePostError, useCreatePostFromApp } from '@civitai/blocks-react';
-import { Alert, Badge, Button, Group, Modal, Stack, TextInput, Textarea } from '@civitai/blocks-react/ui';
+import { CreatePostError, useCreatePostFromApp } from '../platform/index.js';
+import { Alert, Badge, Button, Group, Modal, Stack, TextInput, Textarea } from '../ui/index.js';
 import { Image } from '@civitai/components-react';
 
 import {
@@ -398,7 +398,7 @@ export interface KeptGalleryProps {
      * 🔴 THE SERVER'S ECHO, NOT THE SELECTION, AND THEY ARE DIFFERENT FACTS. What
      * a post is made of is decided by the post call: a `published` source
      * contributes the id it named, and the host is free to report a set this app
-     * did not send (the SDK's own mock host returns deliberately-different ids to
+     * did not send (this app's test fake returns deliberately-different ids to
      * expose a block that conflates the two). Deleting by SELECTION would delete
      * a kept image on the strength of having asked for it; deleting by ECHO
      * deletes exactly what stopped being ours.
@@ -734,7 +734,7 @@ export function KeptGallery({
     setCopyState('idle');
     // 🔴 THE SERVER'S ECHO, IN BOTH PLACES. `result.imageIds` is what actually
     // joined the post; `selectedIds` is what this app ASKED for. They are
-    // different facts — the SDK's mock host returns deliberately-different ids
+    // different facts — this app's test fake returns deliberately-different ids
     // precisely to expose a block that conflates them — and using one for the
     // grid removal and the other for the success sentence (which reads
     // `posted.imageIds`) left this component holding two answers to "what got

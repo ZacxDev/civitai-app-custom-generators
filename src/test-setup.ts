@@ -7,11 +7,29 @@ import { afterEach, beforeEach, vi } from 'vitest';
 
 import { resetHarnessTransport } from './dev-transport.js';
 
-// The SDK transport is a process-wide singleton — reset it before each test so
-// each gets a fresh instance whose allowlist contains the jsdom origin, and so
-// no BLOCK_INIT / token / consent state leaks between tests.
+// The platform caches a client and a transport — reset both before each test so
+// no handshake, token or store state leaks between tests.
 beforeEach(() => {
   resetHarnessTransport();
+
+  // 🔴 THE APP NOW DRIVES ITS DATA OVER HTTP, NOT postMessage — so global `fetch`
+  // is stubbed to REJECT LOUDLY. A test that reaches the network has forgotten to
+  // install the fake (`<Harness>`, or `__configurePlatform({ fetch })`), and the
+  // rejection says so immediately instead of hanging until a timeout or — far
+  // worse — reaching real civitai.com with a real-looking request. Suites that
+  // need data install the fake, which the platform client uses in preference to
+  // this global.
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() =>
+      Promise.reject(
+        new Error(
+          'No network in tests. This call escaped the fake platform — wrap the ' +
+            'render in <Harness>, or call __configurePlatform({ fetch }).',
+        ),
+      ),
+    ),
+  );
 
   // jsdom has no matchMedia; default to a MOBILE viewport (mobile-first). Tests
   // that need the desktop branch override via `setViewport('desktop')`.

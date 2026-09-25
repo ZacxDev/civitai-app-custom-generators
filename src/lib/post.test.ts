@@ -10,7 +10,7 @@
 // come back through this suite. That is the price of a machine-readable claim.
 
 import { describe, expect, it } from 'vitest';
-import { CREATE_POST_ERROR_CODES } from '@civitai/blocks-react';
+import { CREATE_POST_ERROR_CODES } from '../platform/index.js';
 import type { BlockGatedImage } from '@civitai/app-sdk/blocks';
 
 import {

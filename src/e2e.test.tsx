@@ -1,14 +1,16 @@
 // End-to-end: drive the FULL build → publish → discover → open → run loop
-// against the real SDK mock host (createMockHost via <Harness>). Only the
-// generation-resource rehydrate fetch (a direct network call) and the poll
-// clock are stubbed via deps; the resource picker, image upload, shared storage,
-// and the Buzz workflow money path are all served by the mock host.
+// against the app's OWN fake platform (`<Harness>` from `src/platform/testing.tsx`
+// — a fake `fetch` for the REST surface plus a scripted transport for host UI).
+// There is no mock host, published or otherwise; `@civitai/sdk/testing` ships no
+// such thing. Only the generation-resource rehydrate fetch (a direct network call)
+// and the poll clock are stubbed via deps; the resource picker, image upload,
+// shared storage, and the Buzz workflow money path are all served by the fake.
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
-import { Harness } from '@civitai/blocks-react/testing';
+import { Harness } from './platform/testing.js';
 
 import { App, type AppDeps } from './App.js';
 import {
@@ -37,7 +39,7 @@ function renderApp() {
       buzzBalance={{ blue: 0, green: 0, yellow: 5000 }}
       generation={{ costPerGen: 12, images: ['https://image.civitai.com/e2e-out.jpeg'] }}
       cannedPicks={{ Checkpoint: CKPT_INFO, LORA: LORA_INFO }}
-      // The mock host serves BOTH upload purposes: DISPLAY (moderated background)
+      // The fake serves BOTH upload purposes: DISPLAY (moderated background)
       // and generationSource (unscanned img2img source, real dims).
       cannedImageUpload={UPLOADED_IMAGE}
       cannedGenerationSourceUpload={GENERATION_SOURCE_IMAGE}
@@ -49,7 +51,7 @@ function renderApp() {
 }
 
 describe('e2e: build → publish → discover → open → run', () => {
-  it('completes the whole loop against the mock host', async () => {
+  it('completes the whole loop against the app fake platform', async () => {
     renderApp();
 
     // 1. create + configure a generator
@@ -64,7 +66,7 @@ describe('e2e: build → publish → discover → open → run', () => {
     // as a special-key sequence by userEvent.
     fireEvent.change(within(editor).getByTestId('btn-prompt-template'), { target: { value: 'neon glow {prompt}' } });
 
-    // 2. publish (through the real mock-host shared store)
+    // 2. publish (through the fake's `blocks/shared-storage/*` routes)
     await userEvent.click(screen.getByTestId('publish'));
     await screen.findByTestId('builder-notice');
 
@@ -116,7 +118,8 @@ describe('e2e: build → publish → discover → open → run', () => {
     await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
     expect(screen.getByTestId('gen-button')).toBeDisabled(); // still missing the source
 
-    // 4. upload the img2img source via the generationSource purpose (real mock host)
+    // 4. upload the img2img source via the generationSource purpose (the fake's
+    //    OPEN_IMAGE_UPLOAD handler, not an override)
     await userEvent.click(screen.getByTestId('upload-source'));
     await screen.findByTestId('source-thumb');
     await waitFor(() => expect(screen.getByTestId('gen-button')).toBeEnabled());

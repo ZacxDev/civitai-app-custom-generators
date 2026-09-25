@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { WorkflowEstimateError } from '@civitai/blocks-react';
+import { WorkflowEstimateError } from '../platform/index.js';
 import type { BlockWorkflowSnapshot } from '@civitai/app-sdk/blocks';
 
 import {

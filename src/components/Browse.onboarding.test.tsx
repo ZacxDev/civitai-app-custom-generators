@@ -9,7 +9,7 @@ import { Browse, type BrowseProps } from './Browse.js';
 import { palette } from '../theme.js';
 import { buildPublishPayload, newButton } from '../lib/generator.js';
 import type { GeneratorConfig } from '../types.js';
-import type { SharedListItem } from '@civitai/blocks-react';
+import type { SharedListItem } from '../platform/index.js';
 
 const c = palette();
 

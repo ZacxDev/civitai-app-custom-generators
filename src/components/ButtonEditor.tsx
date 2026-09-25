@@ -22,7 +22,7 @@ import {
   TextInput,
   Textarea,
   Badge,
-} from '@civitai/blocks-react/ui';
+} from '../ui/index.js';
 
 import type { GenButton, LoraRef, WorkflowType } from '../types.js';
 import {

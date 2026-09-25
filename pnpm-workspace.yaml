@@ -1,0 +1,26 @@
+# pnpm workspace config.
+#
+# This repo is a single package, not a workspace — the file exists ONLY to carry
+# the `minimumReleaseAgeExclude` below, which pnpm reads from here and nowhere
+# else.
+#
+# 🔴 WHY THE EXEMPTION EXISTS. pnpm 11 enforces a 24-hour `minimumReleaseAge` on
+# every dependency: a version published less than a day ago is REFUSED, which is a
+# supply-chain control against a freshly-compromised release. `@civitai/sdk@0.3.0`
+# was published the same day this port landed and carries the two host surfaces
+# this app needs (`openImageUpload` + `IMAGE_SCAN_RESOLVED`, and
+# `publishGenerationOutputs`), so `pnpm install --frozen-lockfile` in CI would
+# refuse it with `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION` before a single test ran.
+#
+# 🔴 THE POLICY IS NOT RELAXED — exactly ONE pinned version is exempted, by exact
+# `name@version`. Do not widen this to a bare package name, a range, or a global
+# `minimumReleaseAge: 0`: that would turn a targeted, reviewable exception into a
+# standing hole for every future release of every package.
+#
+# ⏳ DELETE THIS FILE (or just the entry) ONCE 0.3.0 IS MORE THAN 24 HOURS OLD.
+# The exemption expires on the clock, not on a version bump — it becomes inert
+# rather than wrong, which is exactly why it is easy to forget. There is precedent
+# for the cleanup in this repo's own history: #26, "chore: drop the expired
+# minimumReleaseAge exception".
+minimumReleaseAgeExclude:
+  - '@civitai/sdk@0.3.0'

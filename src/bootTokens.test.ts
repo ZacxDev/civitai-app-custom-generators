@@ -3,18 +3,96 @@
 // is deliberate — but the boot window is the one place a var is unusable, because
 // `@civitai/theme/styles.css` is a render-blocking <link> that has not loaded yet.
 // These tests keep that necessary duplication honest: every literal is asserted
-// against the INSTALLED @civitai/theme, per region, so a theme bump that moves a
-// value fails here instead of shipping a colour jump at handoff.
-import { readFileSync } from 'node:fs';
+// against the @civitai/theme copy this app RESOLVES, per region, so a theme bump
+// that moves a value fails here instead of shipping a colour jump at handoff.
+//
+// 🔴 THAT SENTENCE WAS WORTHLESS UNTIL THE SINGLE-COPY GUARD BELOW EXISTED, AND THIS
+// FILE IS WHY IT IS WRITTEN DOWN. An assertion against "the resolved copy" only means
+// anything while the resolved copy is the copy that PAINTS, and it was not. The exact
+// chain, traced through the installed packages:
+//
+//   main.tsx, module scope:
+//     import '@civitai/theme/styles.css'  → THE APP'S copy, bundled into the CSS <link>
+//     injectBlocksStyles()                → src/ui/styles.ts
+//       → injectStyles()                    @civitai/components-react → @civitai/components
+//         → injectTokens()                  @civitai/theme — THE COPY *COMPONENTS* RESOLVES
+//           → head.appendChild(<style> tokensCss)
+//
+// The `<link>` is in <head> from the initial HTML; the `<style>` is appended at startup,
+// so it is LAST in document order at equal specificity — the injected copy wins. While
+// this app pinned `@civitai/theme@^0.3.1` and `@civitai/components@0.5.0` pinned 0.4.0,
+// both installed: `createRequire` below resolved the app's 0.3.1 while `injectTokens`
+// painted 0.4.0's, and dark `--civitai-color-surface` had moved #1A1B1E → #25262B
+// between them. So this file compared #1a1b1e against #1a1b1e, passed, and a real token
+// change shipped underneath it. The version SPLIT, not the resolution logic, was the
+// whole defect — which is why the fix is a single-copy guard and not a re-pointed path.
+//
+// 🔴 SO THE TWO STRUCTURAL TESTS ARE THE LOAD-BEARING ONES HERE. They pin
+// RELATIONSHIPS, not colours, and the colour-by-colour assertions are downstream of
+// both — green ones mean nothing if either is red.
+//
+//   1. the LOCKFILE resolves exactly one `@civitai/theme`, and it is the version this
+//      file reads. That is what the version split above defeated.
+//   2. `@civitai/components` resolves the SAME `@civitai/theme` copy, by realpath, as
+//      this file does. This is the edge that actually decides which copy PAINTS, and a
+//      lockfile with one theme version says nothing about it — a hoisting or nesting
+//      change can point `injectTokens` at a different copy while the lockfile stays
+//      single-version.
+//
+// A growing version set was previously described here as "the only way the copy
+// asserted below can stop being the copy that paints". IT IS NOT, which is why (2)
+// exists. Nor do (1) and (2) together close the hole: neither can see a
+// `@civitai/components` release that stopped delegating to `@civitai/theme`'s
+// `injectTokens` and injected a token block baked into its own dist instead.
+// `@civitai/components@0.5.0` ships exactly such a baked block — `dist/site-elements.js`
+// carries literal `--civitai-color-surface` declarations — reached only through the Lit
+// `elements` subpath this app does not import. Today `dist/index.js` imports
+// `injectTokens` from `@civitai/theme` and calls it; if that ever stops being true, this
+// file goes green while painting from a copy it never read.
+//
+// 🔴 WHAT NO TEST IN THIS FILE DOES: render anything, or read a computed style. It
+// compares TEXT in index.html against TEXT in the theme package. It cannot see a token
+// the app overrides in its own stylesheet, nor a cascade or specificity mistake between
+// two stylesheets that both load. The boot window itself — whether the placeholder
+// actually paints these colours before the bundle lands — has never been observed in a
+// browser.
+import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const INDEX_HTML = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 
-const THEME_CSS = readFileSync(
-  createRequire(import.meta.url).resolve('@civitai/theme/styles.css'),
-  'utf8',
-);
+const THEME_CSS_PATH = createRequire(import.meta.url).resolve('@civitai/theme/styles.css');
+
+const THEME_CSS = readFileSync(THEME_CSS_PATH, 'utf8');
+
+/**
+ * The version of the copy the assertions below actually read.
+ *
+ * Walked UP from the resolved stylesheet to the owning `package.json` rather than
+ * `require.resolve`d directly: `@civitai/theme` does not export `./package.json`, and
+ * its `./styles.css` subpath maps to `dist/tokens.css`, so neither the filename nor the
+ * depth is something this test should hardcode.
+ */
+const RESOLVED_THEME_VERSION = (() => {
+  let dir = dirname(THEME_CSS_PATH);
+  for (let i = 0; i < 10; i += 1) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as {
+        name?: string;
+        version?: string;
+      };
+      if (pkg.name === '@civitai/theme' && typeof pkg.version === 'string') return pkg.version;
+    } catch {
+      /* keep walking — not every ancestor has a package.json */
+    }
+    const up = dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  throw new Error(`could not find the @civitai/theme package.json above ${THEME_CSS_PATH}`);
+})();
 
 /**
  * The inline `<style>` body ONLY.
@@ -50,6 +128,66 @@ function bootValue(selector: string, prop: string): string {
 }
 
 describe('boot token parity with @civitai/theme', () => {
+  /**
+   * 🔴 THE GUARD THAT MAKES EVERY OTHER ASSERTION IN THIS FILE MEAN ANYTHING. See the
+   * file header: while two `@civitai/theme` copies were installed, this suite asserted
+   * the app's copy against itself and stayed green through a real dark-surface change
+   * that the OTHER copy was painting.
+   *
+   * Read from `pnpm-lock.yaml` rather than by walking `node_modules`, for two reasons:
+   * the lockfile is what `pnpm install --frozen-lockfile` makes CI install, so it is the
+   * resolution authority; and an in-place `pnpm install` does NOT prune `node_modules/.pnpm/`,
+   * so directories from earlier installs linger there reachable from nothing. Bumping this
+   * app's pin left exactly such a `@civitai+theme@0.3.1` tree behind, and a filesystem walk
+   * would have reported a split that no longer existed. (A clean install does not create it —
+   * which is the point: the residue is a property of HOW you installed, so it must not be
+   * what this guard reads.)
+   *
+   * 🔴 WHAT IT COVERS, AT EXACTLY THE WIDTH OF THE BODY BELOW: it fails if the set
+   * GROWS — a transitive dependency pinning a different theme minor re-opens the hole
+   * described in the header — and it fails if the copy this file reads is not the one
+   * the lockfile names. It does NOT establish that the copy read here is the copy that
+   * PAINTS; that edge belongs to the next test, and the header names what neither of
+   * them can see.
+   */
+  it('the lockfile resolves exactly ONE @civitai/theme, and it is the copy this file reads', () => {
+    const lock = readFileSync(new URL('../pnpm-lock.yaml', import.meta.url), 'utf8');
+    const versions = [...lock.matchAll(/'@civitai\/theme@([^']+)':/g)].map((m) => m[1]);
+
+    // DIAGNOSTIC ONLY, and deliberately not claimed as a control: the `toEqual` below
+    // already fails on an empty match set (`[]` is not `['<version>']`), so this cannot
+    // catch anything that one misses. What it buys is a readable cause — `expected 0 to
+    // be greater than 0` means the regex stopped matching the lockfile's format, versus
+    // a version list that means the copies genuinely split. Measured both ways.
+    expect(versions.length).toBeGreaterThan(0);
+
+    expect([...new Set(versions)]).toEqual([RESOLVED_THEME_VERSION]);
+  });
+
+  /**
+   * 🔴 THE EDGE THAT DECIDES WHICH COPY PAINTS, WHICH THE LOCKFILE TEST ABOVE DOES NOT
+   * TOUCH. The injected `<style>` wins the cascade (see the header), and its content
+   * comes from whatever `@civitai/components` resolves `injectTokens` from — NOT from
+   * whatever this file resolves. Those are two independent resolutions, and a single
+   * lockfile version does not make them the same file: nesting, a `node_modules` layout
+   * change, or a second install root can separate them while the lockfile is unmoved.
+   * So this compares the two by REALPATH, which is the only thing that answers "same
+   * file" across pnpm's symlink farm.
+   *
+   * Resolved FROM `@civitai/components/styles.css` rather than the bare specifier on
+   * purpose: the package's `.` export is `import`-only, so a CJS `require.resolve` of
+   * `@civitai/components` throws ERR_PACKAGE_PATH_NOT_EXPORTED. `./styles.css` is a
+   * condition-free string export, so it resolves under any condition and lands inside
+   * the package — which is all this needs: a file to resolve FROM.
+   */
+  it('@civitai/components resolves the SAME @civitai/theme copy this file reads', () => {
+    const appRequire = createRequire(import.meta.url);
+    const componentsFile = appRequire.resolve('@civitai/components/styles.css');
+    const componentsTheme = createRequire(componentsFile).resolve('@civitai/theme/styles.css');
+
+    expect(realpathSync(componentsTheme)).toBe(realpathSync(THEME_CSS_PATH));
+  });
+
   it('the DARK literals match the package [data-theme=dark] block', () => {
     const body = tokenValue(THEME_CSS, "[data-theme='dark']", '--civitai-color-body');
     const text = tokenValue(THEME_CSS, "[data-theme='dark']", '--civitai-color-text');

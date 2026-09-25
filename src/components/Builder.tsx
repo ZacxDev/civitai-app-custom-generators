@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { BlockGenerationSourceImageInfo, BlockPendingImageInfo, BlockResourceInfo, BlockResourcePickerType, BlockWorkflowSnapshot } from '@civitai/app-sdk/blocks';
 
-import { Alert, Badge, Button, Card, Group, Loader, Stack, TextInput, Textarea } from '@civitai/blocks-react/ui';
+import { Alert, Badge, Button, Card, Group, Loader, Stack, TextInput, Textarea } from '../ui/index.js';
 
 import type { BackgroundScanResult, GeneratorConfig, HeaderImageRef } from '../types.js';
 import { moveButton, newButton, updateButton, validateGenerator } from '../lib/generator.js';

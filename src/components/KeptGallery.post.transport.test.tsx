@@ -1,15 +1,24 @@
-// POSTING A KEPT IMAGE, THROUGH THE REAL BRIDGE — every arm of it.
+// POSTING A KEPT IMAGE — every arm of it, against a SCRIPTED FAKE TRANSPORT.
 //
-// 🔴 WHY THIS IS A TRANSPORT TEST AND NOT A COMPONENT TEST. `useCreatePostFromApp()`
-// is not a seam this app injects: the component holds the hook, so a test that
-// mocked `@civitai/blocks-react` or handed in a fake `createPost` would be
-// asserting against its own stub. Everything that can actually go wrong on this
-// path lives between the component and the host — the outbound
-// `CREATE_POST_FROM_APP` payload, the inbound `CREATE_POST_RESULT` validator,
-// and the SDK's error wrapping. So this file drives the REAL `App` inside the
-// REAL mock host and lets all three run. It is the sibling of
-// `Browse.gallery.transport.test.tsx`, written for the same reason: that defect
-// lived in exactly the gap two isolated suites left.
+// 🔴 THIS FILE DOES NOT EXERCISE THE REAL HOST BRIDGE, AND ITS TITLE USED TO SAY
+// IT DID. Before the port to `@civitai/sdk` it drove a mock host over
+// `postMessage` and three of its cases patched `window.parent.postMessage` to
+// swallow or hold the one outbound frame — which genuinely ran `IframeTransport`'s
+// correlation and deadline. Now every case here gets a `createFakeTransport()`
+// override installed by `<Harness>` through `__configurePlatform`, and the real
+// `getTransport()` has exactly one call site (`platform/client.ts`, reached only
+// when no override was supplied). So ZERO cases in this file touch the real
+// transport. The claim was retracted rather than re-earned; the real-transport
+// coverage was rebuilt separately, in
+// `src/platform/createPost.transport.test.ts`.
+//
+// 🔴 WHAT IT DOES EXERCISE, which is still the reason to keep it. The REAL `App`,
+// the REAL `KeptGallery`, the REAL `useCreatePostFromApp()` hook and the REAL
+// `platform/createPost.ts` correlation logic, end to end from a click. The hook is
+// not a seam this app injects — the component holds it — so a test that handed in a
+// fake `createPost` would be asserting against its own stub. What is fake is the
+// HOST at the other end of the transport: the outbound payload is read from a tap
+// on it, and the reply is a frame it pushes back.
 //
 // 🔴 THE PAYLOAD IS READ, NOT ASSUMED — AND THIS HEADER USED TO CLAIM THAT WHILE
 // NOTHING DID IT. The sentence above said this file exercises "the outbound
@@ -19,8 +28,8 @@
 // `createPost({...})` call — dropping `title`, `detail`, `tags` or
 // `modelVersionId`, reversing the image order, and deleting the eligibility
 // filter that keeps an ineligible id out of the request — each left a fully
-// green 442/442 run. `capturePostRequests()` below taps the mock host's
-// `onOutbound` and the first two suites assert the request field by field, so a
+// green 442/442 run. `capturePostRequests()` below taps the fake platform's
+// `onOutbound` option and the first two suites assert the request field by field, so a
 // claim about the payload in this header is now a claim the file can keep.
 // (What is still NOT asserted: the shapes the app never sends — `workflow`
 // sources, several `sources` entries — because nothing here can produce one.)
@@ -32,20 +41,21 @@
 // import reports "no tests", which is indistinguishable from a suite wired to
 // nothing (see the repo's own notes on reassuring zeros).
 //
-// 🔴 WHAT THE MOCK HOST CANNOT PROVE, stated rather than implied. The consent
-// dialog is HOST CHROME: the mock settles immediately where the real host waits
-// on a click, and what that dialog SHOWS — the server's resolution of the
-// request, the tags it actually matched, real thumbnails — has no mock analogue
-// at all. `declined` is the only arm of the viewer's confirm that is exercised
-// here, and never its timing or its content. Nothing in this file has run
-// against the real host.
+// 🔴 WHAT THE FAKE CANNOT PROVE, stated rather than implied. The consent dialog
+// is HOST CHROME: the fake settles immediately where the real host waits on a
+// click, and what that dialog SHOWS — the server's resolution of the request, the
+// tags it actually matched, real thumbnails — has no fake analogue at all.
+// `declined` is the only arm of the viewer's confirm exercised here, and never its
+// timing or its content. And because the transport is a fake, nothing here is
+// evidence about framing, parent origins or the outbound queue. Nothing in this
+// file has run against the real host.
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BlockCreatePostResult, BlockGatedImage } from '@civitai/app-sdk/blocks';
 
-import { Harness } from '@civitai/blocks-react/testing';
+import { Harness, releaseHeldCreatePost } from '../platform/testing.js';
 
 import { App, type AppDeps } from '../App.js';
 import type { DraftStore } from '../lib/drafts.js';
@@ -77,8 +87,11 @@ function ratedImage(imageId: number): BlockGatedImage {
 const rated: BlockGatedImage = ratedImage(RATED_ID);
 
 /**
- * Tap the mock host's outbound stream and keep every `CREATE_POST_FROM_APP`
- * REQUEST, in send order, with the transport's `requestId` stripped.
+ * Tap the FAKE transport's outbound stream and keep every `CREATE_POST_FROM_APP`
+ * notification, in send order, with the app's own `requestId` stripped.
+ *
+ * This reads frames the app really built (`platform/createPost.ts` constructs
+ * them), handed to a fake transport rather than a real one.
  *
  * 🔴 THIS IS THE INSTRUMENT THE FILE WAS MISSING, so it comes with its own
  * controls rather than being trusted. Positive: the first suite below asserts a
@@ -155,17 +168,25 @@ async function keptImageIdsInStore(drafts: DraftStore): Promise<number[]> {
 }
 
 /**
- * Render the real `App` against the real mock host with the post bridge left
- * ALONE — no injected `createPost`, so `useCreatePostFromApp()` →
- * `CREATE_POST_FROM_APP` → the mock host → `CREATE_POST_RESULT` → the SDK's
- * payload validator all run. The board is empty so the only bridge traffic is
- * the gallery's.
+ * Render the real `App` against the scripted fake with the post path left ALONE —
+ * no injected `createPost`, so `useCreatePostFromApp()` → `platform/createPost.ts`
+ * → `CREATE_POST_FROM_APP` → the fake's reply → the app's own correlation and
+ * error mapping all run. The board is empty so the only transport traffic is the
+ * gallery's.
+ *
+ * NOTE: there is no inbound payload VALIDATOR in this path any more. The old
+ * bridge package validated `IMAGES_RESULT`/`CREATE_POST_RESULT` shapes and dropped
+ * a reply that failed — the mechanism behind the production defect
+ * `Browse.gallery.transport.test.tsx` was written for. `@civitai/sdk` does no such
+ * validation, so nothing here exercises one.
  */
 async function renderGallery(opts: {
   gatedImages: BlockGatedImage[];
   keptIds: number[];
   createPostResult?: BlockCreatePostResult;
   createPostError?: string;
+  /** Hold the post reply until `releaseHeldCreatePost()` — the late-answer shape. */
+  createPostHold?: boolean;
   onOutbound?: (msg: { type: string; payload?: unknown }) => void;
   /** Override the App's clipboard seam (default: whatever jsdom provides). */
   copyToClipboard?: (text: string) => Promise<void>;
@@ -235,6 +256,7 @@ async function renderGallery(opts: {
       gatedImages={opts.gatedImages}
       createPostResult={opts.createPostResult}
       createPostError={opts.createPostError}
+      createPostHold={opts.createPostHold}
       onOutbound={opts.onOutbound}
       applyUrlToggles={false}
       showLog={false}
@@ -262,7 +284,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('creating a post from My gallery, across the real host bridge', () => {
+describe('creating a post from My gallery, against a scripted host', () => {
   it('posts the selected kept image and hands back the post url', async () => {
     const user = userEvent.setup();
     await renderGallery({ gatedImages: [rated], keptIds: [RATED_ID], createPostResult: POST });
@@ -315,7 +337,11 @@ describe('creating a post from My gallery, across the real host bridge', () => {
     // the closed code set, so it must reach the viewer as written. A `switch`
     // over the union type would treat this as unmatched prose.
     const serverMessage = 'You can only create 5 posts per hour';
-    await renderGallery({ gatedImages: [rated], keptIds: [RATED_ID], createPostError: serverMessage });
+    await renderGallery({
+      gatedImages: [rated],
+      keptIds: [RATED_ID],
+      createPostError: serverMessage,
+    });
 
     const composer = await openComposer(user);
     await user.click(within(composer).getByTestId('kept-post-submit'));
@@ -346,7 +372,11 @@ describe('creating a post from My gallery, across the real host bridge', () => {
     const user = userEvent.setup();
     // The literal sentence civitai's `validateBlockPostText` returns.
     const serverMessage = 'title exceeds 255 characters';
-    await renderGallery({ gatedImages: [rated], keptIds: [RATED_ID], createPostError: serverMessage });
+    await renderGallery({
+      gatedImages: [rated],
+      keptIds: [RATED_ID],
+      createPostError: serverMessage,
+    });
 
     const composer = await openComposer(user);
     const title = within(composer).getByTestId('kept-post-title');
@@ -386,7 +416,11 @@ describe('creating a post from My gallery, across the real host bridge', () => {
   });
 
   /**
-   * 🔴 THE ORDERING GUARD, DRIVEN THROUGH THE REAL TRANSPORT. A timeout has
+   * 🔴 THE ORDERING GUARD, DRIVEN THROUGH THE SCRIPTED FAKE. (This title read "THROUGH
+   * THE REAL TRANSPORT" until it was caught contradicting its own third paragraph
+   * below, which has retracted exactly that since the `@civitai/sdk` port. The F2
+   * sweep rewrote four other docblocks in this file and missed the one that was a
+   * TITLE.) A timeout has
    * `code === undefined` exactly like a forwarded server message does, so the
    * natural reading — "no code ⇒ render `.message`" — puts the SDK-internal
    * string `IframeTransport: request "CREATE_POST_FROM_APP" timed out after
@@ -394,14 +428,18 @@ describe('creating a post from My gallery, across the real host bridge', () => {
    * LANDED, because nobody knows that it did not: the reply failed to arrive,
    * and the write is a public post under the viewer's own name.
    *
-   * The host is silenced by dropping exactly one outbound message. The mock host
-   * does NOT listen for `message` events — it PATCHES `window.parent.postMessage`
-   * (an ordinary property on the stub parent it installs), so a capture-phase
-   * listener + `stopImmediatePropagation()` silences nothing at all: the first
-   * draft did that, and the post cheerfully succeeded. Wrapping the patched
-   * function instead drops the `CREATE_POST_FROM_APP` frame and forwards
-   * everything else, which is a genuine no-reply — what a timeout IS, rather
-   * than a simulated error code.
+   * The host is silenced with `createPostNoReply`, which makes the fake accept the
+   * `CREATE_POST_FROM_APP` notification and never push `CREATE_POST_RESULT` — a
+   * genuine no-reply, which is what a timeout IS rather than a simulated error code.
+   *
+   * 🔴 THIS USED TO DROP A REAL postMessage FRAME, AND THE CHANGE NARROWS WHAT THE
+   * TEST PROVES. Before the `@civitai/sdk` port the suite patched
+   * `window.parent.postMessage` to swallow the one outbound frame, so the real
+   * `IframeTransport` correlated and timed out. The fake transport is an in-memory
+   * object that posts nothing, so there is no frame to drop. What still holds:
+   * `createPost`'s own deadline, the app's timeout banner, and the guarantee that
+   * no SDK-internal string reaches the viewer. What no longer holds: any claim
+   * about the real transport under a lost reply.
    *
    * 🔴 THE ONE CASE THAT MOUNTS THE GALLERY DIRECTLY RATHER THAN THROUGH `App`,
    * AND THE REASON IS MEASURED, NOT STYLISTIC. Reaching the ceiling means moving
@@ -409,18 +447,22 @@ describe('creating a post from My gallery, across the real host bridge', () => {
    * timer — including the SDK's own token/context housekeeping, which expires
    * out from under `App`, flips `ready` false and empties the kept list. The
    * first draft of this test failed on exactly that: a "Nothing kept yet" panel
-   * where the post banner should have been. Mounting the component under the
-   * same `<Harness>` keeps the bridge entirely real — real `IframeTransport`,
-   * real postMessage, real inbound validator — and removes the only moving part
-   * the ten minutes were breaking.
+   * where the post banner should have been. Mounting the component under the same
+   * `<Harness>` removes the only moving part the ten minutes were breaking.
    */
   it('a TRANSPORT TIMEOUT tells the viewer to check their profile, and never shows the SDK string', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    let restore: (() => void) | undefined;
     try {
       render(
-        <Harness viewer={VIEWER} theme="dark" consentGranted applyUrlToggles={false} showLog={false}>
+        <Harness
+          viewer={VIEWER}
+          theme="dark"
+          consentGranted
+          applyUrlToggles={false}
+          showLog={false}
+          createPostNoReply
+        >
           <KeptGallery
             posting={{ onPosted: () => {} }}
             runs={[
@@ -443,20 +485,8 @@ describe('creating a post from My gallery, across the real host bridge', () => {
       );
       const composer = await openComposer(user, { viaTab: false });
 
-      // Drop the ONE outbound frame, leaving the rest of the bridge intact.
-      const parent = window.parent as unknown as {
-        postMessage: (msg: unknown, targetOrigin?: string) => void;
-      };
-      const send = parent.postMessage;
-      parent.postMessage = (msg: unknown, targetOrigin?: string) => {
-        if ((msg as { type?: string } | null)?.type === 'CREATE_POST_FROM_APP') return;
-        send.call(parent, msg, targetOrigin);
-      };
-      restore = () => {
-        parent.postMessage = send;
-      };
-      // POSITIVE CONTROL that the drop is real rather than a no-op: the very
-      // same journey against an UNPATCHED host resolves (see the first test in
+      // POSITIVE CONTROL that the silence is real rather than a no-op: the very
+      // same journey against an ANSWERING fake resolves (see the first test in
       // this file), so a timeout here is attributable to the missing reply.
       await user.click(within(composer).getByTestId('kept-post-submit'));
 
@@ -477,7 +507,7 @@ describe('creating a post from My gallery, across the real host bridge', () => {
       expect(document.body.textContent).not.toContain('timed out after');
       expect(screen.queryByTestId('kept-post-success')).not.toBeInTheDocument();
     } finally {
-      restore?.();
+      vi.useRealTimers();
     }
   });
 
@@ -765,32 +795,31 @@ describe('a model link the app cannot read blocks the post', () => {
  * no success, a selection bar still reading "1 selected", and nothing anywhere
  * saying the post had been turned down.
  *
- * Driven by HOLDING the outbound frame rather than by faking `pending`, so the
- * post really is in flight across the real bridge for the duration of the
- * dismissal attempts.
+ * Driven by HOLDING the reply rather than by faking `pending`, so the app's own
+ * request really is in flight — unsettled inside `platform/createPost.ts` — for
+ * the duration of the dismissal attempts. (The frame itself goes to a fake
+ * transport, not a real parent frame.)
  */
 describe('a refusal that arrives after the viewer tries to leave', () => {
   it('still reaches them — the composer refuses to close while the post is in flight', async () => {
     const user = userEvent.setup();
     const serverMessage = 'You can only create 5 posts per hour';
-    await renderGallery({ gatedImages: [rated], keptIds: [RATED_ID], createPostError: serverMessage });
+    await renderGallery({
+      gatedImages: [rated],
+      keptIds: [RATED_ID],
+      createPostError: serverMessage,
+      createPostHold: true,
+    });
 
     const composer = await openComposer(user);
 
-    // Hold the ONE outbound frame. Same patch as the timeout test, except this
-    // one REPLAYS it — so the host's refusal arrives late rather than never.
-    const parent = window.parent as unknown as {
-      postMessage: (msg: unknown, targetOrigin?: string) => void;
-    };
-    const send = parent.postMessage;
-    let held: { msg: unknown; targetOrigin?: string } | null = null;
-    parent.postMessage = (msg: unknown, targetOrigin?: string) => {
-      if ((msg as { type?: string } | null)?.type === 'CREATE_POST_FROM_APP') {
-        held = { msg, targetOrigin };
-        return;
-      }
-      send.call(parent, msg, targetOrigin);
-    };
+    // Hold the reply, then release it — so the host's refusal arrives LATE rather
+    // than never. `createPostHold` on the render below is what holds it.
+    //
+    // 🔴 Same substitution as the timeout test: this used to hold a real
+    // postMessage frame and replay it. The fake transport posts nothing, so it
+    // holds the reply instead. The app-side behaviour under a late refusal is
+    // still fully exercised; the real transport is not.
     try {
       await user.click(within(composer).getByTestId('kept-post-submit'));
       await waitFor(() => expect(screen.getByTestId('kept-post-submit')).toBeDisabled());
@@ -808,12 +837,12 @@ describe('a refusal that arrives after the viewer tries to leave', () => {
       fireEvent.mouseDown(overlay);
       expect(screen.getByTestId('kept-post-composer')).toBeInTheDocument();
     } finally {
-      parent.postMessage = send;
+      // nothing to unpatch: the fake holds the reply, it does not intercept a frame.
     }
 
-    // Release the held frame: the host answers, refusing.
+    // Release the held reply: the host answers, refusing.
     await act(async () => {
-      send.call(parent, held!.msg, held!.targetOrigin);
+      expect(releaseHeldCreatePost()).toBe(true);
     });
 
     const err = await screen.findByTestId('kept-post-error');
@@ -854,8 +883,8 @@ describe('a refusal that arrives after the viewer tries to leave', () => {
  * SDK's token housekeeping expiring under a fake clock, flipping `ready` false
  * and emptying the kept list.
  *
- * Driven the same way as the dismissal case above: the outbound frame is HELD,
- * so the post really is in flight across the real bridge while the feed empties.
+ * Driven the same way as the dismissal case above: the reply is HELD, so the
+ * app's own request really is unsettled while the feed empties.
  */
 describe('a refusal that arrives after the grid has emptied', () => {
   it('still reaches them — the composer survives the kept set going empty mid-flight', async () => {
@@ -874,6 +903,7 @@ describe('a refusal that arrives after the grid has emptied', () => {
         theme="dark"
         consentGranted
         createPostError={serverMessage}
+        createPostHold
         applyUrlToggles={false}
         showLog={false}
       >
@@ -893,18 +923,6 @@ describe('a refusal that arrives after the grid has emptied', () => {
     const { rerender } = render(gallery([runWith([RATED_ID])]));
     const composer = await openComposer(user, { viaTab: false });
 
-    const parent = window.parent as unknown as {
-      postMessage: (msg: unknown, targetOrigin?: string) => void;
-    };
-    const send = parent.postMessage;
-    let held: { msg: unknown; targetOrigin?: string } | null = null;
-    parent.postMessage = (msg: unknown, targetOrigin?: string) => {
-      if ((msg as { type?: string } | null)?.type === 'CREATE_POST_FROM_APP') {
-        held = { msg, targetOrigin };
-        return;
-      }
-      send.call(parent, msg, targetOrigin);
-    };
     try {
       await user.click(within(composer).getByTestId('kept-post-submit'));
       await waitFor(() => expect(screen.getByTestId('kept-post-submit')).toBeDisabled());
@@ -915,12 +933,12 @@ describe('a refusal that arrives after the grid has emptied', () => {
       rerender(gallery([]));
       await screen.findByTestId('browse-kept-gallery-empty');
     } finally {
-      parent.postMessage = send;
+      // nothing to unpatch: the fake holds the reply, it does not intercept a frame.
     }
 
-    // Release the held frame: the host answers, refusing.
+    // Release the held reply: the host answers, refusing.
     await act(async () => {
-      send.call(parent, held!.msg, held!.targetOrigin);
+      expect(releaseHeldCreatePost()).toBe(true);
     });
 
     const err = await screen.findByTestId('kept-post-error');
@@ -997,8 +1015,9 @@ describe('a posted image leaves the durable kept-run store', () => {
   /**
    * 🔴 THE SERVER'S ECHO DECIDES, NOT THE SELECTION — and the two used to be
    * different answers in one component (the grid removal read `selectedIds`, the
-   * success sentence read `posted.imageIds`). The mock host's own default result
-   * returns ids the block never sent, precisely to expose a block that conflates
+   * success sentence read `posted.imageIds`). The fake platform's own default
+   * `CREATE_POST_RESULT` returns ids the block never sent, precisely to expose a
+   * block that conflates
    * them. A durable DELETE has to follow the echo: it removes exactly what
    * stopped resolving, never an image on the strength of having asked for it.
    */

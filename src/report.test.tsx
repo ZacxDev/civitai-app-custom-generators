@@ -1,13 +1,17 @@
 // The abuse seam: filing a published generator for PLATFORM moderator review.
 //
-// 🔴 WHAT THESE TESTS CAN AND CANNOT CLAIM. `createMockHost` checks no viewer on
-// any SHARED_* handler, so an anonymous mutation SUCCEEDS against the mock while
-// it rejects against the real host — the mock is MORE permissive on exactly the
-// axis the signed-out case is about. So the signed-out test below asserts that no
-// report AFFORDANCE is offered, which is a UI claim. It does NOT assert the
-// transport rejects, because that is not observable here. The two are not
-// interchangeable and the weaker one reads like the stronger one in a test name,
-// so this comment exists to keep them apart.
+// 🔴 WHAT THESE TESTS CAN AND CANNOT CLAIM. The shared-storage seam here is
+// INJECTED — `setup()` passes `deps.shared = fakeShared(...)`, an in-memory object
+// with no notion of a viewer — so no request reaches the `<Harness>`'s fake server
+// and NOTHING in this file exercises an authorization decision at all. (The fake
+// server does refuse an anonymous shared write — `platform/testing.tsx`'s
+// `requireViewer`, on `blocks/shared-storage/report` among others; these tests
+// simply never reach it.) So the signed-out test
+// below asserts that no report AFFORDANCE is offered, which is a UI claim. It does
+// NOT assert that an anonymous report is refused — no layer under test here makes
+// that decision, and the real server's behaviour is not observable from this file.
+// The two are not interchangeable and the weaker one reads like the stronger one
+// in a test name, so this comment exists to keep them apart.
 //
 // 🔴 The secondary testids are DERIVED from the trigger by the shared control:
 // `published-report` yields `-confirm`, `-cancel`, `-done`, `-prompt`. Grep for
@@ -18,13 +22,12 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { Harness } from '@civitai/blocks-react/testing';
+import { Harness } from './platform/testing.js';
 
 import { App, type AppDeps } from './App.js';
-import { ANALYTICS_EVENTS } from './lib/analytics.js';
 import { defaultParams } from './lib/generator.js';
 import { CKPT_INFO, LORA_INFO, fakeShared, immediateSleep, memoryDraftStore, mockWorkflow } from './test-helpers.js';
-import type { SharedListItem } from '@civitai/blocks-react';
+import type { SharedListItem } from './platform/index.js';
 
 const VIEWER_ID = 99;
 const SOMEONE_ELSE = 7;
@@ -63,7 +66,6 @@ function setup(
   seed: SharedListItem[] = [],
   opts: { viewer?: { id: number; username: string } | null; depsOver?: Partial<AppDeps> } = {},
 ) {
-  const analytics = { track: vi.fn() };
   const shared = fakeShared(seed);
   const wf = mockWorkflow({ cost: 12, images: ['https://image.civitai.com/out.jpeg'] });
   const deps: Partial<AppDeps> = {
@@ -76,7 +78,6 @@ function setup(
     poll: wf.poll,
     pollIntervalMs: 0,
     sleep: immediateSleep,
-    analytics,
     copyToClipboard: vi.fn(async (_t: string) => {}),
     navigate: vi.fn(),
     openPurchaseModal: vi.fn(async () => ({ purchased: false })),
@@ -98,7 +99,7 @@ function setup(
       <App deps={deps} />
     </Harness>,
   );
-  return { analytics, shared };
+  return { shared };
 }
 
 describe('report — the abuse seam on a public board', () => {
@@ -125,7 +126,7 @@ describe('report — the abuse seam on a public board', () => {
   });
 
   it('files the row through shared.report only AFTER the viewer confirms, and settles', async () => {
-    const { shared, analytics } = setup([publishedSeed('shared:theirs', 'Someone else’s')]);
+    const { shared } = setup([publishedSeed('shared:theirs', 'Someone else’s')]);
     const card = await screen.findByTestId('published-card');
 
     await userEvent.click(within(card).getByTestId('published-report'));
@@ -135,7 +136,6 @@ describe('report — the abuse seam on a public board', () => {
     await userEvent.click(screen.getByTestId('published-report-confirm'));
     await waitFor(() => expect(screen.getByTestId('published-report-done')).toBeInTheDocument());
     expect(shared.reported).toEqual([{ key: 'shared:theirs', reason: undefined }]);
-    expect(analytics.track).toHaveBeenCalledWith(ANALYTICS_EVENTS.REPORTED, { key: 'shared:theirs' });
   });
 
   it('does NOT settle when the host rejects — the report was not filed, so it must not say it was', async () => {

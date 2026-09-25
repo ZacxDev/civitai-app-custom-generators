@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { Browse, type BrowseProps } from './Browse.js';
 import { palette } from '../theme.js';
-import type { SharedListItem } from '@civitai/blocks-react';
+import type { SharedListItem } from '../platform/index.js';
 
 const c = palette();
 
