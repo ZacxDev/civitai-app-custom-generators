@@ -1,8 +1,10 @@
 // The platform seam.
 //
 // Everything the app used to import from `@civitai/blocks-react` comes from here,
-// under the same names and the same signatures. `App.tsx` — 1,034 lines calling
-// eighteen hooks — changed at its import block and nowhere else.
+// under the same names and the same signatures. `App.tsx` — a large file and by far
+// the heaviest consumer of these hooks — changed at its import block and nowhere
+// else. (No line count or hook count is quoted here on purpose: see the note at the
+// top of `./hooks.ts`.)
 //
 // 🔴 ONLY FILES UNDER `src/platform/` MAY IMPORT `@civitai/sdk`. That is what
 // makes this a seam rather than a folder, and `src/platform-seam.test.ts` asserts

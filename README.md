@@ -153,7 +153,7 @@ node and pnpm on PATH; `.nvmrc` is the single authority for the node major.
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm run dev:harness  # mock host (createMockHost) serves the FULL protocol offline
+pnpm run dev:harness  # the app's own fake platform (src/platform/testing.tsx) serves it offline
 pnpm test             # vitest: node (pure) + jsdom (component/e2e) projects
 pnpm run typecheck
 pnpm run build
@@ -161,7 +161,8 @@ pnpm run build
 
 ## Tests
 
-`pnpm test` → **308 tests, 2 projects**:
+`pnpm test` → **2 projects** (the count is deliberately not quoted here: it moved
+every round and nothing asserts on it — read it off the run):
 
 - **node** (pure): `lib/generator` (prompt composition, weight clamp, picker
   seeding, submit-body construction incl. img2img/sharedContentKey/overrides,
@@ -170,7 +171,9 @@ pnpm run build
   share-URL round-trip), `lib/buzz` (insufficient classifier), `lib/workflow`
   (status map + poll loop), `lib/drafts` (KV round-trip), `manifest`
   (defineBlock gate + scopes + budget cap).
-- **jsdom** (component + e2e via `@civitai/blocks-react/testing` mock host):
+- **jsdom** (component + e2e via the app's own fake platform,
+  `src/platform/testing.tsx` — a fake `fetch` plus a scripted transport; there is
+  no published mock host, and `@civitai/blocks-react` is not a dependency):
   Builder (config round-trip, LoRA seed + clamp, publish split, draft save/load,
   cosmetic image + cancelled upload, focus-after-reorder a11y), Runner
   (submit-body construction, estimate→confirm→submit→poll queue, img2img gating,
@@ -180,7 +183,7 @@ pnpm run build
   a11y), App features (build → publish → run, deeplink open, fork, share,
   rehydrate notice), ErrorBoundary (throw → fallback → retry), `lib/meta`, rehydrate (real
   `useGenerationResources` hook via stubbed fetch), and a full **build → publish
-  → discover → open → run** e2e against the mock host.
+  → discover → open → run** e2e against that same fake platform.
 
 ## Component pack + Track U
 

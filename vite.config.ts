@@ -63,8 +63,8 @@ export default defineConfig(() => {
     //  - `node`: pure-logic unit tests (*.test.ts) — no DOM, fast (the generator
     //            payload builders, prompt composition, weight clamping).
     //  - `dom` : component + hook + e2e tests (*.test.tsx) — jsdom +
-    //            testing-library, driving the Builder/Runner against the SDK's
-    //            mock host.
+    //            testing-library, driving the Builder/Runner against the app's
+    //            own fake platform (`src/platform/testing.tsx`).
     projects: [
       {
         extends: true as const,

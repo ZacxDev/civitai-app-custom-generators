@@ -40,7 +40,7 @@ export const LORA_INFO: BlockResourceInfo = {
 
 /**
  * DISPLAY upload result — the MODERATED projection the host delivers as the
- * `'scanned'` verdict (and, via `createMockHost`'s `cannedImageUpload`, the
+ * `'scanned'` verdict (and, via the `<Harness>`'s `cannedImageUpload` option, the
  * source for the pending handle's imageId/url). Used for the cosmetic public
  * background.
  */

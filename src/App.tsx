@@ -5,7 +5,7 @@
 // storage, consent) and routes between three screens: Browse → Builder / Runner.
 // The hooks are collapsed into an injectable `deps` bag so component + e2e tests
 // can drive the exact same App with canned picks/uploads/workflows, OR against
-// the real SDK mock host.
+// the app's own fake platform (`src/platform/testing.tsx`).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {

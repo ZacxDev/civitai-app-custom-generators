@@ -1,10 +1,16 @@
 // The React bindings the bridge package used to ship.
 //
-// `@civitai/sdk` has 38 fewer hooks than `@civitai/blocks-react`: it has none at
-// all. It is plain functions, and binding them to a framework is the app's job.
-// This file is that binding, and it keeps the OLD hook names and the OLD
-// signatures on purpose — which is why `App.tsx`, a 1,034-line file that calls
-// eighteen of them, changed at its import block and nowhere else.
+// `@civitai/sdk` ships no React hooks at all — it is plain functions, and binding
+// them to a framework is the app's job. (How many hooks the bridge package shipped
+// is not stated here: it is not installed, so nothing in this tree can check it.)
+// This file is that binding, and it keeps the OLD hook names and the
+// OLD signatures on purpose — which is why `App.tsx`, a large file and by far the
+// heaviest consumer of these hooks, changed at its import block and nowhere else.
+//
+// 🔴 NO COUNTS IN THIS COMMENT, DELIBERATELY. It used to quote a hook delta, a
+// line count for `App.tsx` and a number of call sites; all three rotted, and two
+// of them were corrected in one file and left stale in another across three
+// rounds. Nothing asserts on any of them — `git grep` the names instead.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';

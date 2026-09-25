@@ -115,7 +115,8 @@ function setup(hasMore: boolean, rows?: SharedListItem[]) {
 }
 
 /** Same harness, no viewer — `null` is the anon path; `undefined` would give the
- *  mock host's default dev-viewer and silently make this a signed-IN case. */
+ *  fake platform's default dev-viewer (`{ id: 99 }`) and silently make this a
+ *  signed-IN case. */
 function setupAnon(hasMore: boolean, rows?: SharedListItem[]) {
   const { rows: seed, pageLimit } = withHorizon(rows ?? [], hasMore);
   const shared = fakeShared(seed);

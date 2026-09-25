@@ -1,5 +1,6 @@
-// Shared demo fixtures: a couple of published generators used to seed the SDK
-// mock host (dev harness + tests) so the browse/run loop has content offline.
+// Shared demo fixtures: a couple of published generators used to seed the app's
+// own fake platform (`platform/testing.tsx`, via the dev harness and tests) so the
+// browse/run loop has content offline.
 
 import type { MockSharedSeed } from './platform/testing.js';
 

@@ -28,8 +28,8 @@
 // `createPost({...})` call — dropping `title`, `detail`, `tags` or
 // `modelVersionId`, reversing the image order, and deleting the eligibility
 // filter that keeps an ineligible id out of the request — each left a fully
-// green 442/442 run. `capturePostRequests()` below taps the mock host's
-// `onOutbound` and the first two suites assert the request field by field, so a
+// green 442/442 run. `capturePostRequests()` below taps the fake platform's
+// `onOutbound` option and the first two suites assert the request field by field, so a
 // claim about the payload in this header is now a claim the file can keep.
 // (What is still NOT asserted: the shapes the app never sends — `workflow`
 // sources, several `sources` entries — because nothing here can produce one.)
@@ -1015,8 +1015,9 @@ describe('a posted image leaves the durable kept-run store', () => {
   /**
    * 🔴 THE SERVER'S ECHO DECIDES, NOT THE SELECTION — and the two used to be
    * different answers in one component (the grid removal read `selectedIds`, the
-   * success sentence read `posted.imageIds`). The mock host's own default result
-   * returns ids the block never sent, precisely to expose a block that conflates
+   * success sentence read `posted.imageIds`). The fake platform's own default
+   * `CREATE_POST_RESULT` returns ids the block never sent, precisely to expose a
+   * block that conflates
    * them. A durable DELETE has to follow the echo: it removes exactly what
    * stopped resolving, never an image on the strength of having asked for it.
    */

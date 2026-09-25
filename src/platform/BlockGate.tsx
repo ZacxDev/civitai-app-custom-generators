@@ -18,9 +18,10 @@ import { getClient } from './client.js';
 
 /**
  * Milliseconds to wait for the handshake before concluding a TOP-LEVEL load is a
- * direct one. Well above the dev harness's init latency (it answers on a
- * `setTimeout(0)` macrotask) and below anything a human tolerates staring at a
- * spinner.
+ * direct one. Well above the dev harness's init latency (its transport is
+ * injected with a snapshot already in hand, so `getClient()` settles on a
+ * microtask without exchanging a message) and below anything a human tolerates
+ * staring at a spinner.
  */
 export const DIRECT_LOAD_TIMEOUT_MS = 2000;
 
@@ -76,8 +77,8 @@ function isTopLevel(): boolean {
  *
  * Returns `true` ONLY when the block is top-level AND the handshake has not
  * completed within `timeoutMs`. Precise by construction: an embedded block is
- * never top-level, and the dev harness answers immediately so the timer is
- * cleared long before it fires.
+ * never top-level, and under the dev harness `getClient()` resolves off the
+ * injected snapshot, so the timer is cleared long before it fires.
  */
 export function useDirectLoad(timeoutMs: number = DIRECT_LOAD_TIMEOUT_MS): boolean {
   const [direct, setDirect] = useState(false);

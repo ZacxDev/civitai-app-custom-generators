@@ -1,13 +1,17 @@
 // The abuse seam: filing a published generator for PLATFORM moderator review.
 //
-// 🔴 WHAT THESE TESTS CAN AND CANNOT CLAIM. `createMockHost` checks no viewer on
-// any SHARED_* handler, so an anonymous mutation SUCCEEDS against the mock while
-// it rejects against the real host — the mock is MORE permissive on exactly the
-// axis the signed-out case is about. So the signed-out test below asserts that no
-// report AFFORDANCE is offered, which is a UI claim. It does NOT assert the
-// transport rejects, because that is not observable here. The two are not
-// interchangeable and the weaker one reads like the stronger one in a test name,
-// so this comment exists to keep them apart.
+// 🔴 WHAT THESE TESTS CAN AND CANNOT CLAIM. The shared-storage seam here is
+// INJECTED — `setup()` passes `deps.shared = fakeShared(...)`, an in-memory object
+// with no notion of a viewer — so no request reaches the `<Harness>`'s fake server
+// and NOTHING in this file exercises an authorization decision at all. (The fake
+// server does refuse an anonymous shared write — `platform/testing.tsx`'s
+// `requireViewer`, on `blocks/shared-storage/report` among others; these tests
+// simply never reach it.) So the signed-out test
+// below asserts that no report AFFORDANCE is offered, which is a UI claim. It does
+// NOT assert that an anonymous report is refused — no layer under test here makes
+// that decision, and the real server's behaviour is not observable from this file.
+// The two are not interchangeable and the weaker one reads like the stronger one
+// in a test name, so this comment exists to keep them apart.
 //
 // 🔴 The secondary testids are DERIVED from the trigger by the shared control:
 // `published-report` yields `-confirm`, `-cancel`, `-done`, `-prompt`. Grep for

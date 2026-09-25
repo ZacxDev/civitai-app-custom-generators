@@ -36,12 +36,18 @@ injectBlocksStyles();
 // that impossible. Idempotent, so the hook's call is a no-op.
 injectMotionStyles();
 
-// `pnpm run dev:harness` sets VITE_DEV_HARNESS=true to mount the local mock host
-// (the published `@civitai/blocks-react/testing` Harness / createMockHost) that
-// answers the FULL block protocol — BLOCK_INIT, viewer/consent, resource
-// picker, image upload, workflow money path, and shared/KV storage. So unlike
-// simpler apps this app needs NO injected HTTP fakes in dev; the mock host
-// serves everything. Never set VITE_DEV_HARNESS in prod.
+// `pnpm run dev:harness` sets VITE_DEV_HARNESS=true to mount `<Harness>`
+// (`src/Harness.tsx`), which wraps this app's OWN fake platform from
+// `src/platform/testing.tsx`: a fake `fetch` answering the block REST surface
+// (`blocks/shared-storage/*`, `blocks/app-storage/*`, `blocks/gated-images`,
+// `blocks/generation-resources`, `blocks/buzz`, `blocks/workflows/*`) plus a
+// scripted transport for the host-UI ops that are still messages (token,
+// resource picker, image upload, publish, Buzz purchase, create-post). No
+// published mock host is involved — `@civitai/sdk/testing` ships `createFakeTransport` and
+// `__resetTransport` and nothing else, and `@civitai/blocks-react` is not a
+// dependency of this app. In particular the dev harness DOES install an HTTP
+// fake: the data surface is REST now, so it has to. Never set VITE_DEV_HARNESS
+// in prod.
 const useHarness = import.meta.env.VITE_DEV_HARNESS === 'true';
 
 // 🔴 NOTHING TO INSTALL HERE ANY MORE, AND THE REASON IS THE WHOLE PORT. This
@@ -59,8 +65,10 @@ if (!container) throw new Error('#root missing from index.html');
 // `<BlockGate>` shows an "Open on Civitai" landing when the block is loaded
 // DIRECTLY (top-level at its bare `<slug>.civit.ai` origin, no BLOCK_INIT)
 // instead of hanging on the app's loading state. It's inert on the embedded
-// happy path and the dev harness (both post BLOCK_INIT), so it renders the app
-// unchanged there. The run slug is derived from `location.hostname`. The
+// happy path (the host answers the handshake) and under the dev harness (the
+// injected transport already carries a snapshot, so `getClient()` settles
+// without any message at all), so it renders the app unchanged in both. The run
+// slug is derived from `location.hostname`. The
 // ErrorBoundary wraps the actual app inside the gate.
 createRoot(container).render(
   <StrictMode>

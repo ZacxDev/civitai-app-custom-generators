@@ -80,9 +80,10 @@ export function getClient(): Promise<BlockAppClient> {
 }
 
 /**
- * Point the platform at a scripted host and fake server. Tests call this in
- * `beforeEach`; the dev harness calls it at module scope. Nothing in production
- * calls it.
+ * Point the platform at a scripted host and fake server. Some suites call it
+ * directly in `beforeEach` (`createPost.transport.test.ts`); everything else —
+ * including the dev harness — reaches it through `<Harness>`, which calls it
+ * during its own render. Nothing in production calls it.
  *
  * 🔴 DROPPING THE CACHED CLIENT AND TRANSPORT IS THE LOAD-BEARING HALF. Without
  * it the singletons above would leak the FIRST test's host and store into every

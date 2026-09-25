@@ -6,8 +6,14 @@ import { describe, expect, it } from 'vitest';
 import { isInsufficientBuzzError } from './buzz.js';
 
 describe('isInsufficientBuzzError', () => {
-  it('matches the host insufficient-Buzz copy (case-insensitive, substring)', () => {
-    // Byte-for-byte the mock host's message.
+  it('matches insufficient-Buzz copy shapes (case-insensitive, substring)', () => {
+    // 🔴 THIS STRING NO LONGER HAS A SOURCE IN THIS TREE, AND THAT IS STATED
+    // RATHER THAN PAPERED OVER. It was copied byte-for-byte from the bridge-era
+    // `@civitai/blocks-react` mock host, which is not installed any more; the
+    // app's own fake refuses with `insufficient buzz budget: …` (covered by the
+    // next line's substring). So this is a realistic fixture whose shape nothing
+    // here reproduces — keep it as a realistic input to the classifier, not as
+    // evidence about what any host actually sends.
     expect(isInsufficientBuzzError('Insufficient Buzz to run this generation.')).toBe(true);
     expect(isInsufficientBuzzError('insufficient buzz')).toBe(true);
     expect(isInsufficientBuzzError('Not enough Buzz.')).toBe(true);
