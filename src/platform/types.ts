@@ -70,9 +70,16 @@ export interface SharedStorage {
      * Narrow the page to rows the VIEWER authored — server-side, over the whole
      * board, not a client filter over one page.
      *
-     * 🔴 A BOOLEAN, NEVER A USER ID. The author it filters on is the resolved
-     * token subject, the same value `viewerVoted` keys on, so no caller-supplied
-     * identity enters the path (`listSharedRows`, civitai/civitai#5361).
+     * A BOOLEAN RATHER THAN A USER ID, AND THE REASON IS YAGNI — NOT A CAPABILITY
+     * BOUNDARY. Nothing asks for an id form, and widening a boolean to an id later
+     * is easy while narrowing an id back after clients depend on it is not. ⚠️ Do
+     * not read it as an authz guard: every listed row already carries
+     * `authorUserId`, so enumerating a named author's submissions is ALREADY
+     * possible by paging the board — which is exactly the COST this parameter
+     * removes. An id form would make that cheap, not possible. `listSharedRows`'
+     * own docblock is the single source for this argument and explicitly retracts
+     * the security framing an earlier draft of it carried
+     * (civitai/civitai#5361).
      *
      * 🔴 AN ANONYMOUS VIEWER GETS AN EMPTY PAGE — not an error, and not the
      * whole board. Server-side `s.author_user_id = $4::int` is UNKNOWN for a NULL

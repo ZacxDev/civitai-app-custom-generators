@@ -1,8 +1,8 @@
 // `shared-storage/list`'s QUERY STRING, read off the wire.
 //
 // 🔴 WHY A QUERY-STRING SUITE AND NOT A COMPONENT ONE. `mine=true` is the fix for
-// "the viewer's own published generators go missing past page one" (see
-// `MY_PUBLISHED_LIST_LIMIT` in `App.tsx`), and the route it talks to validates the
+// "the viewer's own published generators go missing past page one" (see the
+// `myPublished` state in `App.tsx`), and the route it talks to validates the
 // parameter as `z.union([z.literal('true'), z.literal('false')]).optional()` —
 // deliberately NOT `z.coerce.boolean()`, which maps the string "false" to TRUE.
 // Two ways to get that wrong both type-check and both 400 in production:

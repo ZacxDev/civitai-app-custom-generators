@@ -170,18 +170,6 @@ export interface AppDeps {
    * behaviour, because production never sets it.
    */
   discoverPageLimit?: number;
-  /**
-   * How many of the viewer's OWN published rows the panel renders; defaults to
-   * {@link MY_PUBLISHED_LIST_LIMIT} (test seam).
-   *
-   * It exists for the same reason {@link AppDeps.discoverPageLimit} does, and for
-   * one more: at the production value the truncated state needs 51 of ONE
-   * viewer's rows, which the server's per-author cap makes impossible to reach in
-   * production and expensive to render in jsdom. Lowering the horizon is what
-   * makes that disclosure testable at its own boundary. It changes no production
-   * behaviour, because production never sets it.
-   */
-  myPublishedPageLimit?: number;
 }
 
 /**
@@ -225,44 +213,36 @@ export interface AppDeps {
 export const DISCOVER_LIST_LIMIT = 50;
 
 /**
- * Rows the "Published by me" panel RENDERS, out of its OWN server-filtered read.
+ * The LARGEST `limit` the shared-storage list route will honour — the EXPORTED
+ * `SHARED_LIST_LIMIT_MAX` in civitai
+ * `src/server/routers/apps-shared.router.ts`, re-derived at `7ce2adf8`.
  *
- * 🔴 WHY THIS IS A SECOND REQUEST AND NOT A FILTER OVER THE DISCOVER PAGE. It
- * used to be `shared.filter((s) => s.authorUserId === viewer.id)` over the one
- * discover page — so a viewer's own generators that had scrolled past the newest
- * {@link DISCOVER_LIST_LIMIT} rows of the WHOLE BOARD were missing from their own
- * list, with nothing on screen saying so. On a healthy board that page fills on
- * any 50+ generators, i.e. the ordinary state, and the panel then rendered "I
- * have published fewer things than I have" — or, when every one of their rows sat
- * past the horizon, "Nothing published". `list` is newest-first with no rank
- * parameter and there was no pagination loop, so no amount of client work could
- * recover the missing rows.
+ * 🔴 A MIRRORED SERVER CONSTANT, AND THE ONLY DIRECTION IT CAN BE WRONG IN IS
+ * DOWN. The route clamps `limit` to this value on BOTH surfaces — the REST
+ * adapter this app talks to (civitai
+ * `src/pages/api/v1/blocks/shared-storage/list.ts`) and the tRPC input — so
+ * asking for this much is harmless whatever the server's own number is: a server
+ * that lowered it would clamp us down, and a server that raised it would simply
+ * leave headroom unused. Asking for LESS is the only error, because that is what
+ * makes rows unreachable. That asymmetry is why this is mirrored as a plain
+ * number rather than guarded: a stale copy here cannot produce a 400 and cannot
+ * lose a row.
  *
- * The server answers the question directly: `mine=true` narrows the page to rows
- * the VIEWER authored (civitai/civitai#5361). The two lists are different
- * questions with different completeness requirements — Discover is "a page of the
- * board, honestly disclosed as a page", this is "everything you published" — so
- * they are two reads. Folding them into one would have to either break the
- * discover read's `+1` truncation evidence or keep the client filter, and the
- * client filter is the defect.
+ * 🔴 ASKING FOR THE MAX IS WHAT MAKES "Published by me" COMPLETE RATHER THAN
+ * MERELY DEEPER, WITHOUT THIS APP KNOWING THE PER-AUTHOR CAP. The server refuses
+ * a write once an author holds `SHARED_KV_PER_USER_ROW_CAP` rows — a PRIVATE
+ * const, 50 at `7ce2adf8`, which this app cannot import and must not pin. At a
+ * limit of this size, that cap would have to DOUBLE before a viewer could hold
+ * more rows than one page returns; and it cannot be raised past this number
+ * without the list route being widened in the same change, since a per-author cap
+ * above the list max would make an author's own rows unreachable in one page for
+ * every consumer of the route. So truncation of the viewer's own list is not
+ * reachable by a cap change alone, and the app carries no apparatus for it.
  *
- * 🔴 THIS VALUE IS THE SERVER'S PER-AUTHOR ROW CAP, WHICH IS WHAT MAKES THE LIST
- * COMPLETE RATHER THAN MERELY DEEPER. `appendSharedRow` refuses a write once the
- * author already holds `SHARED_KV_PER_USER_ROW_CAP` rows — 50, re-derived at
- * `1d758251` — so no viewer can have more than this many, and `list` additionally
- * excludes hidden rows. One read of this size therefore returns every row the
- * viewer can possibly have.
- *
- * 🔴 AND THE READ STILL ASKS FOR ONE MORE, AS A TRIPWIRE ON THAT CLAIM. The cap
- * is a server constant this app cannot see, so "complete" is an assumption about
- * someone else's code. The same `+1` technique {@link DISCOVER_LIST_LIMIT} uses
- * makes the assumption falsifiable at runtime: a row past this horizon can only
- * mean the cap moved, and the panel then DISCLOSES that it is showing a page
- * instead of silently recreating the defect one page further out.
- * `nextCursor` is again deliberately not read — it is emitted iff the page
- * filled, so it answers the wrong question (see {@link DISCOVER_LIST_LIMIT}).
+ * The server returns at most the cap's worth of rows either way, so asking for
+ * this rather than 50 changes no wire payload today.
  */
-export const MY_PUBLISHED_LIST_LIMIT = 50;
+export const SHARED_LIST_LIMIT_MAX = 100;
 
 export interface AppProps {
   /** Override any hook-backed dependency (component + e2e test seam). */
@@ -378,22 +358,37 @@ export function App({ deps: depsOverride }: AppProps = {}) {
    */
   const [discoverTruncated, setDiscoverTruncated] = useState(false);
   /**
-   * The viewer's OWN published rows, from their own server-filtered read — not a
-   * client filter over `shared`. See {@link MY_PUBLISHED_LIST_LIMIT} for why this
-   * is a second request and why that makes the list complete.
+   * The viewer's OWN published rows, from their OWN server-filtered read at
+   * {@link SHARED_LIST_LIMIT_MAX} — not a client filter over `shared`.
+   *
+   * 🔴 WHY A SECOND REQUEST RATHER THAN A FILTER OVER THE DISCOVER PAGE. It used
+   * to be `shared.filter((s) => s.authorUserId === viewer.id)` over the one
+   * discover page — so a viewer's own generators that had scrolled past the newest
+   * {@link DISCOVER_LIST_LIMIT} rows of the WHOLE BOARD were missing from their
+   * own list, with nothing on screen saying so. On a healthy board that page fills
+   * on any 50+ generators, i.e. the ordinary state, and the panel then rendered "I
+   * have published fewer things than I have" — or, when every one of their rows
+   * sat past the horizon, "Nothing published". `list` is newest-first with no rank
+   * parameter and there was no pagination loop, so no amount of client work could
+   * recover the missing rows.
+   *
+   * The server answers the question directly: `mine=true` narrows the page to rows
+   * the VIEWER authored (civitai/civitai#5361). Discover and this are different
+   * questions with different completeness requirements — "a page of the board,
+   * honestly disclosed as a page" versus "everything you published" — so they are
+   * two reads. Folding them into one would have to either break the discover
+   * read's `+1` truncation evidence or keep the client filter, and the client
+   * filter is the defect.
+   *
+   * 🔴 NO TRUNCATION APPARATUS, AND ITS ABSENCE IS A CLAIM — see
+   * {@link SHARED_LIST_LIMIT_MAX}. Asking for the route's maximum means the
+   * server's per-author row cap would have to DOUBLE before this list could be a
+   * page rather than the whole thing, and it cannot be raised past that maximum
+   * without the route being widened in the same change. There is no `+1`
+   * over-fetch here and no disclosure, unlike {@link DISCOVER_LIST_LIMIT}, whose
+   * horizon a healthy board crosses every day.
    */
   const [myPublished, setMyPublished] = useState<SharedListItem[]>([]);
-  /**
-   * A row came back past {@link MY_PUBLISHED_LIST_LIMIT}, so the panel is showing
-   * a page of the viewer's generators rather than all of them.
-   *
-   * 🔴 UNREACHABLE WHILE THE SERVER'S PER-AUTHOR CAP STAYS AT THE SAME VALUE, and
-   * that is the point rather than dead code: it is the observable half of the
-   * tripwire described on {@link MY_PUBLISHED_LIST_LIMIT}. If the cap is raised
-   * server-side, this flips and the viewer is TOLD, instead of quietly losing
-   * rows the way the client filter did.
-   */
-  const [myPublishedTruncated, setMyPublishedTruncated] = useState(false);
   const [myDrafts, setMyDrafts] = useState<StoredDraft[]>([]);
   /**
    * The viewer's KEPT runs — the app's durable end-state (see `lib/runs.ts`).
@@ -455,12 +450,18 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         // the evidence; `nextCursor` is deliberately not read here at all,
         // because it answers "did the page fill", not "is there another row".
         const pageLimit = depsRef.current.discoverPageLimit ?? DISCOVER_LIST_LIMIT;
-        const minePageLimit = depsRef.current.myPublishedPageLimit ?? MY_PUBLISHED_LIST_LIMIT;
         // 🔴 A SECOND, PARALLEL READ — NOT A FILTER OVER THE FIRST. See
-        // MY_PUBLISHED_LIST_LIMIT for the defect this replaces. `mine` is a REAL
-        // BOOLEAN and is only ever passed when it is true: the route's schema is a
+        // `myPublished` for the defect this replaces. `mine` is a REAL BOOLEAN and
+        // is only ever passed when it is true: the route's schema is a
         // `'true' | 'false'` literal union, so a `?mine=` (what any `?? ''`
         // fallback would produce) is a 400, not a default.
+        //
+        // 🔴 NO `+1` HERE, UNLIKE THE DISCOVER READ ABOVE, AND NO SLICE BELOW.
+        // This asks for the route's own maximum (SHARED_LIST_LIMIT_MAX), which the
+        // per-author row cap sits far below and cannot pass without the route
+        // being widened too — so every row the viewer can hold fits in one page
+        // and there is nothing to disclose. The Discover horizon is crossed by any
+        // healthy board; this one is not reachable at all.
         //
         // 🔴 SKIPPED ENTIRELY FOR AN ANONYMOUS VIEWER, like the drafts read beside
         // it. An anonymous subject resolves to NULL server-side, so `mine=true`
@@ -472,7 +473,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         const [sharedRes, mineRes, drafts] = await Promise.all([
           depsRef.current.shared.list({ limit: pageLimit + 1 }),
           viewer
-            ? depsRef.current.shared.list({ mine: true, limit: minePageLimit + 1 })
+            ? depsRef.current.shared.list({ mine: true, limit: SHARED_LIST_LIMIT_MAX })
             : Promise.resolve<SharedListResult>({ items: [] }),
           viewer ? listDrafts(depsRef.current.drafts) : Promise.resolve<StoredDraft[]>([]),
         ]);
@@ -482,8 +483,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         // render may outrank or match anything that was. A row came back past the
         // horizon ⇒ that is a definite statement, not a hedge off a cursor.
         setDiscoverTruncated(sharedRes.items.length > pageLimit);
-        setMyPublished(mineRes.items.slice(0, minePageLimit));
-        setMyPublishedTruncated(mineRes.items.length > minePageLimit);
+        setMyPublished(mineRes.items);
         setMyDrafts(drafts);
       } catch (e) {
         if (!cancelled) setError(errMsg(e));
@@ -746,10 +746,17 @@ export function App({ deps: depsOverride }: AppProps = {}) {
    * Open the generator a KEPT image was made with, by its shared key.
    *
    * 🔴 Resolves against the loaded page only, and returns `false` when it cannot.
-   * The board read is ONE page (`limit: 50`, no server-side get-by-key for a
-   * generator row here), so a kept image whose generator sits past that page —
-   * or was withdrawn since — genuinely cannot be opened. The caller surfaces
-   * that; silently doing nothing would read as a dead button.
+   * The board read is ONE page, so a kept image whose generator sits past that
+   * page — or was withdrawn since — is not found here. The caller surfaces that;
+   * silently doing nothing would read as a dead button.
+   *
+   * ⚠️ "NO SERVER-SIDE GET-BY-KEY FOR A GENERATOR ROW HERE" IS WHAT THIS BLOCK
+   * USED TO SAY, AND IT IS FALSE. `depsRef.current.shared.get(key)` is live
+   * (`src/platform/sharedStorage.ts`, over `GET blocks/shared-storage/item`). So
+   * the `false` below is a choice this call site has not revisited, not an
+   * impossibility — and the "withdrawn since" half would still need handling, since
+   * `get` returns `null` for a withdrawn or moderated row too. Changing it is out
+   * of scope here on purpose.
    */
   const openPublishedByKey = useCallback(
     (key: string): boolean => {
@@ -830,9 +837,9 @@ export function App({ deps: depsOverride }: AppProps = {}) {
    * 🔴 THE SEAM TWO LISTS OF THE SAME ROWS CREATE, AND THE ONE PLACE IT IS
    * CLOSED. `myPublished` used to be a `useMemo` over `shared`, so every
    * optimistic edit applied to `shared` reached the "Published by me" panel for
-   * free. It is now its own server-filtered read (see
-   * {@link MY_PUBLISHED_LIST_LIMIT}), and the two lists OVERLAP on every row the
-   * viewer authored — which is exactly the set this app lets them mutate.
+   * free. It is now its own server-filtered read (see the `myPublished` state),
+   * and the two lists OVERLAP on every row the viewer authored — which is exactly
+   * the set this app lets them mutate.
    *
    * 🔴 THE WITHDRAW DIRECTION IS A MEASURED, USER-VISIBLE DEFECT, NOT A
    * PRECAUTION. Patching only `shared` leaves a generator removed from Discover
@@ -970,8 +977,15 @@ export function App({ deps: depsOverride }: AppProps = {}) {
 
   // Deep-open a generator from a `?g=<key>` link. Runs once the shared list has
   // loaded: find the item by key and open it in the Runner. If the key isn't in
-  // the loaded page, note it and leave the user on Browse (the block can't fetch
-  // a single shared row by key — see README limitation).
+  // the loaded page, leave the user on Browse.
+  //
+  // ⚠️ THAT FALLBACK IS A DEFECT, NOT A PLATFORM LIMIT, AND THIS COMMENT USED TO
+  // SAY OTHERWISE ("the block can't fetch a single shared row by key"). It can:
+  // `depsRef.current.shared.get(key)` is live (`src/platform/sharedStorage.ts`,
+  // over `GET blocks/shared-storage/item`). This call site does not use it yet —
+  // deliberately out of scope here, since changing it is a behaviour change with
+  // its own premise to check (what a `get` on a withdrawn or moderated key should
+  // do on screen). Same for `openPublishedByKey` above.
   const deeplinkHandled = useRef(false);
   useEffect(() => {
     if (deeplinkHandled.current || !ready || loading) return;
@@ -1034,7 +1048,6 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             discover={shared}
             myDrafts={myDrafts}
             myPublished={myPublished}
-            myPublishedTruncated={myPublishedTruncated}
             viewerId={viewer?.id ?? null}
             onSignIn={deps.requestSignIn}
             onCreate={openBuilderNew}

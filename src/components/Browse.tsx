@@ -80,25 +80,17 @@ export interface BrowseProps {
    * The viewer's OWN published generators, from a SERVER-FILTERED read over the
    * whole board — not a client filter over `discover`.
    *
-   * 🔴 THAT DISTINCTION IS WHY THIS PANEL NO LONGER HEDGES OFF
-   * `discoverTruncated`. While these rows were filtered out of the single
-   * discover page, an empty list could mean either "published nothing" or "every
-   * one of your rows sits past the page we read", so the empty state had to say
-   * so. It is now the server's answer about the viewer's own rows, so empty means
-   * empty. `discoverTruncated` is a fact about the BOARD and says nothing about
-   * this list; the only caveat that can apply here is
-   * {@link BrowseProps.myPublishedTruncated}.
+   * 🔴 THAT DISTINCTION IS WHY THIS PANEL CARRIES NO CAVEAT AT ALL. While these
+   * rows were filtered out of the single discover page, an empty list could mean
+   * either "published nothing" or "every one of your rows sits past the page we
+   * read", so the empty state had to say so. It is now the server's answer about
+   * the viewer's own rows, read at the list route's own maximum
+   * (`SHARED_LIST_LIMIT_MAX` in `App.tsx`), which the per-author row cap sits far
+   * below — so this is ALL of them, not a page of them, and empty means empty.
+   * `discoverTruncated` is a fact about the BOARD and says nothing about this
+   * list; re-reading it here is the defect, not the disclosure.
    */
   myPublished: SharedListItem[];
-  /**
-   * `myPublished` is a PAGE of the viewer's generators rather than all of them.
-   *
-   * Server-side, one author cannot hold more rows than this app asks for, so in
-   * practice this is false — see `MY_PUBLISHED_LIST_LIMIT` in `App.tsx`, which
-   * over-fetches by one row precisely so that a raised cap surfaces HERE instead
-   * of silently dropping rows.
-   */
-  myPublishedTruncated?: boolean;
   viewerId: number | null;
   /** Prompt the logged-out viewer to sign in (persistent header affordance). */
   onSignIn: () => void;
@@ -244,7 +236,7 @@ interface VoteState {
 }
 
 export function Browse(props: BrowseProps) {
-  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, myPublishedTruncated = false, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, keptTruncated = false, keptIncomplete = false, keptError = null, getImages, onOpenGeneratorKey, posting, onRequestSignIn, copyToClipboard, onRetry } = props;
+  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, keptTruncated = false, keptIncomplete = false, keptError = null, getImages, onOpenGeneratorKey, posting, onRequestSignIn, copyToClipboard, onRetry } = props;
   const [tab, setTab] = useState<Tab>('discover');
   // Motion gate for the chrome Browse owns directly (draft cards). Cards rendered
   // by PublishedCard/IntroPanel read it themselves.
@@ -670,10 +662,12 @@ export function Browse(props: BrowseProps) {
                   page this list does not have. `discoverTruncated` describes the
                   BOARD; it has nothing to say about the viewer's own rows, and
                   re-reading it here is the defect, not the disclosure.
-                  🔴 The one caveat that CAN apply is `myPublishedTruncated`, and
-                  it is rendered below the rows rather than in this empty state on
-                  purpose: it can only be true when rows were returned, so an
-                  empty list is never truncated. */}
+                  🔴 AND THERE IS NO OTHER CAVEAT EITHER. The read asks for the
+                  list route's own maximum (`SHARED_LIST_LIMIT_MAX` in `App.tsx`),
+                  which the per-author row cap sits far below and cannot pass
+                  without the route being widened in the same change — so this is
+                  every row the viewer can hold, not a page of them, and a hedge
+                  here in ANY spelling would be a false statement. */}
               {myPublished.length === 0 && (
                 <EmptyState
                   data-testid="published-empty"
@@ -699,16 +693,6 @@ export function Browse(props: BrowseProps) {
                   />
                 );
               })}
-              {/* 🔴 THE TRIPWIRE'S VISIBLE HALF. The read over-fetches by one row
-                  against the server's per-author cap, so this can only appear if
-                  that cap was raised — at which point the panel says it is
-                  showing a page instead of recreating the old defect one page
-                  further out. See `MY_PUBLISHED_LIST_LIMIT` in `App.tsx`. */}
-              {myPublishedTruncated && (
-                <span data-testid="published-partial-notice" role="status" style={metaText}>
-                  Showing your most recent generators — you have more than this app loads at once.
-                </span>
-              )}
             </Stack>
           </Stack>
         </div>

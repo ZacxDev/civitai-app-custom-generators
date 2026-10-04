@@ -32,7 +32,7 @@
 // client filter over one page cannot do better.
 //
 // It now has its OWN read: `shared.list({ mine: true, limit:
-// MY_PUBLISHED_LIST_LIMIT + 1 })`, which the server answers over the whole board
+// SHARED_LIST_LIMIT_MAX })`, which the server answers over the whole board
 // (civitai/civitai#5361). Two consequences this file pins:
 //
 //   - the rows are THERE however deep they sit, which is the regression case —
@@ -44,14 +44,24 @@
 //     the caveat describe below is retired with it, and replaced by an assertion
 //     that the panel is SILENT in all four.
 //
-// The one caveat that can still apply there is `myPublishedTruncated`, which has
-// its own two cases at the end of that describe.
+// 🔴 AND THERE IS NO SECOND CAVEAT TO TEST, WHICH IS A DELETION THIS FILE RECORDS
+// RATHER THAN A GAP. An earlier round asked for `MY_PUBLISHED_LIST_LIMIT + 1` — a
+// 50-row horizon over-fetched by one, as a tripwire on the server's PRIVATE
+// per-author row cap — plus a `myPublishedPageLimit` seam and three cases to
+// construct the resulting "showing a page of your generators" disclosure. The read
+// now asks for `SHARED_LIST_LIMIT_MAX` (100), the list route's own EXPORTED
+// maximum, and the per-author cap would have to DOUBLE before the viewer could
+// hold more rows than that returns — and it cannot be raised past 100 without the
+// route being widened in the same change. So the state those cases built is not
+// reachable by a cap move, the apparatus is gone, and the only `mine` horizon
+// assertion left is that the app asks for 100 (below).
 
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
-import { Harness } from '../platform/testing.js';
+import { __configurePlatform } from '../platform/client.js';
+import { createFakeCivitai, Harness, SITE_URL } from '../platform/testing.js';
 import type { SharedListItem } from '../platform/index.js';
 
 import { App, DISCOVER_LIST_LIMIT, type AppDeps } from '../App.js';
@@ -63,6 +73,16 @@ import { fakeShared, memoryDraftStore, mockWorkflow } from '../test-helpers.js';
 import type { GeneratorData } from '../types.js';
 
 const VIEWER_ID = 99;
+
+/**
+ * One case below configures the platform directly (no `<Harness>`) so the read can
+ * run through the REAL adapter. Reset it afterwards so a leftover client cannot
+ * reach the next test — `<Harness>` reconfigures on its own render, so this is
+ * belt-and-braces rather than load-bearing.
+ */
+afterEach(() => {
+  __configurePlatform({});
+});
 
 function item(key: string, title: string, count: number, authorUserId = 7): SharedListItem {
   return {
@@ -128,14 +148,13 @@ function withHorizon(base: SharedListItem[], hasMore: boolean) {
 function setup(
   hasMore: boolean,
   rows?: SharedListItem[],
-  horizons: { myPublishedPageLimit?: number; discoverPageLimit?: number } = {},
+  horizons: { discoverPageLimit?: number } = {},
 ) {
   const { rows: seed, pageLimit: derivedPageLimit } = withHorizon(
     rows ?? [item('a', 'Alpha gen', 5), item('b', 'Beta gen', 2)],
     hasMore,
   );
   const pageLimit = horizons.discoverPageLimit ?? derivedPageLimit;
-  const { myPublishedPageLimit } = horizons;
   const shared = fakeShared(seed, { viewerId: VIEWER_ID });
   const wf = mockWorkflow();
   const deps: Partial<AppDeps> = {
@@ -147,7 +166,6 @@ function setup(
     submit: wf.submit,
     poll: wf.poll,
     discoverPageLimit: pageLimit,
-    ...(myPublishedPageLimit !== undefined ? { myPublishedPageLimit } : {}),
   };
   render(
     <Harness viewer={{ id: VIEWER_ID, username: 'me' }} theme="dark" consentGranted showLog={false}>
@@ -455,8 +473,22 @@ describe('partial-ranking disclosure', () => {
       expect(screen.queryByTestId('published-empty')).toBeNull();
     });
 
-    it('asks the SERVER for them: one `mine: true` read, over its own horizon', async () => {
-      const shared = setup(false, PAST_THE_PAGE, { discoverPageLimit: 2, myPublishedPageLimit: 7 });
+    /**
+     * 🔴 THE HORIZON IS PINNED AS THE LITERAL 100, AND THERE IS NO SEAM TO LOWER
+     * IT. That number is civitai's EXPORTED `SHARED_LIST_LIMIT_MAX` — the largest
+     * `limit` the list route honours, on both the REST surface this app talks to
+     * and the tRPC one. The row cap it has to clear is `SHARED_KV_PER_USER_ROW_CAP`
+     * (50), which is a PRIVATE const this app cannot import and must not pin, so
+     * the claim worth asserting is not "we ask for the cap" but "we ask for the
+     * most the route will give us". Asking for LESS is the only error: it is what
+     * makes a viewer's own rows unreachable, which is the defect this whole file
+     * is about.
+     *
+     * Written as a literal rather than imported from `App.tsx`, deliberately: an
+     * assertion against the constant it tests passes however that constant moves.
+     */
+    it('asks the SERVER for them: one `mine: true` read, at the route maximum', async () => {
+      const shared = setup(false, PAST_THE_PAGE, { discoverPageLimit: 2 });
       await screen.findByTestId('discover-list');
       await waitFor(() => expect(shared.listCalls.length).toBe(2));
 
@@ -471,7 +503,68 @@ describe('partial-ranking disclosure', () => {
       // and `?mine=` is a 400. The serialisation itself is pinned in
       // `platform/sharedStorage.list.test.ts`.
       expect(mineCall.mine).toBe(true);
-      expect(mineCall.limit).toBe(8); // myPublishedPageLimit (7) + 1
+      // 🔴 100, NOT 101 — no `+1`, unlike the Discover read two lines up, and the
+      // two literals above are what pin the difference. Discover renders a page of
+      // a board it expects to outgrow and over-fetches one row as EVIDENCE of
+      // that; this one asks for more rows than a viewer can hold and so has
+      // nothing to disclose. A `+1` here would be clamped back to 100 by the route
+      // anyway, making the evidence it is supposed to carry unobtainable.
+      expect(mineCall.limit).toBe(100);
+    });
+
+    /**
+     * 🔴 THE SAME CLAIM, ON THE WIRE, THROUGH THE REAL ADAPTER — because the case
+     * above reads an OPTS OBJECT handed to an injected fake, and the thing that has
+     * to be true in production is a QUERY STRING. Those are two surfaces with a
+     * seam between them: `App` could pass `limit: 100` to a `shared` that drops it,
+     * or spell the parameter in a way the route rejects, and every assertion up
+     * there would still pass. So this one leaves `deps.shared` UNSET, letting the
+     * read run `App` -> `useSharedStorage()` -> `platform/sharedStorage.ts` ->
+     * `GET blocks/shared-storage/list` into the fake server, and asserts the
+     * recorded `URLSearchParams`.
+     *
+     * 🔴 THE 100 IS A LITERAL, NOT AN IMPORT. `expect(q.get('limit')).toBe(String(
+     * SHARED_LIST_LIMIT_MAX))` would pass for every value that constant could ever
+     * hold, which is the one thing this must not do: the direction that breaks a
+     * viewer is asking for LESS than the route allows, and only a pinned number can
+     * see that.
+     *
+     * ⚠️ The server is `platform/testing.tsx`'s fake, so this is a claim about the
+     * string this app SENDS. Nothing here has run against civitai.
+     */
+    it('🔴 on the wire, the my-published read is `limit=100&mine=true`', async () => {
+      const fake = createFakeCivitai({
+        viewer: { id: VIEWER_ID, username: 'me' },
+        shared: {
+          seed: [
+            { key: 'k1', authorUserId: VIEWER_ID, value: { title: 'Mine', body: 'd', data: { v: 1, buttons: [] } as unknown as GeneratorData } },
+          ],
+        },
+      });
+      __configurePlatform({ transport: fake.transport, fetch: fake.fetch, siteUrl: SITE_URL });
+      // NO `shared` in `deps` — that is the whole point of this case.
+      render(
+        <App
+          deps={{
+            resolveResources: async () => [],
+            drafts: memoryDraftStore(),
+          }}
+        />,
+      );
+      await screen.findByTestId('discover-list');
+
+      // 🔴 RE-FILTERED INSIDE `waitFor`. `fake.calls` grows; a `.filter()` result
+      // taken before the wait is a dead snapshot that can never satisfy it.
+      const listCalls = () => fake.calls.filter((c) => c.path === 'blocks/shared-storage/list');
+      await waitFor(() => expect(listCalls().length).toBeGreaterThanOrEqual(2));
+      const mineCalls = listCalls().filter((c) => c.query.has('mine'));
+      // Exactly one of the two reads carries the flag — the other is Discover, and
+      // a `mine` key leaking onto THAT one would make the board read a self-feed.
+      expect(mineCalls).toHaveLength(1);
+      expect(mineCalls[0].query.toString()).toBe('limit=100&mine=true');
+      // CONTROL: the recorder DOES see the other read, so the 1 above is
+      // attributable to the flag and not to a filter that matches almost nothing.
+      expect(listCalls().length - mineCalls.length).toBe(1);
     });
 
     /**
@@ -496,69 +589,13 @@ describe('partial-ranking disclosure', () => {
       // viewer and not to a recorder that never sees anything.
     });
 
-    /**
-     * 🔴 THE ONE CAVEAT THAT CAN STILL APPLY, and the tripwire behind it.
-     * `MY_PUBLISHED_LIST_LIMIT` is the server's per-author row cap, so a row past
-     * it is impossible today — the read over-fetches by one anyway, so that
-     * assumption is falsifiable at runtime instead of being a comment. If the cap
-     * is raised server-side the viewer is TOLD, rather than quietly losing rows
-     * the way the client filter did.
-     *
-     * `myPublishedPageLimit` is what makes the state constructible at all: at the
-     * production value it needs 51 rows from ONE author, which the cap forbids.
-     */
-    const FOUR_OF_MINE = [
-      item('z-mine-1', 'Mine one', 1, VIEWER_ID),
-      item('y-mine-2', 'Mine two', 1, VIEWER_ID),
-      item('x-mine-3', 'Mine three', 1, VIEWER_ID),
-      item('w-mine-4', 'Mine four', 1, VIEWER_ID),
-    ];
-
-    const MINE_NOTICE = 'published-partial-notice';
-
-    it('🔴 discloses when the viewer has MORE rows than this app loads at once', async () => {
-      setup(false, FOUR_OF_MINE, { myPublishedPageLimit: 3 });
-      await screen.findByTestId('discover-list');
-      await userEvent.click(screen.getByTestId('tab-mine'));
-
-      const mine = await screen.findByTestId('mine-list');
-      await waitFor(() => expect(mine.textContent).toContain('Mine one'));
-      // Pinned WHOLE. A fragment every branch shares would let the sentence be
-      // replaced with arbitrary text while this stayed green.
-      expect(screen.getByTestId(MINE_NOTICE).textContent).toBe(
-        'Showing your most recent generators — you have more than this app loads at once.',
-      );
-      // The horizon is respected: 3 rendered, the 4th withheld.
-      expect(mine.textContent).toContain('Mine three');
-      expect(mine.textContent).not.toContain('Mine four');
-    });
-
-    it('CONTROL: EXACTLY at the horizon the list is WHOLE, and says nothing', async () => {
-      // The boundary, on the other side. The read asks for 5 and gets 4, so the
-      // over-fetch row is absent and the claim is a fact rather than a hedge —
-      // the same `+1` reasoning `DISCOVER_LIST_LIMIT` rests on, and the case that
-      // dies if someone re-derives truncation from `nextCursor` (emitted iff the
-      // page filled, which it would here).
-      setup(false, FOUR_OF_MINE, { myPublishedPageLimit: 4 });
-      await screen.findByTestId('discover-list');
-      await userEvent.click(screen.getByTestId('tab-mine'));
-
-      const mine = await screen.findByTestId('mine-list');
-      await waitFor(() => expect(mine.textContent).toContain('Mine four'));
-      expect(screen.queryByTestId(MINE_NOTICE)).toBeNull();
-    });
-
-    it('CONTROL: an EMPTY own-list is never truncated — no notice beside the empty state', async () => {
-      // `myPublishedTruncated` can only be true when rows came back, which is why
-      // the notice lives beside the rows and not inside the empty state. A hedge
-      // appearing here would be the retired defect in a new spelling.
-      setup(true, manyItems(15), { myPublishedPageLimit: 3 });
-      await screen.findByTestId('discover-list');
-      await userEvent.click(screen.getByTestId('tab-mine'));
-
-      await screen.findByTestId('published-empty');
-      expect(screen.queryByTestId(MINE_NOTICE)).toBeNull();
-    });
+    // 🔴 THREE CASES WERE DELETED HERE, AND THE REASON IS IN THIS FILE'S HEADER:
+    // they built a "showing a page of your generators" disclosure that the read no
+    // longer has, through a `myPublishedPageLimit` seam that existed only to make
+    // that state constructible at all. No replacement guard is added in their
+    // place: with the markup gone there is nothing to assert that could be watched
+    // failing on the pre-deletion code, so a testid-absence check here would be an
+    // invariant guard reading as coverage.
   });
 
   /**
