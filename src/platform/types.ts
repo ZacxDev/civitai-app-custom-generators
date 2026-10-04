@@ -62,7 +62,37 @@ export interface SharedListResult {
  * app's own tests drive both.
  */
 export interface SharedStorage {
-  list(opts?: { prefix?: string; limit?: number; cursor?: string }): Promise<SharedListResult>;
+  list(opts?: {
+    prefix?: string;
+    limit?: number;
+    cursor?: string;
+    /**
+     * Narrow the page to rows the VIEWER authored — server-side, over the whole
+     * board, not a client filter over one page.
+     *
+     * A BOOLEAN RATHER THAN A USER ID, AND THE REASON IS YAGNI — NOT A CAPABILITY
+     * BOUNDARY. Nothing asks for an id form, and widening a boolean to an id later
+     * is easy while narrowing an id back after clients depend on it is not. ⚠️ Do
+     * not read it as an authz guard: every listed row already carries
+     * `authorUserId`, so enumerating a named author's submissions is ALREADY
+     * possible by paging the board — which is exactly the COST this parameter
+     * removes. An id form would make that cheap, not possible. `listSharedRows`'
+     * own docblock is the single source for this argument and explicitly retracts
+     * the security framing an earlier draft of it carried
+     * (civitai/civitai#5361).
+     *
+     * 🔴 AN ANONYMOUS VIEWER GETS AN EMPTY PAGE — not an error, and not the
+     * whole board. Server-side `s.author_user_id = $4::int` is UNKNOWN for a NULL
+     * subject, so it matches nothing. That is the right answer (an anonymous
+     * viewer has authored nothing) but it means an empty result here is NOT
+     * evidence the store is empty, so callers skip the request rather than making
+     * it and reading the reply as a fact about the board.
+     *
+     * Leave it UNSET to list the whole board; see the adapter for why unset must
+     * mean the key is absent from the query string.
+     */
+    mine?: boolean;
+  }): Promise<SharedListResult>;
   get(key: string): Promise<SharedListItem | null>;
   report(key: string, reason?: string): Promise<void>;
   getCount(key: string): Promise<number>;

@@ -149,7 +149,8 @@ function decodeStoreCursor(cursor: string): string {
  * and still open. It now mirrors civitai's `apps.shared.router` `list`
  * (re-derived at `5549de73`): at most `limit` rows, keyset-forward from
  * `cursor`, and `nextCursor` emitted **iff the page filled** — meaning "there
- * may be more", never "there is more".
+ * may be more", never "there is more". It also honours `mine` (see `cfg.viewerId`
+ * and the comment at the filter).
  *
  * ⚠️ One deliberate divergence, named so nobody reads more fidelity into this
  * than it has: the host orders `ORDER BY s.key DESC` and this keeps the seeded
@@ -162,9 +163,32 @@ export function fakeShared(
   seed: SharedListItem[] = [],
   cfg: {
     failWithdraw?: string;
+    /**
+     * The subject `mine: true` filters on — the viewer `<Harness>` is rendered
+     * with. Defaults to 99, the harness's own default viewer id, so the two do
+     * not drift apart silently in the suites that set neither.
+     *
+     * 🔴 A FAKE, NOT A STAND-IN FOR THE SERVER'S MECHANISM. Server-side the
+     * author is the RESOLVED TOKEN SUBJECT and is never caller input; here it is
+     * configuration, because this fake is injected in place of the adapter and
+     * has no token. So this reproduces the server's VISIBLE CONTRACT (a page
+     * narrowed to one author's rows, out of the whole store rather than out of a
+     * page) and proves nothing about how the server picks that author.
+     */
+    viewerId?: number;
   } = {},
 ) {
   const items: SharedListItem[] = [...seed];
+  const viewerId = cfg.viewerId ?? 99;
+  /**
+   * Every `list` opts object, in call order, EXACTLY as the caller passed it.
+   *
+   * 🔴 STORED BY REFERENCE AND NOT NORMALISED, because the assertions that matter
+   * are about KEY PRESENCE. `toEqual` semantics treat `{ mine: undefined }` as
+   * equal to `{}`, so a test asserting `mine: undefined` passes against code that
+   * never forwards `mine` at all — use `'mine' in opts`.
+   */
+  const listCalls: Array<Record<string, unknown>> = [];
   const appended: SharedAppendValue[] = [];
   const updated: Array<{ key: string; value: SharedAppendValue }> = [];
   /** Keys passed to `withdraw`, in call order — for asserting the delete wiring. */
@@ -179,10 +203,17 @@ export function fakeShared(
   const reported: Array<{ key: string; reason?: string }> = [];
   const shared: UseSharedStorage = {
     async list(opts) {
+      listCalls.push({ ...(opts ?? {}) });
       const limit = opts?.limit ?? 50;
       const after = opts?.cursor ? decodeStoreCursor(opts.cursor) : null;
-      const start = after == null ? 0 : items.findIndex((i) => i.key === after) + 1;
-      const page = items.slice(start, start + limit);
+      // 🔴 THE AUTHOR FILTER IS APPLIED BEFORE THE LIMIT, which is the whole
+      // property under test: the server narrows the STORE and then pages it, so a
+      // viewer's rows are reachable however deep they sit. Slicing first and
+      // filtering after would reproduce the client-side filter this app was
+      // fixed to stop doing, and every `mine` test would pass vacuously.
+      const pool = opts?.mine === true ? items.filter((i) => i.authorUserId === viewerId) : items;
+      const start = after == null ? 0 : pool.findIndex((i) => i.key === after) + 1;
+      const page = pool.slice(start, start + limit);
       return {
         items: page,
         // iff the page FILLED — the host's rule, and the one this app must not
@@ -226,7 +257,7 @@ export function fakeShared(
       return { ok: true, deleted };
     },
   };
-  return { shared, appended, items, updated, withdrawn, reported, update };
+  return { shared, appended, items, updated, withdrawn, reported, update, listCalls };
 }
 
 export interface MockWorkflowOpts {

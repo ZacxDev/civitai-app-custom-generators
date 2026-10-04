@@ -36,7 +36,12 @@ import {
   useSharedStorage,
   useAppStorage,
 } from './platform/index.js';
-import type { SharedAppendValue, SharedListItem, UseSharedStorage } from './platform/index.js';
+import type {
+  SharedAppendValue,
+  SharedListItem,
+  SharedListResult,
+  UseSharedStorage,
+} from './platform/index.js';
 
 import { Loader } from './ui/index.js';
 
@@ -207,6 +212,38 @@ export interface AppDeps {
  */
 export const DISCOVER_LIST_LIMIT = 50;
 
+/**
+ * The LARGEST `limit` the shared-storage list route will honour — the EXPORTED
+ * `SHARED_LIST_LIMIT_MAX` in civitai
+ * `src/server/routers/apps-shared.router.ts`, re-derived at `7ce2adf8`.
+ *
+ * 🔴 A MIRRORED SERVER CONSTANT, AND THE ONLY DIRECTION IT CAN BE WRONG IN IS
+ * DOWN. The route clamps `limit` to this value on BOTH surfaces — the REST
+ * adapter this app talks to (civitai
+ * `src/pages/api/v1/blocks/shared-storage/list.ts`) and the tRPC input — so
+ * asking for this much is harmless whatever the server's own number is: a server
+ * that lowered it would clamp us down, and a server that raised it would simply
+ * leave headroom unused. Asking for LESS is the only error, because that is what
+ * makes rows unreachable. That asymmetry is why this is mirrored as a plain
+ * number rather than guarded: a stale copy here cannot produce a 400 and cannot
+ * lose a row.
+ *
+ * 🔴 ASKING FOR THE MAX IS WHAT MAKES "Published by me" COMPLETE RATHER THAN
+ * MERELY DEEPER, WITHOUT THIS APP KNOWING THE PER-AUTHOR CAP. The server refuses
+ * a write once an author holds `SHARED_KV_PER_USER_ROW_CAP` rows — a PRIVATE
+ * const, 50 at `7ce2adf8`, which this app cannot import and must not pin. At a
+ * limit of this size, that cap would have to DOUBLE before a viewer could hold
+ * more rows than one page returns; and it cannot be raised past this number
+ * without the list route being widened in the same change, since a per-author cap
+ * above the list max would make an author's own rows unreachable in one page for
+ * every consumer of the route. So truncation of the viewer's own list is not
+ * reachable by a cap change alone, and the app carries no apparatus for it.
+ *
+ * The server returns at most the cap's worth of rows either way, so asking for
+ * this rather than 50 changes no wire payload today.
+ */
+export const SHARED_LIST_LIMIT_MAX = 100;
+
 export interface AppProps {
   /** Override any hook-backed dependency (component + e2e test seam). */
   deps?: Partial<AppDeps>;
@@ -320,6 +357,38 @@ export function App({ deps: depsOverride }: AppProps = {}) {
    * `discoverTruncated` on <Browse>.
    */
   const [discoverTruncated, setDiscoverTruncated] = useState(false);
+  /**
+   * The viewer's OWN published rows, from their OWN server-filtered read at
+   * {@link SHARED_LIST_LIMIT_MAX} — not a client filter over `shared`.
+   *
+   * 🔴 WHY A SECOND REQUEST RATHER THAN A FILTER OVER THE DISCOVER PAGE. It used
+   * to be `shared.filter((s) => s.authorUserId === viewer.id)` over the one
+   * discover page — so a viewer's own generators that had scrolled past the newest
+   * {@link DISCOVER_LIST_LIMIT} rows of the WHOLE BOARD were missing from their
+   * own list, with nothing on screen saying so. On a healthy board that page fills
+   * on any 50+ generators, i.e. the ordinary state, and the panel then rendered "I
+   * have published fewer things than I have" — or, when every one of their rows
+   * sat past the horizon, "Nothing published". `list` is newest-first with no rank
+   * parameter and there was no pagination loop, so no amount of client work could
+   * recover the missing rows.
+   *
+   * The server answers the question directly: `mine=true` narrows the page to rows
+   * the VIEWER authored (civitai/civitai#5361). Discover and this are different
+   * questions with different completeness requirements — "a page of the board,
+   * honestly disclosed as a page" versus "everything you published" — so they are
+   * two reads. Folding them into one would have to either break the discover
+   * read's `+1` truncation evidence or keep the client filter, and the client
+   * filter is the defect.
+   *
+   * 🔴 NO TRUNCATION APPARATUS, AND ITS ABSENCE IS A CLAIM — see
+   * {@link SHARED_LIST_LIMIT_MAX}. Asking for the route's maximum means the
+   * server's per-author row cap would have to DOUBLE before this list could be a
+   * page rather than the whole thing, and it cannot be raised past that maximum
+   * without the route being widened in the same change. There is no `+1`
+   * over-fetch here and no disclosure, unlike {@link DISCOVER_LIST_LIMIT}, whose
+   * horizon a healthy board crosses every day.
+   */
+  const [myPublished, setMyPublished] = useState<SharedListItem[]>([]);
   const [myDrafts, setMyDrafts] = useState<StoredDraft[]>([]);
   /**
    * The viewer's KEPT runs — the app's durable end-state (see `lib/runs.ts`).
@@ -381,8 +450,31 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         // the evidence; `nextCursor` is deliberately not read here at all,
         // because it answers "did the page fill", not "is there another row".
         const pageLimit = depsRef.current.discoverPageLimit ?? DISCOVER_LIST_LIMIT;
-        const [sharedRes, drafts] = await Promise.all([
+        // 🔴 A SECOND, PARALLEL READ — NOT A FILTER OVER THE FIRST. See
+        // `myPublished` for the defect this replaces. `mine` is a REAL BOOLEAN and
+        // is only ever passed when it is true: the route's schema is a
+        // `'true' | 'false'` literal union, so a `?mine=` (what any `?? ''`
+        // fallback would produce) is a 400, not a default.
+        //
+        // 🔴 NO `+1` HERE, UNLIKE THE DISCOVER READ ABOVE, AND NO SLICE BELOW.
+        // This asks for the route's own maximum (SHARED_LIST_LIMIT_MAX), which the
+        // per-author row cap sits far below and cannot pass without the route
+        // being widened too — so every row the viewer can hold fits in one page
+        // and there is nothing to disclose. The Discover horizon is crossed by any
+        // healthy board; this one is not reachable at all.
+        //
+        // 🔴 SKIPPED ENTIRELY FOR AN ANONYMOUS VIEWER, like the drafts read beside
+        // it. An anonymous subject resolves to NULL server-side, so `mine=true`
+        // returns an EMPTY PAGE rather than an error or the whole board — the
+        // right answer, but one that is indistinguishable from "the store is
+        // empty". Not making the request keeps that ambiguity out of the app: the
+        // panel's empty state for a signed-out visitor is about having no account,
+        // which it already says.
+        const [sharedRes, mineRes, drafts] = await Promise.all([
           depsRef.current.shared.list({ limit: pageLimit + 1 }),
+          viewer
+            ? depsRef.current.shared.list({ mine: true, limit: SHARED_LIST_LIMIT_MAX })
+            : Promise.resolve<SharedListResult>({ items: [] }),
           viewer ? listDrafts(depsRef.current.drafts) : Promise.resolve<StoredDraft[]>([]),
         ]);
         if (cancelled) return;
@@ -391,6 +483,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         // render may outrank or match anything that was. A row came back past the
         // horizon ⇒ that is a definite statement, not a hedge off a cursor.
         setDiscoverTruncated(sharedRes.items.length > pageLimit);
+        setMyPublished(mineRes.items);
         setMyDrafts(drafts);
       } catch (e) {
         if (!cancelled) setError(errMsg(e));
@@ -402,11 +495,6 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       cancelled = true;
     };
   }, [ready, view, viewer, reloadKey]);
-
-  const myPublished = useMemo(
-    () => (viewer ? shared.filter((s) => s.authorUserId === viewer.id) : []),
-    [shared, viewer],
-  );
 
   // Load the viewer's kept runs once the host is ready. Anonymous viewers have
   // none by construction (per-user storage rejects an unauthenticated subject),
@@ -658,10 +746,17 @@ export function App({ deps: depsOverride }: AppProps = {}) {
    * Open the generator a KEPT image was made with, by its shared key.
    *
    * 🔴 Resolves against the loaded page only, and returns `false` when it cannot.
-   * The board read is ONE page (`limit: 50`, no server-side get-by-key for a
-   * generator row here), so a kept image whose generator sits past that page —
-   * or was withdrawn since — genuinely cannot be opened. The caller surfaces
-   * that; silently doing nothing would read as a dead button.
+   * The board read is ONE page, so a kept image whose generator sits past that
+   * page — or was withdrawn since — is not found here. The caller surfaces that;
+   * silently doing nothing would read as a dead button.
+   *
+   * ⚠️ "NO SERVER-SIDE GET-BY-KEY FOR A GENERATOR ROW HERE" IS WHAT THIS BLOCK
+   * USED TO SAY, AND IT IS FALSE. `depsRef.current.shared.get(key)` is live
+   * (`src/platform/sharedStorage.ts`, over `GET blocks/shared-storage/item`). So
+   * the `false` below is a choice this call site has not revisited, not an
+   * impossibility — and the "withdrawn since" half would still need handling, since
+   * `get` returns `null` for a withdrawn or moderated row too. Changing it is out
+   * of scope here on purpose.
    */
   const openPublishedByKey = useCallback(
     (key: string): boolean => {
@@ -736,24 +831,73 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     [reload],
   );
 
+  /**
+   * Apply one row-level edit to BOTH board lists, and hand back its rollback.
+   *
+   * 🔴 THE SEAM TWO LISTS OF THE SAME ROWS CREATE, AND THE ONE PLACE IT IS
+   * CLOSED. `myPublished` used to be a `useMemo` over `shared`, so every
+   * optimistic edit applied to `shared` reached the "Published by me" panel for
+   * free. It is now its own server-filtered read (see the `myPublished` state),
+   * and the two lists OVERLAP on every row the viewer authored — which is exactly
+   * the set this app lets them mutate.
+   *
+   * 🔴 THE WITHDRAW DIRECTION IS A MEASURED, USER-VISIBLE DEFECT, NOT A
+   * PRECAUTION. Patching only `shared` leaves a generator removed from Discover
+   * and still listed under "Published by me" — the panel the Remove button lives
+   * on, so the viewer's own action appears to have done nothing. `Browse.test.tsx`
+   * ("confirm → calls withdraw(key) and optimistically removes the card") was
+   * watched going RED on exactly that state when this second list was introduced,
+   * and green once both were patched.
+   *
+   * ⚠️ THE VOTE DIRECTION IS NOT THE SAME CLAIM, AND THE DIFFERENCE IS WORTH
+   * RECORDING. `Browse` keeps its own `voteOverlay` keyed on `item.key` and both
+   * panels read counts through it, so a divergence between these two lists is
+   * SHADOWED in the UI for as long as that overlay holds. Routing the vote
+   * through here keeps the underlying rows coherent — which matters to anything
+   * reading `item.count` directly — but no test here demonstrates a visible bug
+   * in that direction, and none should claim to.
+   *
+   * The rollback captures each list's PRE-EDIT value, read when it is called
+   * rather than when it is built — the same ordering the single-list version
+   * relied on, since a state updater runs after the handler returns.
+   */
+  const patchBoardRows = useCallback(
+    (fn: (list: SharedListItem[]) => SharedListItem[]): (() => void) => {
+      let prevShared: SharedListItem[] = [];
+      let prevMine: SharedListItem[] = [];
+      setShared((list) => {
+        prevShared = list;
+        return fn(list);
+      });
+      setMyPublished((list) => {
+        prevMine = list;
+        return fn(list);
+      });
+      return () => {
+        setShared(prevShared);
+        setMyPublished(prevMine);
+      };
+    },
+    [],
+  );
+
   // Withdraw one of the viewer's OWN published generators (the shared_kv row).
-  // Optimistically drop it from the list, then call `withdraw(key)`; on failure
-  // restore the list and surface the host error. A local draft that pointed at
+  // Optimistically drop it from BOTH lists, then call `withdraw(key)`; on failure
+  // restore them and surface the host error. A local draft that pointed at
   // this row keeps its config but is unlinked (the published copy is gone).
-  const handleDeletePublished = useCallback(async (item: SharedListItem) => {
-    let prev: SharedListItem[] = [];
-    setShared((list) => {
-      prev = list;
-      return list.filter((s) => s.key !== item.key);
-    });
-    setError(null);
-    try {
-      await depsRef.current.shared.withdraw(item.key);
-    } catch (e) {
-      setShared(prev); // rollback the optimistic removal
-      setError(errMsg(e));
-    }
-  }, []);
+  const handleDeletePublished = useCallback(
+    async (item: SharedListItem) => {
+      const rollback = patchBoardRows((list) => list.filter((s) => s.key !== item.key));
+      setError(null);
+      try {
+        await depsRef.current.shared.withdraw(item.key);
+      } catch (e) {
+        rollback(); // undo the optimistic removal on BOTH lists
+        setError(errMsg(e));
+      }
+    },
+    [patchBoardRows],
+  );
 
   // Cast/remove this viewer's up-vote on a published generator. Returns the
   // authoritative post-vote count (the Browse card drives the optimistic update
@@ -769,11 +913,12 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     const count = nextVoted
       ? await depsRef.current.shared.vote(item.key)
       : await depsRef.current.shared.unvote(item.key);
-    // Reflect the authoritative count back into the App's list so a re-render
-    // (or a sort-by-popularity) sees it without a full reload.
-    setShared((list) => list.map((s) => (s.key === item.key ? { ...s, count } : s)));
+    // Reflect the authoritative count back into BOTH App lists so a re-render (or
+    // a sort-by-popularity) sees it without a full reload. A viewer CAN vote on
+    // their own row, so this row is in both lists whenever it is theirs.
+    patchBoardRows((list) => list.map((s) => (s.key === item.key ? { ...s, count } : s)));
     return count;
-  }, [viewer]);
+  }, [viewer, patchBoardRows]);
 
   // File a published generator for PLATFORM moderator review.
   //
@@ -832,8 +977,15 @@ export function App({ deps: depsOverride }: AppProps = {}) {
 
   // Deep-open a generator from a `?g=<key>` link. Runs once the shared list has
   // loaded: find the item by key and open it in the Runner. If the key isn't in
-  // the loaded page, note it and leave the user on Browse (the block can't fetch
-  // a single shared row by key — see README limitation).
+  // the loaded page, leave the user on Browse.
+  //
+  // ⚠️ THAT FALLBACK IS A DEFECT, NOT A PLATFORM LIMIT, AND THIS COMMENT USED TO
+  // SAY OTHERWISE ("the block can't fetch a single shared row by key"). It can:
+  // `depsRef.current.shared.get(key)` is live (`src/platform/sharedStorage.ts`,
+  // over `GET blocks/shared-storage/item`). This call site does not use it yet —
+  // deliberately out of scope here, since changing it is a behaviour change with
+  // its own premise to check (what a `get` on a withdrawn or moderated key should
+  // do on screen). Same for `openPublishedByKey` above.
   const deeplinkHandled = useRef(false);
   useEffect(() => {
     if (deeplinkHandled.current || !ready || loading) return;

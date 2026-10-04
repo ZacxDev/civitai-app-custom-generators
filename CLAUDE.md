@@ -80,8 +80,15 @@ suffix are topic worktrees of the same remotes, usually on someone's branch.
 `packages/civitai-app-sdk`, `civitai-blocks-react`, `civitai-components`,
 `civitai-components-react`, `civitai-theme`. A missing hook, a wrong type, a
 mock host that doesn't simulate something: that is a PR there, not a workaround
-here. The shared-storage "fetch one row by key" seam this app wants for `?g=`
-deeplinks past page one is a host gap, not a bug here.
+here.
+
+⚠️ **A "fetch one shared row by key" host gap used to be claimed here, and it is
+FALSE** — `shared.get(key)` is live in this app's own adapter
+(`src/platform/sharedStorage.ts`, over `GET blocks/shared-storage/item`). The two
+`?g=` deeplink resolvers in `src/App.tsx` still go through `shared.find(...)` over
+the single loaded Discover page and therefore still miss a key past it, but that is
+a defect HERE with an available seam, not something waiting on the platform. Do not
+re-file it upstream.
 
 Useful landmarks in `civitai/civitai`: `src/pages/apps/run` (the page surface),
 `src/pages/api/blocks/manifest-schema.ts` + `submit-version.ts`,

@@ -85,6 +85,17 @@ export function createSharedStorage(): SharedStorage {
           ...(opts.prefix !== undefined ? { prefix: opts.prefix } : {}),
           ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
           ...(opts.cursor !== undefined ? { cursor: opts.cursor } : {}),
+          // 🔴 CONDITIONALLY SPREAD, AND A REAL BOOLEAN — both halves matter, and
+          // the route 400s on either mistake. Its schema is
+          // `z.union([z.literal('true'), z.literal('false')]).optional()`, so:
+          //   - the SDK's `urlFor` renders a boolean as `?mine=true` / `?mine=false`
+          //     (`String(item)`), which the union accepts;
+          //   - an UNSET `mine` must leave the key out ENTIRELY. A `?? ''`
+          //     fallback would send `?mine=`, which matches neither literal and
+          //     400s rather than defaulting to the whole board. An unrecognised
+          //     value is loud by design there, so a typo cannot quietly widen a
+          //     "my rows" read back into a full-board read.
+          ...(opts.mine !== undefined ? { mine: opts.mine } : {}),
         },
       });
       const result: SharedListResult = { items: (res.items ?? []).map(reviveItem) };

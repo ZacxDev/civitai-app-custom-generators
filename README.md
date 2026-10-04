@@ -56,7 +56,10 @@ rendered; the viewer sees copy keyed off `.code`.
 
 - **Browse** (`components/Browse.tsx`) — Discover (published generators with
   vote counts, **search**, **sort by Newest/Popular**, and paginated "Show
-  more") / My generators (drafts + own published, paginated). Each published
+  more") / My generators (paginated drafts + own published). The own-published
+  list is its OWN server-filtered read (`list({ mine: true })`), not a filter
+  over the Discover page — the board read is one page, so a client filter lost
+  every generator of yours that had scrolled past it. Each published
   card has **up-vote** (optimistic + rollback), **Share** (copies a `?g=<key>`
   deeplink), and **Make a copy** (fork into your own draft) affordances. The
   Discover/Mine switcher is an ARIA tablist (roving tabindex + arrow keys).
@@ -99,10 +102,15 @@ generator directly in the Runner (then cleans the address bar). The "Share"
 affordance copies a self-referential `?g=` URL. `lib/meta.ts` sets
 `document.title` + `og:*` tags for the opened generator.
 
-- **Limitation:** the block can only deep-open a key present in the loaded
-  Discover page (the shared store exposes `list`/`getCount(s)` but no
-  fetch-single-row-by-key seam). A key past the first page currently leaves the
-  user on Browse.
+- **Known defect (not a platform limit):** both deeplink resolvers in
+  `src/App.tsx` match the key against the loaded Discover page only, so a key past
+  that page leaves the viewer on Browse. ⚠️ This used to be written up here as a
+  missing host seam — "the shared store exposes `list`/`getCount(s)` but no
+  fetch-single-row-by-key" — and that is **false**: `shared.get(key)` is live in
+  `src/platform/sharedStorage.ts` (over `GET blocks/shared-storage/item`). The call
+  sites simply do not use it yet. Fixing them also has to decide what to show when
+  `get` returns `null`, which it does for a withdrawn or moderated row as well as a
+  missing one.
 - **OG caveat:** real crawler-facing Open Graph must come from the host's SSR (a
   crawler never runs the iframe JS); `setGeneratorMeta` is a best-effort,
   live-document update for in-app share / same-tab navigation only.

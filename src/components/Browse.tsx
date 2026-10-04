@@ -76,6 +76,20 @@ export interface BrowseProps {
    */
   discoverTruncated: boolean;
   myDrafts: StoredDraft[];
+  /**
+   * The viewer's OWN published generators, from a SERVER-FILTERED read over the
+   * whole board — not a client filter over `discover`.
+   *
+   * 🔴 THAT DISTINCTION IS WHY THIS PANEL CARRIES NO CAVEAT AT ALL. While these
+   * rows were filtered out of the single discover page, an empty list could mean
+   * either "published nothing" or "every one of your rows sits past the page we
+   * read", so the empty state had to say so. It is now the server's answer about
+   * the viewer's own rows, read at the list route's own maximum
+   * (`SHARED_LIST_LIMIT_MAX` in `App.tsx`), which the per-author row cap sits far
+   * below — so this is ALL of them, not a page of them, and empty means empty.
+   * `discoverTruncated` is a fact about the BOARD and says nothing about this
+   * list; re-reading it here is the defect, not the disclosure.
+   */
   myPublished: SharedListItem[];
   viewerId: number | null;
   /** Prompt the logged-out viewer to sign in (persistent header affordance). */
@@ -635,36 +649,30 @@ export function Browse(props: BrowseProps) {
 
             <Stack gap={10}>
               <div style={{ fontSize: 13, color: c.muted, fontWeight: 600 }}>Published by me</div>
-              {/* 🔴 `myPublished` is filtered out of the SAME single page, so on a
-                  truncated board the viewer's own generators past that page are
-                  missing here — and if all of them are, this panel would claim
-                  they published nothing.
-                  🔴 BOTH halves move together, and both are gated on the SAME
-                  pair. The title stops asserting "nothing" (it would be false
-                  for someone with 30 published generators) and the body KEEPS
-                  its call to action, appending the caveat rather than replacing
-                  it. Earlier rounds traded one for the other in each direction;
-                  neither trade was necessary.
-                  🔴 The `viewerId` half is not decoration: `myPublished` is empty
-                  for a signed-out viewer for a reason that has nothing to do
-                  with truncation, and telling someone with no account that
-                  "anything you published earlier may not appear" addresses a
-                  history they do not have. Dropping EITHER condition from EITHER
-                  branch is a live defect — the untruncated case would hedge at a
-                  page that does not exist — so both are pinned. */}
+              {/* 🔴 NO HEDGE, AND THE ABSENCE IS THE FIX. This panel used to carry
+                  a caveat gated on `viewerId != null && discoverTruncated`
+                  ("Nothing published in the loaded page" / "anything you
+                  published earlier may not be listed here"), because
+                  `myPublished` was a CLIENT FILTER over the one discover page —
+                  so an empty list genuinely could not tell "published nothing"
+                  from "all your rows are past the page we read".
+                  The rows now come from their own `mine=true` read over the whole
+                  board, bounded by the server's per-author row cap, so empty
+                  means empty and the caveat would be a false statement about a
+                  page this list does not have. `discoverTruncated` describes the
+                  BOARD; it has nothing to say about the viewer's own rows, and
+                  re-reading it here is the defect, not the disclosure.
+                  🔴 AND THERE IS NO OTHER CAVEAT EITHER. The read asks for the
+                  list route's own maximum (`SHARED_LIST_LIMIT_MAX` in `App.tsx`),
+                  which the per-author row cap sits far below and cannot pass
+                  without the route being widened in the same change — so this is
+                  every row the viewer can hold, not a page of them, and a hedge
+                  here in ANY spelling would be a false statement. */}
               {myPublished.length === 0 && (
                 <EmptyState
                   data-testid="published-empty"
-                  title={
-                    viewerId != null && discoverTruncated
-                      ? 'Nothing published in the loaded page'
-                      : 'Nothing published yet'
-                  }
-                  body={
-                    viewerId != null && discoverTruncated
-                      ? 'Publish a generator from the builder to share it in Discover. Note this app loads only part of the catalog at once, so anything you published earlier may not be listed here.'
-                      : 'Publish a generator from the builder to share it in Discover.'
-                  }
+                  title="Nothing published yet"
+                  body="Publish a generator from the builder to share it in Discover."
                 />
               )}
               {myPublished.map((item, i) => {
