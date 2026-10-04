@@ -36,7 +36,12 @@ import {
   useSharedStorage,
   useAppStorage,
 } from './platform/index.js';
-import type { SharedAppendValue, SharedListItem, UseSharedStorage } from './platform/index.js';
+import type {
+  SharedAppendValue,
+  SharedListItem,
+  SharedListResult,
+  UseSharedStorage,
+} from './platform/index.js';
 
 import { Loader } from './ui/index.js';
 
@@ -165,6 +170,18 @@ export interface AppDeps {
    * behaviour, because production never sets it.
    */
   discoverPageLimit?: number;
+  /**
+   * How many of the viewer's OWN published rows the panel renders; defaults to
+   * {@link MY_PUBLISHED_LIST_LIMIT} (test seam).
+   *
+   * It exists for the same reason {@link AppDeps.discoverPageLimit} does, and for
+   * one more: at the production value the truncated state needs 51 of ONE
+   * viewer's rows, which the server's per-author cap makes impossible to reach in
+   * production and expensive to render in jsdom. Lowering the horizon is what
+   * makes that disclosure testable at its own boundary. It changes no production
+   * behaviour, because production never sets it.
+   */
+  myPublishedPageLimit?: number;
 }
 
 /**
@@ -206,6 +223,46 @@ export interface AppDeps {
  * away — the one change that would silently restore the defect.
  */
 export const DISCOVER_LIST_LIMIT = 50;
+
+/**
+ * Rows the "Published by me" panel RENDERS, out of its OWN server-filtered read.
+ *
+ * 🔴 WHY THIS IS A SECOND REQUEST AND NOT A FILTER OVER THE DISCOVER PAGE. It
+ * used to be `shared.filter((s) => s.authorUserId === viewer.id)` over the one
+ * discover page — so a viewer's own generators that had scrolled past the newest
+ * {@link DISCOVER_LIST_LIMIT} rows of the WHOLE BOARD were missing from their own
+ * list, with nothing on screen saying so. On a healthy board that page fills on
+ * any 50+ generators, i.e. the ordinary state, and the panel then rendered "I
+ * have published fewer things than I have" — or, when every one of their rows sat
+ * past the horizon, "Nothing published". `list` is newest-first with no rank
+ * parameter and there was no pagination loop, so no amount of client work could
+ * recover the missing rows.
+ *
+ * The server answers the question directly: `mine=true` narrows the page to rows
+ * the VIEWER authored (civitai/civitai#5361). The two lists are different
+ * questions with different completeness requirements — Discover is "a page of the
+ * board, honestly disclosed as a page", this is "everything you published" — so
+ * they are two reads. Folding them into one would have to either break the
+ * discover read's `+1` truncation evidence or keep the client filter, and the
+ * client filter is the defect.
+ *
+ * 🔴 THIS VALUE IS THE SERVER'S PER-AUTHOR ROW CAP, WHICH IS WHAT MAKES THE LIST
+ * COMPLETE RATHER THAN MERELY DEEPER. `appendSharedRow` refuses a write once the
+ * author already holds `SHARED_KV_PER_USER_ROW_CAP` rows — 50, re-derived at
+ * `1d758251` — so no viewer can have more than this many, and `list` additionally
+ * excludes hidden rows. One read of this size therefore returns every row the
+ * viewer can possibly have.
+ *
+ * 🔴 AND THE READ STILL ASKS FOR ONE MORE, AS A TRIPWIRE ON THAT CLAIM. The cap
+ * is a server constant this app cannot see, so "complete" is an assumption about
+ * someone else's code. The same `+1` technique {@link DISCOVER_LIST_LIMIT} uses
+ * makes the assumption falsifiable at runtime: a row past this horizon can only
+ * mean the cap moved, and the panel then DISCLOSES that it is showing a page
+ * instead of silently recreating the defect one page further out.
+ * `nextCursor` is again deliberately not read — it is emitted iff the page
+ * filled, so it answers the wrong question (see {@link DISCOVER_LIST_LIMIT}).
+ */
+export const MY_PUBLISHED_LIST_LIMIT = 50;
 
 export interface AppProps {
   /** Override any hook-backed dependency (component + e2e test seam). */
@@ -320,6 +377,23 @@ export function App({ deps: depsOverride }: AppProps = {}) {
    * `discoverTruncated` on <Browse>.
    */
   const [discoverTruncated, setDiscoverTruncated] = useState(false);
+  /**
+   * The viewer's OWN published rows, from their own server-filtered read — not a
+   * client filter over `shared`. See {@link MY_PUBLISHED_LIST_LIMIT} for why this
+   * is a second request and why that makes the list complete.
+   */
+  const [myPublished, setMyPublished] = useState<SharedListItem[]>([]);
+  /**
+   * A row came back past {@link MY_PUBLISHED_LIST_LIMIT}, so the panel is showing
+   * a page of the viewer's generators rather than all of them.
+   *
+   * 🔴 UNREACHABLE WHILE THE SERVER'S PER-AUTHOR CAP STAYS AT THE SAME VALUE, and
+   * that is the point rather than dead code: it is the observable half of the
+   * tripwire described on {@link MY_PUBLISHED_LIST_LIMIT}. If the cap is raised
+   * server-side, this flips and the viewer is TOLD, instead of quietly losing
+   * rows the way the client filter did.
+   */
+  const [myPublishedTruncated, setMyPublishedTruncated] = useState(false);
   const [myDrafts, setMyDrafts] = useState<StoredDraft[]>([]);
   /**
    * The viewer's KEPT runs — the app's durable end-state (see `lib/runs.ts`).
@@ -381,8 +455,25 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         // the evidence; `nextCursor` is deliberately not read here at all,
         // because it answers "did the page fill", not "is there another row".
         const pageLimit = depsRef.current.discoverPageLimit ?? DISCOVER_LIST_LIMIT;
-        const [sharedRes, drafts] = await Promise.all([
+        const minePageLimit = depsRef.current.myPublishedPageLimit ?? MY_PUBLISHED_LIST_LIMIT;
+        // 🔴 A SECOND, PARALLEL READ — NOT A FILTER OVER THE FIRST. See
+        // MY_PUBLISHED_LIST_LIMIT for the defect this replaces. `mine` is a REAL
+        // BOOLEAN and is only ever passed when it is true: the route's schema is a
+        // `'true' | 'false'` literal union, so a `?mine=` (what any `?? ''`
+        // fallback would produce) is a 400, not a default.
+        //
+        // 🔴 SKIPPED ENTIRELY FOR AN ANONYMOUS VIEWER, like the drafts read beside
+        // it. An anonymous subject resolves to NULL server-side, so `mine=true`
+        // returns an EMPTY PAGE rather than an error or the whole board — the
+        // right answer, but one that is indistinguishable from "the store is
+        // empty". Not making the request keeps that ambiguity out of the app: the
+        // panel's empty state for a signed-out visitor is about having no account,
+        // which it already says.
+        const [sharedRes, mineRes, drafts] = await Promise.all([
           depsRef.current.shared.list({ limit: pageLimit + 1 }),
+          viewer
+            ? depsRef.current.shared.list({ mine: true, limit: minePageLimit + 1 })
+            : Promise.resolve<SharedListResult>({ items: [] }),
           viewer ? listDrafts(depsRef.current.drafts) : Promise.resolve<StoredDraft[]>([]),
         ]);
         if (cancelled) return;
@@ -391,6 +482,8 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         // render may outrank or match anything that was. A row came back past the
         // horizon ⇒ that is a definite statement, not a hedge off a cursor.
         setDiscoverTruncated(sharedRes.items.length > pageLimit);
+        setMyPublished(mineRes.items.slice(0, minePageLimit));
+        setMyPublishedTruncated(mineRes.items.length > minePageLimit);
         setMyDrafts(drafts);
       } catch (e) {
         if (!cancelled) setError(errMsg(e));
@@ -402,11 +495,6 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       cancelled = true;
     };
   }, [ready, view, viewer, reloadKey]);
-
-  const myPublished = useMemo(
-    () => (viewer ? shared.filter((s) => s.authorUserId === viewer.id) : []),
-    [shared, viewer],
-  );
 
   // Load the viewer's kept runs once the host is ready. Anonymous viewers have
   // none by construction (per-user storage rejects an unauthenticated subject),
@@ -736,24 +824,73 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     [reload],
   );
 
+  /**
+   * Apply one row-level edit to BOTH board lists, and hand back its rollback.
+   *
+   * 🔴 THE SEAM TWO LISTS OF THE SAME ROWS CREATE, AND THE ONE PLACE IT IS
+   * CLOSED. `myPublished` used to be a `useMemo` over `shared`, so every
+   * optimistic edit applied to `shared` reached the "Published by me" panel for
+   * free. It is now its own server-filtered read (see
+   * {@link MY_PUBLISHED_LIST_LIMIT}), and the two lists OVERLAP on every row the
+   * viewer authored — which is exactly the set this app lets them mutate.
+   *
+   * 🔴 THE WITHDRAW DIRECTION IS A MEASURED, USER-VISIBLE DEFECT, NOT A
+   * PRECAUTION. Patching only `shared` leaves a generator removed from Discover
+   * and still listed under "Published by me" — the panel the Remove button lives
+   * on, so the viewer's own action appears to have done nothing. `Browse.test.tsx`
+   * ("confirm → calls withdraw(key) and optimistically removes the card") was
+   * watched going RED on exactly that state when this second list was introduced,
+   * and green once both were patched.
+   *
+   * ⚠️ THE VOTE DIRECTION IS NOT THE SAME CLAIM, AND THE DIFFERENCE IS WORTH
+   * RECORDING. `Browse` keeps its own `voteOverlay` keyed on `item.key` and both
+   * panels read counts through it, so a divergence between these two lists is
+   * SHADOWED in the UI for as long as that overlay holds. Routing the vote
+   * through here keeps the underlying rows coherent — which matters to anything
+   * reading `item.count` directly — but no test here demonstrates a visible bug
+   * in that direction, and none should claim to.
+   *
+   * The rollback captures each list's PRE-EDIT value, read when it is called
+   * rather than when it is built — the same ordering the single-list version
+   * relied on, since a state updater runs after the handler returns.
+   */
+  const patchBoardRows = useCallback(
+    (fn: (list: SharedListItem[]) => SharedListItem[]): (() => void) => {
+      let prevShared: SharedListItem[] = [];
+      let prevMine: SharedListItem[] = [];
+      setShared((list) => {
+        prevShared = list;
+        return fn(list);
+      });
+      setMyPublished((list) => {
+        prevMine = list;
+        return fn(list);
+      });
+      return () => {
+        setShared(prevShared);
+        setMyPublished(prevMine);
+      };
+    },
+    [],
+  );
+
   // Withdraw one of the viewer's OWN published generators (the shared_kv row).
-  // Optimistically drop it from the list, then call `withdraw(key)`; on failure
-  // restore the list and surface the host error. A local draft that pointed at
+  // Optimistically drop it from BOTH lists, then call `withdraw(key)`; on failure
+  // restore them and surface the host error. A local draft that pointed at
   // this row keeps its config but is unlinked (the published copy is gone).
-  const handleDeletePublished = useCallback(async (item: SharedListItem) => {
-    let prev: SharedListItem[] = [];
-    setShared((list) => {
-      prev = list;
-      return list.filter((s) => s.key !== item.key);
-    });
-    setError(null);
-    try {
-      await depsRef.current.shared.withdraw(item.key);
-    } catch (e) {
-      setShared(prev); // rollback the optimistic removal
-      setError(errMsg(e));
-    }
-  }, []);
+  const handleDeletePublished = useCallback(
+    async (item: SharedListItem) => {
+      const rollback = patchBoardRows((list) => list.filter((s) => s.key !== item.key));
+      setError(null);
+      try {
+        await depsRef.current.shared.withdraw(item.key);
+      } catch (e) {
+        rollback(); // undo the optimistic removal on BOTH lists
+        setError(errMsg(e));
+      }
+    },
+    [patchBoardRows],
+  );
 
   // Cast/remove this viewer's up-vote on a published generator. Returns the
   // authoritative post-vote count (the Browse card drives the optimistic update
@@ -769,11 +906,12 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     const count = nextVoted
       ? await depsRef.current.shared.vote(item.key)
       : await depsRef.current.shared.unvote(item.key);
-    // Reflect the authoritative count back into the App's list so a re-render
-    // (or a sort-by-popularity) sees it without a full reload.
-    setShared((list) => list.map((s) => (s.key === item.key ? { ...s, count } : s)));
+    // Reflect the authoritative count back into BOTH App lists so a re-render (or
+    // a sort-by-popularity) sees it without a full reload. A viewer CAN vote on
+    // their own row, so this row is in both lists whenever it is theirs.
+    patchBoardRows((list) => list.map((s) => (s.key === item.key ? { ...s, count } : s)));
     return count;
-  }, [viewer]);
+  }, [viewer, patchBoardRows]);
 
   // File a published generator for PLATFORM moderator review.
   //
@@ -896,6 +1034,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             discover={shared}
             myDrafts={myDrafts}
             myPublished={myPublished}
+            myPublishedTruncated={myPublishedTruncated}
             viewerId={viewer?.id ?? null}
             onSignIn={deps.requestSignIn}
             onCreate={openBuilderNew}

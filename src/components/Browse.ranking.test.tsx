@@ -1,12 +1,12 @@
 // 🔴 "Top" is a ranking over ONE PAGE, and the app must say so when there is
 // more board than page.
 //
-// `App` reads ONE page — `shared.list({ limit: DISCOVER_LIST_LIMIT + 1 })`, the
-// extra row being how it learns whether a row exists past the horizon — and
-// Browse then sorts the rendered 50 by vote count for the "Top" tab and filters
-// them for search. There is no server-side sort (`list` is newest-first and
-// takes no rank parameter), so both operations are honest only to the depth
-// read:
+// `App` reads ONE page of the BOARD — `shared.list({ limit: DISCOVER_LIST_LIMIT
+// + 1 })`, the extra row being how it learns whether a row exists past the
+// horizon — and Browse then sorts the rendered 50 by vote count for the "Top" tab
+// and filters them for search. There is no server-side sort (`list` is
+// newest-first and takes no rank parameter), so both operations are honest only
+// to the depth read:
 //
 //   - "Top" over the 50 NEWEST is not the top of the board. A generator with
 //     more votes than anything on screen sits at row 51 and can never appear,
@@ -20,6 +20,32 @@
 // every loaded row on screen and no "Show more", the absent button reads as the
 // end of the catalog. That is the one false claim the tab still makes, so the
 // notice covers it there too.
+//
+// 🔴 "PUBLISHED BY ME" IS NO LONGER ONE OF THESE CASES, AND THE CHANGE RUNS THE
+// OTHER WAY FROM EVERY PARAGRAPH ABOVE. It used to be the fourth victim of the
+// single-page read: `myPublished` was `shared.filter((s) => s.authorUserId ===
+// viewer.id)` over that same page, so a viewer's own generators sitting past the
+// horizon of the WHOLE BOARD were missing from their own list — and when all of
+// them were, the panel said they had published nothing. That was not a ranking
+// being honest to its depth; it was a wrong answer about the viewer's own data,
+// and the app hedged about it ("Nothing published in the loaded page") because a
+// client filter over one page cannot do better.
+//
+// It now has its OWN read: `shared.list({ mine: true, limit:
+// MY_PUBLISHED_LIST_LIMIT + 1 })`, which the server answers over the whole board
+// (civitai/civitai#5361). Two consequences this file pins:
+//
+//   - the rows are THERE however deep they sit, which is the regression case —
+//     built so the old client filter demonstrably cannot produce it;
+//   - the hedge is GONE, because it would now be false. `discoverTruncated` is a
+//     fact about the board and says nothing about the viewer's own rows, so
+//     re-reading it in that panel is the defect rather than the disclosure. The
+//     four-cell `viewerId x discoverTruncated` enumeration that used to live in
+//     the caveat describe below is retired with it, and replaced by an assertion
+//     that the panel is SILENT in all four.
+//
+// The one caveat that can still apply there is `myPublishedTruncated`, which has
+// its own two cases at the end of that describe.
 
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -38,10 +64,10 @@ import type { GeneratorData } from '../types.js';
 
 const VIEWER_ID = 99;
 
-function item(key: string, title: string, count: number): SharedListItem {
+function item(key: string, title: string, count: number, authorUserId = 7): SharedListItem {
   return {
     key,
-    authorUserId: 7,
+    authorUserId,
     value: { title, body: 'a desc', data: { v: 1, buttons: [] } as GeneratorData },
     count,
     viewerVoted: false,
@@ -89,12 +115,28 @@ function withHorizon(base: SharedListItem[], hasMore: boolean) {
   };
 }
 
-function setup(hasMore: boolean, rows?: SharedListItem[]) {
-  const { rows: seed, pageLimit } = withHorizon(
+/**
+ * `horizons` overrides what `withHorizon` derives.
+ *
+ * 🔴 `discoverPageLimit` IS NEEDED BECAUSE `withHorizon` DERIVES IT FROM THE
+ * FIXTURE'S SIZE — it returns `base.length`, so an untruncated board renders
+ * every seeded row by construction. Every case above wants exactly that. The
+ * "my rows sit past the discover page" case wants the opposite: a board whose
+ * read genuinely leaves rows behind while the fixture stays small enough to read,
+ * which needs the two decoupled.
+ */
+function setup(
+  hasMore: boolean,
+  rows?: SharedListItem[],
+  horizons: { myPublishedPageLimit?: number; discoverPageLimit?: number } = {},
+) {
+  const { rows: seed, pageLimit: derivedPageLimit } = withHorizon(
     rows ?? [item('a', 'Alpha gen', 5), item('b', 'Beta gen', 2)],
     hasMore,
   );
-  const shared = fakeShared(seed);
+  const pageLimit = horizons.discoverPageLimit ?? derivedPageLimit;
+  const { myPublishedPageLimit } = horizons;
+  const shared = fakeShared(seed, { viewerId: VIEWER_ID });
   const wf = mockWorkflow();
   const deps: Partial<AppDeps> = {
     resolveResources: async () => [],
@@ -105,6 +147,7 @@ function setup(hasMore: boolean, rows?: SharedListItem[]) {
     submit: wf.submit,
     poll: wf.poll,
     discoverPageLimit: pageLimit,
+    ...(myPublishedPageLimit !== undefined ? { myPublishedPageLimit } : {}),
   };
   render(
     <Harness viewer={{ id: VIEWER_ID, username: 'me' }} theme="dark" consentGranted showLog={false}>
@@ -119,7 +162,7 @@ function setup(hasMore: boolean, rows?: SharedListItem[]) {
  *  signed-IN case. */
 function setupAnon(hasMore: boolean, rows?: SharedListItem[]) {
   const { rows: seed, pageLimit } = withHorizon(rows ?? [], hasMore);
-  const shared = fakeShared(seed);
+  const shared = fakeShared(seed, { viewerId: VIEWER_ID });
   const wf = mockWorkflow();
   render(
     <Harness viewer={null} theme="dark" consentGranted showLog={false}>
@@ -301,81 +344,220 @@ describe('partial-ranking disclosure', () => {
     });
   });
 
-  describe('the "Published by me" caveat', () => {
-    // 🔴 An earlier fix SUBSTITUTED the empty-state copy on a truncated board.
-    // That told a signed-OUT visitor — whose `myPublished` is empty for reasons
-    // having nothing to do with truncation — that "anything you published
-    // earlier may not appear here", and it deleted the panel's only call to
-    // action for everyone. The caveat is now appended and viewer-gated.
+  describe('the "Published by me" panel', () => {
     const CTA = 'Publish a generator from the builder to share it in Discover.';
+    /**
+     * 🔴 THE RETIRED HEDGE, PINNED AS A STRING SO ITS RETURN IS LOUD. While
+     * `myPublished` was a client filter over the discover page, this panel said
+     * *"Nothing published in the loaded page"* / *"anything you published earlier
+     * may not be listed here"* whenever `viewerId != null && discoverTruncated` —
+     * honest at the time, because the filter genuinely could not tell "published
+     * nothing" from "your rows are past the page".
+     *
+     * The rows now come from their own `mine=true` read over the whole board, so
+     * an empty list means the SERVER found none, and that sentence would be a
+     * false claim about a page this list does not have. Pinned by its own words
+     * rather than by a flag, because the flag it used to read (`discoverTruncated`)
+     * is still live and still correct for Discover — a regression here looks like
+     * someone re-wiring a real flag into the wrong panel.
+     */
+    const RETIRED_HEDGE = [
+      'Nothing published in the loaded page',
+      'loads only part of the catalog',
+      'anything you published earlier',
+    ] as const;
 
-    it('moves the TITLE off "nothing published" and still keeps the CTA, for a signed-in viewer', async () => {
-      setup(true, manyItems(15));
+    function expectNoHedge(el: HTMLElement) {
+      for (const phrase of RETIRED_HEDGE) expect(el.textContent).not.toContain(phrase);
+    }
+
+    /**
+     * 🔴 THE FOUR CELLS OF `viewerId x discoverTruncated`, NOW ALL SILENT. The
+     * previous round built this enumeration to pin a two-variable predicate that
+     * had two surviving mutants (both predicates simplifying to `viewerId !=
+     * null`) and one unreachable-by-simplification one (XNOR). The predicate is
+     * gone, so the enumeration survives inverted: no cell may hedge, and every
+     * cell keeps the call to action.
+     *
+     * It is NOT redundant with a single case. `discoverTruncated` and `viewerId`
+     * are both still computed and still passed to this component, so a mutant
+     * that reads either of them in this panel is a live possibility — and only a
+     * fixture where they DIFFER can see it.
+     */
+    const CELLS = [
+      ['signed-in', 'truncated', true, true],
+      ['signed-in', 'whole', true, false],
+      ['signed-out', 'truncated', false, true],
+      ['signed-out', 'whole', false, false],
+    ] as const;
+
+    for (const [who, board, signedIn, hasMore] of CELLS) {
+      it(`🔴 a ${who} viewer on a ${board} board: "nothing published yet", no hedge`, async () => {
+        // Every seeded row is authored by someone else (the `item` default), so
+        // the viewer's own list is legitimately empty in all four cells.
+        if (signedIn) setup(hasMore, manyItems(15));
+        else setupAnon(hasMore, manyItems(15));
+        await screen.findByTestId('discover-list');
+        await userEvent.click(screen.getByTestId('tab-mine'));
+
+        const empty = await screen.findByTestId('published-empty');
+        expect(empty.textContent).toContain('Nothing published yet');
+        expect(empty.textContent).toContain(CTA);
+        expectNoHedge(empty);
+        // Nothing about a history a signed-out visitor does not have.
+        expect(empty.textContent).not.toMatch(/you published/i);
+      });
+    }
+
+    /**
+     * 🔴 THE REGRESSION CASE. THE FIXTURE IS BUILT SO THE OLD IMPLEMENTATION
+     * CANNOT PASS IT, which is the only thing that makes it regression coverage
+     * rather than a restatement of the new code.
+     *
+     * The store is ordered newest-first and holds four rows: two by someone else,
+     * then two by the viewer. `discoverPageLimit` is 2, so the Discover read asks
+     * for 3 and RENDERS 2 — both of them someone else's. `shared` (the array the
+     * old `myPublished = shared.filter(authorUserId === viewer.id)` ran over)
+     * therefore contains ZERO of the viewer's rows:
+     *
+     *   - `mine-a` is inside the 3-row fetch but outside the rendered slice;
+     *   - `mine-b` is outside the fetch entirely.
+     *
+     * Two different ways to be invisible to a client filter, so the case does not
+     * rest on the slice boundary alone. Both must appear, out of the viewer's own
+     * read.
+     */
+    const PAST_THE_PAGE = [
+      item('z-theirs-1', 'Someone elses newest', 1),
+      item('y-theirs-2', 'Someone elses second', 1),
+      item('x-mine-a', 'My older generator', 3, VIEWER_ID),
+      item('w-mine-b', 'My oldest generator', 2, VIEWER_ID),
+    ];
+
+    it('🔴 shows the viewer’s OWN rows that sit PAST the discover page', async () => {
+      setup(false, PAST_THE_PAGE, { discoverPageLimit: 2 });
       await screen.findByTestId('discover-list');
-      await userEvent.click(screen.getByTestId('tab-mine'));
 
-      const empty = await screen.findByTestId('published-empty');
-      // 🔴 REPOINTED. This asserted the headline "Nothing published yet" while
-      // the body below it said their generators may simply not be listed — the
-      // most prominent line on the panel telling a viewer with 30 published
-      // generators that they have none, contradicted three sentences later. The
-      // title has to move with the caveat.
-      expect(empty.textContent).toContain('Nothing published in the loaded page');
-      expect(empty.textContent).not.toContain('Nothing published yet');
-      expect(empty.textContent).toContain(CTA);
-      expect(empty.textContent).toContain('loads only part of the catalog');
+      // Precondition, asserted rather than assumed: neither of the viewer's rows
+      // is on the Discover board, so a filter over what Discover loaded is empty.
+      // If this ever stops holding, the case below is passing for a fixture that
+      // no longer constructs the defect.
+      const discover = screen.getByTestId('discover-list');
+      expect(discover.textContent).toContain('Someone elses newest');
+      expect(discover.textContent).not.toContain('My older generator');
+      expect(discover.textContent).not.toContain('My oldest generator');
+
+      await userEvent.click(screen.getByTestId('tab-mine'));
+      const mine = await screen.findByTestId('mine-list');
+      await waitFor(() => expect(mine.textContent).toContain('My older generator'));
+      expect(mine.textContent).toContain('My oldest generator');
+      // ...and the panel does not simultaneously claim they have published nothing.
+      expect(screen.queryByTestId('published-empty')).toBeNull();
     });
 
-    it('🔴 an UNTRUNCATED board says "nothing published yet" with NO caveat', async () => {
-      // 🔴 The state nothing in the repo constructed. This round added a second
-      // `viewerId && discoverTruncated` predicate (on the title) and no state to
-      // exercise it, so BOTH predicates could be simplified to `viewerId != null`
-      // and the suite stayed green — measured, two surviving mutants.
-      //
-      // What that ships: a signed-in viewer on a board with no cursor (whole
-      // catalog loaded, under 50 rows) who has published nothing is told
-      // "Nothing published in the loaded page" — a hedge pointing at pages that
-      // do not exist. The mirror image of the contradiction the previous round
-      // fixed, and green all the way.
-      setup(false, manyItems(15));
+    it('asks the SERVER for them: one `mine: true` read, over its own horizon', async () => {
+      const shared = setup(false, PAST_THE_PAGE, { discoverPageLimit: 2, myPublishedPageLimit: 7 });
       await screen.findByTestId('discover-list');
-      await userEvent.click(screen.getByTestId('tab-mine'));
+      await waitFor(() => expect(shared.listCalls.length).toBe(2));
 
-      const empty = await screen.findByTestId('published-empty');
-      expect(empty.textContent).toContain('Nothing published yet');
-      expect(empty.textContent).not.toContain('Nothing published in the loaded page');
-      expect(empty.textContent).toContain(CTA);
-      expect(empty.textContent).not.toContain('loads only part of the catalog');
+      const [discoverCall, mineCall] = shared.listCalls;
+      // 🔴 KEY PRESENCE, not value equality. `toEqual` treats
+      // `{ mine: undefined }` as equal to `{}`, so an assertion written as
+      // `mine: undefined` would pass against code that never sends `mine`.
+      expect('mine' in discoverCall).toBe(false);
+      expect(discoverCall.limit).toBe(3); // discoverPageLimit (2) + 1
+      expect('mine' in mineCall).toBe(true);
+      // A real boolean — the route's schema is a `'true' | 'false'` literal union
+      // and `?mine=` is a 400. The serialisation itself is pinned in
+      // `platform/sharedStorage.list.test.ts`.
+      expect(mineCall.mine).toBe(true);
+      expect(mineCall.limit).toBe(8); // myPublishedPageLimit (7) + 1
     });
 
-    it('🔴 says NOTHING about a publishing history to a signed-out visitor', async () => {
-      setupAnon(true, manyItems(15));
+    /**
+     * 🔴 AN ANONYMOUS VIEWER: THE REQUEST IS NOT MADE AT ALL. The server answers
+     * an anonymous `mine=true` with an EMPTY PAGE — not an error, and not the
+     * whole board — because the author predicate is UNKNOWN for a NULL subject.
+     * That is the right answer, but it is indistinguishable from "the store is
+     * empty", so the app does not ask: it has nothing to learn from a reply it
+     * could not interpret. Pinned as a CALL COUNT plus key absence, because an
+     * empty mine panel looks identical either way.
+     */
+    it('🔴 fires NO `mine` request for a signed-out visitor', async () => {
+      const shared = setupAnon(false, PAST_THE_PAGE);
       await screen.findByTestId('discover-list');
       await userEvent.click(screen.getByTestId('tab-mine'));
+      await screen.findByTestId('published-empty');
 
-      const empty = await screen.findByTestId('published-empty');
-      expect(empty.textContent).toContain('Nothing published yet');
-      expect(empty.textContent).toContain(CTA);
-      expect(empty.textContent).not.toContain('loads only part of the catalog');
-      expect(empty.textContent).not.toMatch(/you published/i);
+      expect(shared.listCalls).toHaveLength(1);
+      expect('mine' in shared.listCalls[0]).toBe(false);
+      // CONTROL: the same fixture DOES produce a second, `mine`-carrying call for
+      // a signed-in viewer (the case above), so the 1 here is attributable to the
+      // viewer and not to a recorder that never sees anything.
     });
 
-    it('a signed-out visitor on an UNTRUNCATED board — the fourth cell', async () => {
-      // 🔴 Completes the viewerId x discoverTruncated enumeration. With only the
-      // other three cells built, the surviving mutation class is exactly XNOR —
-      // the one two-variable function that agrees with AND everywhere the suite
-      // looks and differs here — and rewriting either predicate that way left
-      // 274/274 green. No plausible simplification produces XNOR, so this closes
-      // a completeness gap rather than a live exposure; it is cheap, and the
-      // enumeration is worth being able to state as complete.
-      setupAnon(false, manyItems(15));
+    /**
+     * 🔴 THE ONE CAVEAT THAT CAN STILL APPLY, and the tripwire behind it.
+     * `MY_PUBLISHED_LIST_LIMIT` is the server's per-author row cap, so a row past
+     * it is impossible today — the read over-fetches by one anyway, so that
+     * assumption is falsifiable at runtime instead of being a comment. If the cap
+     * is raised server-side the viewer is TOLD, rather than quietly losing rows
+     * the way the client filter did.
+     *
+     * `myPublishedPageLimit` is what makes the state constructible at all: at the
+     * production value it needs 51 rows from ONE author, which the cap forbids.
+     */
+    const FOUR_OF_MINE = [
+      item('z-mine-1', 'Mine one', 1, VIEWER_ID),
+      item('y-mine-2', 'Mine two', 1, VIEWER_ID),
+      item('x-mine-3', 'Mine three', 1, VIEWER_ID),
+      item('w-mine-4', 'Mine four', 1, VIEWER_ID),
+    ];
+
+    const MINE_NOTICE = 'published-partial-notice';
+
+    it('🔴 discloses when the viewer has MORE rows than this app loads at once', async () => {
+      setup(false, FOUR_OF_MINE, { myPublishedPageLimit: 3 });
       await screen.findByTestId('discover-list');
       await userEvent.click(screen.getByTestId('tab-mine'));
 
-      const empty = await screen.findByTestId('published-empty');
-      expect(empty.textContent).toContain('Nothing published yet');
-      expect(empty.textContent).toContain(CTA);
-      expect(empty.textContent).not.toContain('loads only part of the catalog');
+      const mine = await screen.findByTestId('mine-list');
+      await waitFor(() => expect(mine.textContent).toContain('Mine one'));
+      // Pinned WHOLE. A fragment every branch shares would let the sentence be
+      // replaced with arbitrary text while this stayed green.
+      expect(screen.getByTestId(MINE_NOTICE).textContent).toBe(
+        'Showing your most recent generators — you have more than this app loads at once.',
+      );
+      // The horizon is respected: 3 rendered, the 4th withheld.
+      expect(mine.textContent).toContain('Mine three');
+      expect(mine.textContent).not.toContain('Mine four');
+    });
+
+    it('CONTROL: EXACTLY at the horizon the list is WHOLE, and says nothing', async () => {
+      // The boundary, on the other side. The read asks for 5 and gets 4, so the
+      // over-fetch row is absent and the claim is a fact rather than a hedge —
+      // the same `+1` reasoning `DISCOVER_LIST_LIMIT` rests on, and the case that
+      // dies if someone re-derives truncation from `nextCursor` (emitted iff the
+      // page filled, which it would here).
+      setup(false, FOUR_OF_MINE, { myPublishedPageLimit: 4 });
+      await screen.findByTestId('discover-list');
+      await userEvent.click(screen.getByTestId('tab-mine'));
+
+      const mine = await screen.findByTestId('mine-list');
+      await waitFor(() => expect(mine.textContent).toContain('Mine four'));
+      expect(screen.queryByTestId(MINE_NOTICE)).toBeNull();
+    });
+
+    it('CONTROL: an EMPTY own-list is never truncated — no notice beside the empty state', async () => {
+      // `myPublishedTruncated` can only be true when rows came back, which is why
+      // the notice lives beside the rows and not inside the empty state. A hedge
+      // appearing here would be the retired defect in a new spelling.
+      setup(true, manyItems(15), { myPublishedPageLimit: 3 });
+      await screen.findByTestId('discover-list');
+      await userEvent.click(screen.getByTestId('tab-mine'));
+
+      await screen.findByTestId('published-empty');
+      expect(screen.queryByTestId(MINE_NOTICE)).toBeNull();
     });
   });
 

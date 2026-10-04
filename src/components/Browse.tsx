@@ -76,7 +76,29 @@ export interface BrowseProps {
    */
   discoverTruncated: boolean;
   myDrafts: StoredDraft[];
+  /**
+   * The viewer's OWN published generators, from a SERVER-FILTERED read over the
+   * whole board — not a client filter over `discover`.
+   *
+   * 🔴 THAT DISTINCTION IS WHY THIS PANEL NO LONGER HEDGES OFF
+   * `discoverTruncated`. While these rows were filtered out of the single
+   * discover page, an empty list could mean either "published nothing" or "every
+   * one of your rows sits past the page we read", so the empty state had to say
+   * so. It is now the server's answer about the viewer's own rows, so empty means
+   * empty. `discoverTruncated` is a fact about the BOARD and says nothing about
+   * this list; the only caveat that can apply here is
+   * {@link BrowseProps.myPublishedTruncated}.
+   */
   myPublished: SharedListItem[];
+  /**
+   * `myPublished` is a PAGE of the viewer's generators rather than all of them.
+   *
+   * Server-side, one author cannot hold more rows than this app asks for, so in
+   * practice this is false — see `MY_PUBLISHED_LIST_LIMIT` in `App.tsx`, which
+   * over-fetches by one row precisely so that a raised cap surfaces HERE instead
+   * of silently dropping rows.
+   */
+  myPublishedTruncated?: boolean;
   viewerId: number | null;
   /** Prompt the logged-out viewer to sign in (persistent header affordance). */
   onSignIn: () => void;
@@ -222,7 +244,7 @@ interface VoteState {
 }
 
 export function Browse(props: BrowseProps) {
-  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, keptTruncated = false, keptIncomplete = false, keptError = null, getImages, onOpenGeneratorKey, posting, onRequestSignIn, copyToClipboard, onRetry } = props;
+  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, myPublishedTruncated = false, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, keptTruncated = false, keptIncomplete = false, keptError = null, getImages, onOpenGeneratorKey, posting, onRequestSignIn, copyToClipboard, onRetry } = props;
   const [tab, setTab] = useState<Tab>('discover');
   // Motion gate for the chrome Browse owns directly (draft cards). Cards rendered
   // by PublishedCard/IntroPanel read it themselves.
@@ -635,36 +657,28 @@ export function Browse(props: BrowseProps) {
 
             <Stack gap={10}>
               <div style={{ fontSize: 13, color: c.muted, fontWeight: 600 }}>Published by me</div>
-              {/* 🔴 `myPublished` is filtered out of the SAME single page, so on a
-                  truncated board the viewer's own generators past that page are
-                  missing here — and if all of them are, this panel would claim
-                  they published nothing.
-                  🔴 BOTH halves move together, and both are gated on the SAME
-                  pair. The title stops asserting "nothing" (it would be false
-                  for someone with 30 published generators) and the body KEEPS
-                  its call to action, appending the caveat rather than replacing
-                  it. Earlier rounds traded one for the other in each direction;
-                  neither trade was necessary.
-                  🔴 The `viewerId` half is not decoration: `myPublished` is empty
-                  for a signed-out viewer for a reason that has nothing to do
-                  with truncation, and telling someone with no account that
-                  "anything you published earlier may not appear" addresses a
-                  history they do not have. Dropping EITHER condition from EITHER
-                  branch is a live defect — the untruncated case would hedge at a
-                  page that does not exist — so both are pinned. */}
+              {/* 🔴 NO HEDGE, AND THE ABSENCE IS THE FIX. This panel used to carry
+                  a caveat gated on `viewerId != null && discoverTruncated`
+                  ("Nothing published in the loaded page" / "anything you
+                  published earlier may not be listed here"), because
+                  `myPublished` was a CLIENT FILTER over the one discover page —
+                  so an empty list genuinely could not tell "published nothing"
+                  from "all your rows are past the page we read".
+                  The rows now come from their own `mine=true` read over the whole
+                  board, bounded by the server's per-author row cap, so empty
+                  means empty and the caveat would be a false statement about a
+                  page this list does not have. `discoverTruncated` describes the
+                  BOARD; it has nothing to say about the viewer's own rows, and
+                  re-reading it here is the defect, not the disclosure.
+                  🔴 The one caveat that CAN apply is `myPublishedTruncated`, and
+                  it is rendered below the rows rather than in this empty state on
+                  purpose: it can only be true when rows were returned, so an
+                  empty list is never truncated. */}
               {myPublished.length === 0 && (
                 <EmptyState
                   data-testid="published-empty"
-                  title={
-                    viewerId != null && discoverTruncated
-                      ? 'Nothing published in the loaded page'
-                      : 'Nothing published yet'
-                  }
-                  body={
-                    viewerId != null && discoverTruncated
-                      ? 'Publish a generator from the builder to share it in Discover. Note this app loads only part of the catalog at once, so anything you published earlier may not be listed here.'
-                      : 'Publish a generator from the builder to share it in Discover.'
-                  }
+                  title="Nothing published yet"
+                  body="Publish a generator from the builder to share it in Discover."
                 />
               )}
               {myPublished.map((item, i) => {
@@ -685,6 +699,16 @@ export function Browse(props: BrowseProps) {
                   />
                 );
               })}
+              {/* 🔴 THE TRIPWIRE'S VISIBLE HALF. The read over-fetches by one row
+                  against the server's per-author cap, so this can only appear if
+                  that cap was raised — at which point the panel says it is
+                  showing a page instead of recreating the old defect one page
+                  further out. See `MY_PUBLISHED_LIST_LIMIT` in `App.tsx`. */}
+              {myPublishedTruncated && (
+                <span data-testid="published-partial-notice" role="status" style={metaText}>
+                  Showing your most recent generators — you have more than this app loads at once.
+                </span>
+              )}
             </Stack>
           </Stack>
         </div>

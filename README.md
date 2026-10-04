@@ -56,7 +56,10 @@ rendered; the viewer sees copy keyed off `.code`.
 
 - **Browse** (`components/Browse.tsx`) — Discover (published generators with
   vote counts, **search**, **sort by Newest/Popular**, and paginated "Show
-  more") / My generators (drafts + own published, paginated). Each published
+  more") / My generators (paginated drafts + own published). The own-published
+  list is its OWN server-filtered read (`list({ mine: true })`), not a filter
+  over the Discover page — the board read is one page, so a client filter lost
+  every generator of yours that had scrolled past it. Each published
   card has **up-vote** (optimistic + rollback), **Share** (copies a `?g=<key>`
   deeplink), and **Make a copy** (fork into your own draft) affordances. The
   Discover/Mine switcher is an ARIA tablist (roving tabindex + arrow keys).

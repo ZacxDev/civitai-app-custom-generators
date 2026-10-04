@@ -305,8 +305,28 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
       const limit = Number(q.get('limit') ?? 50);
       const cursor = q.get('cursor');
       const after = cursor ? atob(cursor) : null;
+      // 🔴 THE LITERAL UNION, SPELLED OUT, BECAUSE THE ROUTE 400s ON ANYTHING
+      // ELSE. Its schema is `z.union([z.literal('true'), z.literal('false')])
+      // .optional()` — deliberately NOT `z.coerce.boolean()`, which maps the
+      // string "false" to TRUE. So an absent key is "whole board", `'true'`/
+      // `'false'` are the only accepted values, and everything else — `?mine=`
+      // included, which is what any `?? ''` fallback in the adapter would
+      // produce — is a 400. A fake that accepted `?mine=` would let exactly that
+      // defect pass here and fail in production.
+      const mineRaw = q.get('mine');
+      if (mineRaw !== null && mineRaw !== 'true' && mineRaw !== 'false') {
+        return json(400, { error: 'Invalid query' });
+      }
+      // 🔴 AN ANONYMOUS VIEWER ASKING FOR `mine` GETS AN EMPTY PAGE — not an
+      // error and not the whole board. Server-side that falls out of
+      // three-valued logic (`s.author_user_id = $4::int` is UNKNOWN for a NULL
+      // subject) rather than from a guard, so the row count is the only thing
+      // reproducible here; the SQL shape it rests on is pinned in civitai's own
+      // `apps-shared.router.test.ts`, not here.
+      const mine = mineRaw === 'true';
       const all = [...shared.keys()]
         .filter((k) => k.startsWith(prefix))
+        .filter((k) => (mine ? viewerId != null && shared.get(k)!.authorUserId === viewerId : true))
         .sort((a, b) => (a < b ? 1 : a > b ? -1 : 0))
         .filter((k) => (after ? k < after : true));
       const page = all.slice(0, limit);
