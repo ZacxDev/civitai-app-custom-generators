@@ -507,8 +507,11 @@ describe('partial-ranking disclosure', () => {
       // two literals above are what pin the difference. Discover renders a page of
       // a board it expects to outgrow and over-fetches one row as EVIDENCE of
       // that; this one asks for more rows than a viewer can hold and so has
-      // nothing to disclose. A `+1` here would be clamped back to 100 by the route
-      // anyway, making the evidence it is supposed to carry unobtainable.
+      // nothing to disclose. A `+1` here would be REJECTED by the route, not
+      // clamped back to 100 — `limit` is validated with a zod `.max()` and the
+      // REST adapter answers a failed parse with `400 Invalid query`, so the
+      // over-fetch would not merely fail to carry evidence, it would fail the
+      // read. See `SHARED_LIST_LIMIT_MAX` in `App.tsx` for the derivation.
       expect(mineCall.limit).toBe(100);
     });
 

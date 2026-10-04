@@ -204,11 +204,14 @@ export interface AppDeps {
  * snapshot — where a probe answers about a later instant. Same standard (make
  * the claim true, do not hedge it), cheaper instrument.
  *
- * Bounded by the platform: `apps.shared.list` validates `limit` as
- * `.int().min(1).max(100)` and both block hosts clamp to the same `[1, 100]`
- * before it (`PageBlockHost.tsx`, `IframeHost.tsx`), so 51 passes through
- * unchanged and there is headroom to raise this to 99 before the +1 is clamped
- * away — the one change that would silently restore the defect.
+ * Bounded by the platform: the list route validates `limit` as
+ * `.int().min(1).max(SHARED_LIST_LIMIT_MAX)` (100), so 51 passes through
+ * unchanged and 99 is the largest value this constant can take before the `+1`
+ * exceeds the route's maximum. ⚠️ What happens AT that boundary is a 400, not a
+ * clamp — see {@link SHARED_LIST_LIMIT_MAX}, which carries the derivation.
+ * Raising this to 100 or beyond therefore does NOT silently restore the
+ * truncation defect, as an earlier version of this paragraph claimed: it fails
+ * the Discover read outright, and `error` + Retry is what the viewer sees.
  */
 export const DISCOVER_LIST_LIMIT = 50;
 
@@ -217,16 +220,40 @@ export const DISCOVER_LIST_LIMIT = 50;
  * `SHARED_LIST_LIMIT_MAX` in civitai
  * `src/server/routers/apps-shared.router.ts`, re-derived at `7ce2adf8`.
  *
- * 🔴 A MIRRORED SERVER CONSTANT, AND THE ONLY DIRECTION IT CAN BE WRONG IN IS
- * DOWN. The route clamps `limit` to this value on BOTH surfaces — the REST
- * adapter this app talks to (civitai
- * `src/pages/api/v1/blocks/shared-storage/list.ts`) and the tRPC input — so
- * asking for this much is harmless whatever the server's own number is: a server
- * that lowered it would clamp us down, and a server that raised it would simply
- * leave headroom unused. Asking for LESS is the only error, because that is what
- * makes rows unreachable. That asymmetry is why this is mirrored as a plain
- * number rather than guarded: a stale copy here cannot produce a 400 and cannot
- * lose a row.
+ * 🔴 A MIRRORED SERVER CONSTANT WITH NO CLAMP ANYWHERE BEHIND IT, SO BOTH
+ * DIRECTIONS OF DRIFT ARE WRONG — differently, which is why neither of them is
+ * the safe one. Both surfaces validate `limit` as
+ * `.int().min(1).max(SHARED_LIST_LIMIT_MAX)` — the REST adapter this app talks
+ * to (civitai `src/pages/api/v1/blocks/shared-storage/list.ts`) and the tRPC
+ * input. A zod `.max()` REJECTS; it does not clamp. The REST route answers a
+ * failed `safeParse` with `400 Invalid query`. Nothing on this app's own path
+ * clamps either: `platform/sharedStorage.ts` spreads `limit` into the query
+ * string verbatim. So, concretely:
+ *
+ *   - a copy here ABOVE the server's number 400s the read that uses it. Today
+ *     that is the `mine: true` read, whose rejection is confined to the
+ *     "Published by me" panel (see the Browse load effect) — and that panel
+ *     renders an empty state which does not distinguish "no rows" from "the
+ *     read failed", so the 400 is loud on the wire and silent on screen.
+ *   - a copy BELOW the server's number under-fetches with nothing on screen
+ *     saying so: the viewer's own rows past the lowered limit go missing, which
+ *     is the exact defect this constant exists to prevent.
+ *
+ * 🔴 WHAT IS GUARDED AND WHAT IS NOT. App-side drift is caught in BOTH
+ * directions — `components/Browse.ranking.test.tsx` pins the number as a literal
+ * `100` on two surfaces (the opts object handed to `deps.shared`, and the query
+ * string on the wire), and moving this constant either way fails both. A
+ * SERVER-side move is not observable from this repo at all: the fake list route
+ * in `src/platform/testing.tsx` reads `limit` with no maximum check, so no test
+ * here can go red when civitai's own number changes. There is no mechanism that
+ * will tell you this has gone stale — re-derive it from the export named above.
+ *
+ * ⚠️ WHY THIS DOCBLOCK ONCE SAID THE ROUTE CLAMPED, recorded so the wrong model
+ * does not get re-derived: clamping is what the HOST BRIDGE did. `taste.json`'s
+ * record of the Discover decision names `PageBlockHost.tsx` and `IframeHost.tsx`
+ * clamping to `[1, 100]` ahead of the router, and that was true of the transport
+ * this app used at the time. #28 ported it off that bridge onto `@civitai/sdk`'s
+ * direct REST calls; the comment outlived the transport.
  *
  * 🔴 ASKING FOR THE MAX IS WHAT MAKES "Published by me" COMPLETE RATHER THAN
  * MERELY DEEPER, WITHOUT THIS APP KNOWING THE PER-AUTHOR CAP. The server refuses
@@ -387,6 +414,13 @@ export function App({ deps: depsOverride }: AppProps = {}) {
    * without the route being widened in the same change. There is no `+1`
    * over-fetch here and no disclosure, unlike {@link DISCOVER_LIST_LIMIT}, whose
    * horizon a healthy board crosses every day.
+   *
+   * ⚠️ `[]` IS OVERLOADED AND NOTHING HERE DISAMBIGUATES IT. The load effect
+   * confines a rejected `mine` read to this list rather than failing the whole
+   * view, and it does so by setting `[]` — so empty means "published nothing" OR
+   * "the read failed", and there is no second piece of state carrying which.
+   * `keptError` beside this one is what the resolved version of that looks like;
+   * this list has no equivalent yet.
    */
   const [myPublished, setMyPublished] = useState<SharedListItem[]>([]);
   const [myDrafts, setMyDrafts] = useState<StoredDraft[]>([]);
@@ -470,7 +504,27 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         // empty". Not making the request keeps that ambiguity out of the app: the
         // panel's empty state for a signed-out visitor is about having no account,
         // which it already says.
-        const [sharedRes, mineRes, drafts] = await Promise.all([
+        //
+        // 🔴 `allSettled`, NOT `all`, AND ONLY THE `mine` READ IS ALLOWED TO FAIL
+        // ALONE. Under `Promise.all` a single rejected promise skipped every
+        // setter below, so a failed `mine` read left `shared` at its `[]` initial
+        // value and emptied the ENTIRE view — Discover list, cover grid, deeplink
+        // open, share, fork and report all went with it. The two panels are
+        // separate questions answered by separate requests, so one failing is not
+        // evidence about the other.
+        //
+        // The other two are re-thrown into the catch below, deliberately, and the
+        // reasons are not the same for both. The Discover read IS the board: with
+        // it gone there is nothing to render, so the view-level `error` + Retry is
+        // the honest answer rather than a blank page. The drafts read has no
+        // failure state of its own either, so confining it would put "no drafts"
+        // over a failed read — trading a visible error for a false statement.
+        // Confining `mine` makes that same trade (see `published-empty` in
+        // `components/Browse.tsx`, which says "Nothing published yet" whether the
+        // read returned zero rows or rejected) and is still worth it, because the
+        // alternative it replaces is blanking every other panel too. That empty
+        // state is NOT fixed here and remains able to state a falsehood.
+        const [sharedSettled, mineSettled, draftsSettled] = await Promise.allSettled([
           depsRef.current.shared.list({ limit: pageLimit + 1 }),
           viewer
             ? depsRef.current.shared.list({ mine: true, limit: SHARED_LIST_LIMIT_MAX })
@@ -478,13 +532,19 @@ export function App({ deps: depsOverride }: AppProps = {}) {
           viewer ? listDrafts(depsRef.current.drafts) : Promise.resolve<StoredDraft[]>([]),
         ]);
         if (cancelled) return;
+        if (sharedSettled.status === 'rejected') throw sharedSettled.reason;
+        if (draftsSettled.status === 'rejected') throw draftsSettled.reason;
+        const sharedRes = sharedSettled.value;
         setShared(sharedRes.items.slice(0, pageLimit));
         // `list` is newest-first and takes no rank parameter, so a row we did NOT
         // render may outrank or match anything that was. A row came back past the
         // horizon ⇒ that is a definite statement, not a hedge off a cursor.
         setDiscoverTruncated(sharedRes.items.length > pageLimit);
-        setMyPublished(mineRes.items);
-        setMyDrafts(drafts);
+        // Reset to `[]` on a rejection rather than left alone: a stale list from a
+        // previous successful read would be a wrong answer about the viewer's rows
+        // now, and `reloadKey` makes a retry cheap.
+        setMyPublished(mineSettled.status === 'fulfilled' ? mineSettled.value.items : []);
+        setMyDrafts(draftsSettled.value);
       } catch (e) {
         if (!cancelled) setError(errMsg(e));
       } finally {
