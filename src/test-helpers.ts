@@ -164,6 +164,23 @@ export function fakeShared(
   cfg: {
     failWithdraw?: string;
     /**
+     * When set, `list` REJECTS with this message instead of returning a page —
+     * same shape as {@link failWithdraw} one line up.
+     *
+     * 🔴 SCOPED BY `failListScope`, AND THE SCOPE IS THE WHOLE POINT. `App` issues
+     * TWO list reads per Browse load — the board read and the viewer's own
+     * `mine: true` read — and the property worth testing is that one failing does
+     * NOT take the other's panel down. A seam that could only fail every call
+     * could not construct that state at all.
+     */
+    failList?: string;
+    /**
+     * Which `list` calls {@link failList} applies to. `'all'` (the default) fails
+     * every read; `'mine'` fails only the `mine: true` read and lets the board
+     * read answer normally.
+     */
+    failListScope?: 'all' | 'mine';
+    /**
      * The subject `mine: true` filters on — the viewer `<Harness>` is rendered
      * with. Defaults to 99, the harness's own default viewer id, so the two do
      * not drift apart silently in the suites that set neither.
@@ -203,7 +220,13 @@ export function fakeShared(
   const reported: Array<{ key: string; reason?: string }> = [];
   const shared: UseSharedStorage = {
     async list(opts) {
+      // 🔴 RECORDED BEFORE THE REJECTION, so a failing read is still visible in
+      // `listCalls`. A test asserting "the app did ask for its own rows" must not
+      // depend on that read having succeeded.
       listCalls.push({ ...(opts ?? {}) });
+      if (cfg.failList && (cfg.failListScope !== 'mine' || opts?.mine === true)) {
+        throw new Error(cfg.failList);
+      }
       const limit = opts?.limit ?? 50;
       const after = opts?.cursor ? decodeStoreCursor(opts.cursor) : null;
       // 🔴 THE AUTHOR FILTER IS APPLIED BEFORE THE LIMIT, which is the whole

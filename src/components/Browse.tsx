@@ -80,15 +80,27 @@ export interface BrowseProps {
    * The viewer's OWN published generators, from a SERVER-FILTERED read over the
    * whole board — not a client filter over `discover`.
    *
-   * 🔴 THAT DISTINCTION IS WHY THIS PANEL CARRIES NO CAVEAT AT ALL. While these
+   * 🔴 THAT DISTINCTION IS WHY THIS PANEL CARRIES NO PAGINATION CAVEAT. While these
    * rows were filtered out of the single discover page, an empty list could mean
    * either "published nothing" or "every one of your rows sits past the page we
    * read", so the empty state had to say so. It is now the server's answer about
    * the viewer's own rows, read at the list route's own maximum
    * (`SHARED_LIST_LIMIT_MAX` in `App.tsx`), which the per-author row cap sits far
-   * below — so this is ALL of them, not a page of them, and empty means empty.
+   * below — so this is ALL of them, not a page of them.
    * `discoverTruncated` is a fact about the BOARD and says nothing about this
    * list; re-reading it here is the defect, not the disclosure.
+   *
+   * ⚠️ **`[]` IS OVERLOADED AND "empty means empty" IS NO LONGER TRUE** — an
+   * earlier version of this paragraph said it was. `App.tsx`'s load effect passes
+   * `[]` both for "the server returned zero rows" and for "the read REJECTED and
+   * was confined so it would not blank the rest of Browse". So emptiness here is
+   * ambiguous in a way pagination no longer makes it. The panel states it as a
+   * positive fact anyway ("Nothing published yet"); that is tracked as
+   * `published-empty` at the empty-state site below and is OPEN, not fixed.
+   * 🔴 If you are adding a `publishedError` prop, THIS is the declaration to add it
+   * beside. The paragraph above is accurate **as scoped** — it is about PAGE DEPTH
+   * only — so do not rewrite or delete it; what it does not cover is whether the
+   * read SUCCEEDED, which is this paragraph's subject.
    */
   myPublished: SharedListItem[];
   viewerId: number | null;
@@ -657,17 +669,34 @@ export function Browse(props: BrowseProps) {
                   so an empty list genuinely could not tell "published nothing"
                   from "all your rows are past the page we read".
                   The rows now come from their own `mine=true` read over the whole
-                  board, bounded by the server's per-author row cap, so empty
-                  means empty and the caveat would be a false statement about a
-                  page this list does not have. `discoverTruncated` describes the
+                  board, bounded by the server's per-author row cap, so empty is
+                  not a statement about PAGE DEPTH and that caveat would be a
+                  false statement about a page this list does not have.
+                  (It is still not a statement that the viewer published nothing —
+                  see the open defect below. This sentence used to read "so empty
+                  means empty" HERE, mid-sentence, which the confined-rejection
+                  change falsified; its ending is unchanged.)
+                  `discoverTruncated` describes the
                   BOARD; it has nothing to say about the viewer's own rows, and
                   re-reading it here is the defect, not the disclosure.
-                  🔴 AND THERE IS NO OTHER CAVEAT EITHER. The read asks for the
+                  🔴 THERE IS NO *PAGE* CAVEAT EITHER. The read asks for the
                   list route's own maximum (`SHARED_LIST_LIMIT_MAX` in `App.tsx`),
                   which the per-author row cap sits far below and cannot pass
                   without the route being widened in the same change — so this is
                   every row the viewer can hold, not a page of them, and a hedge
-                  here in ANY spelling would be a false statement. */}
+                  about depth in ANY spelling would be a false statement.
+                  🔴 WHAT "empty means empty" DOES NOT COVER, AND THIS IS AN OPEN
+                  DEFECT RATHER THAN A RESOLVED ONE. `App` now confines a REJECTED
+                  `mine` read to this panel instead of blanking the whole view, and
+                  it passes `[]` for that case — so an empty `myPublished` means
+                  EITHER "the viewer has published nothing" OR "the read failed",
+                  and the title below states the first of those unconditionally.
+                  There is no `publishedError` prop to distinguish them, and adding
+                  one was deliberately left out of the change that confined the
+                  failure. Do not read the paragraphs above as covering it: they are
+                  about PAGE DEPTH, which is a different question from whether the
+                  read succeeded. `keptError` in `App.tsx` is the shape the fix
+                  would take. */}
               {myPublished.length === 0 && (
                 <EmptyState
                   data-testid="published-empty"
