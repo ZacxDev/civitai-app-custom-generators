@@ -80,15 +80,25 @@ export interface BrowseProps {
    * The viewer's OWN published generators, from a SERVER-FILTERED read over the
    * whole board — not a client filter over `discover`.
    *
-   * 🔴 THAT DISTINCTION IS WHY THIS PANEL CARRIES NO CAVEAT AT ALL. While these
+   * 🔴 THAT DISTINCTION IS WHY THIS PANEL CARRIES NO PAGINATION CAVEAT. While these
    * rows were filtered out of the single discover page, an empty list could mean
    * either "published nothing" or "every one of your rows sits past the page we
    * read", so the empty state had to say so. It is now the server's answer about
    * the viewer's own rows, read at the list route's own maximum
    * (`SHARED_LIST_LIMIT_MAX` in `App.tsx`), which the per-author row cap sits far
-   * below — so this is ALL of them, not a page of them, and empty means empty.
+   * below — so this is ALL of them, not a page of them.
    * `discoverTruncated` is a fact about the BOARD and says nothing about this
    * list; re-reading it here is the defect, not the disclosure.
+   *
+   * ⚠️ **`[]` IS OVERLOADED AND "empty means empty" IS NO LONGER TRUE** — an
+   * earlier version of this paragraph said it was. `App.tsx`'s load effect passes
+   * `[]` both for "the server returned zero rows" and for "the read REJECTED and
+   * was confined so it would not blank the rest of Browse". So emptiness here is
+   * ambiguous in a way pagination no longer makes it. The panel states it as a
+   * positive fact anyway ("Nothing published yet"); that is tracked as
+   * `published-empty` at the empty-state site below and is OPEN, not fixed.
+   * 🔴 If you are adding a `publishedError` prop, THIS is the declaration to add it
+   * beside, and the paragraph you must not trust is the one above.
    */
   myPublished: SharedListItem[];
   viewerId: number | null;

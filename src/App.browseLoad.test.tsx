@@ -32,7 +32,7 @@
 
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { Harness } from './platform/testing.js';
 
@@ -147,6 +147,37 @@ describe('App — Browse load, a failing read is confined to the panel that fail
     // 🔴 AND NO VIEW-LEVEL ERROR. The failure belongs to one panel; surfacing it
     // across the whole view is the behaviour this fix removes.
     expect(screen.queryByTestId('browse-error')).toBeNull();
+  });
+
+  // Confining the rejection is what makes it invisible: the panel says "Nothing
+  // published yet" and, without this warn, nothing anywhere records that a read
+  // failed. This pins the ONE remaining signal. It asserts the REASON is passed
+  // through, not just that something was logged — a warn that drops the reason
+  // names no cause and is the same dead end as no warn at all.
+  it('a REJECTED my-published read is still attributable — it warns with the reason', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const shared = setup({ failShared: 'mine' });
+      await screen.findByTestId('discover-list');
+      await waitFor(() => expect(shared.listCalls.length).toBe(2));
+
+      // The fake throws `new Error(LIST_FAILURE)`, so the reason is an Error —
+      // asserting against the bare string would compare an Error to a string and
+      // be false for the right code. Read `.message`.
+      await waitFor(() =>
+        expect(
+          warn.mock.calls.some(
+            (args: unknown[]) =>
+              typeof args[0] === 'string' &&
+              args[0].includes('my-published read failed') &&
+              args[1] instanceof Error &&
+              args[1].message === LIST_FAILURE,
+          ),
+        ).toBe(true),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('🔴 ...and still leaves the viewer’s DRAFTS rendering, out of the same effect', async () => {

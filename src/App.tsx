@@ -543,6 +543,18 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         // Reset to `[]` on a rejection rather than left alone: a stale list from a
         // previous successful read would be a wrong answer about the viewer's rows
         // now, and `reloadKey` makes a retry cheap.
+        //
+        // 🔴 WARN ON THE WAY PAST, because confining this rejection is what makes it
+        // invisible: the panel then says "Nothing published yet" and NOTHING else in
+        // the app records that a read failed, so the symptom a viewer reports ("my
+        // generators vanished") has no attributable signal short of a HAR capture.
+        // The request is loud on the wire and silent on screen; this is the one line
+        // that keeps it attributable. Same convention as `components/Runner.tsx`'s
+        // keep-failed warn. NOT a substitute for surfacing it in the UI — that is
+        // `published-empty` in `components/Browse.tsx` and is still open.
+        if (mineSettled.status === 'rejected') {
+          console.warn('[custom-generators] my-published read failed', mineSettled.reason);
+        }
         setMyPublished(mineSettled.status === 'fulfilled' ? mineSettled.value.items : []);
         setMyDrafts(draftsSettled.value);
       } catch (e) {
