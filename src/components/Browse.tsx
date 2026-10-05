@@ -673,8 +673,9 @@ export function Browse(props: BrowseProps) {
                   not a statement about PAGE DEPTH and that caveat would be a
                   false statement about a page this list does not have.
                   (It is still not a statement that the viewer published nothing —
-                  see the open defect below. This sentence used to end "so empty
-                  means empty", which the confined-rejection change falsified.)
+                  see the open defect below. This sentence used to read "so empty
+                  means empty" HERE, mid-sentence, which the confined-rejection
+                  change falsified; its ending is unchanged.)
                   `discoverTruncated` describes the
                   BOARD; it has nothing to say about the viewer's own rows, and
                   re-reading it here is the defect, not the disclosure.
