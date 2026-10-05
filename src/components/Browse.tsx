@@ -98,7 +98,9 @@ export interface BrowseProps {
    * positive fact anyway ("Nothing published yet"); that is tracked as
    * `published-empty` at the empty-state site below and is OPEN, not fixed.
    * 🔴 If you are adding a `publishedError` prop, THIS is the declaration to add it
-   * beside, and the paragraph you must not trust is the one above.
+   * beside. The paragraph above is accurate **as scoped** — it is about PAGE DEPTH
+   * only — so do not rewrite or delete it; what it does not cover is whether the
+   * read SUCCEEDED, which is this paragraph's subject.
    */
   myPublished: SharedListItem[];
   viewerId: number | null;
@@ -667,9 +669,13 @@ export function Browse(props: BrowseProps) {
                   so an empty list genuinely could not tell "published nothing"
                   from "all your rows are past the page we read".
                   The rows now come from their own `mine=true` read over the whole
-                  board, bounded by the server's per-author row cap, so empty
-                  means empty and the caveat would be a false statement about a
-                  page this list does not have. `discoverTruncated` describes the
+                  board, bounded by the server's per-author row cap, so empty is
+                  not a statement about PAGE DEPTH and that caveat would be a
+                  false statement about a page this list does not have.
+                  (It is still not a statement that the viewer published nothing —
+                  see the open defect below. This sentence used to end "so empty
+                  means empty", which the confined-rejection change falsified.)
+                  `discoverTruncated` describes the
                   BOARD; it has nothing to say about the viewer's own rows, and
                   re-reading it here is the defect, not the disclosure.
                   🔴 THERE IS NO *PAGE* CAVEAT EITHER. The read asks for the

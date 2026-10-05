@@ -553,6 +553,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         // keep-failed warn. NOT a substitute for surfacing it in the UI — that is
         // `published-empty` in `components/Browse.tsx` and is still open.
         if (mineSettled.status === 'rejected') {
+          // eslint-disable-next-line no-console
           console.warn('[custom-generators] my-published read failed', mineSettled.reason);
         }
         setMyPublished(mineSettled.status === 'fulfilled' ? mineSettled.value.items : []);

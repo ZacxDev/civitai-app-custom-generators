@@ -18,7 +18,12 @@
 //   - a rejected BOARD read is still FATAL: the board is the view, so `error` +
 //     Retry is the honest answer rather than a blank page. Same for the drafts
 //     read, which has no failure state of its own either — confining it would put
-//     "no drafts" over a failed read, trading a visible error for a false claim.
+//     "no drafts" over a failed read, trading a visible error for a false claim;
+//   - and the confined failure stays ATTRIBUTABLE: it warns with its reason, and
+//     a SUCCESSFUL read does not warn. Both directions, because confining a
+//     failure is exactly what removes it from the screen — so the console line is
+//     the only remaining signal, and a warn that fired on success would be a false
+//     one.
 //
 // ⚠️ WHAT THIS FILE DELIBERATELY DOES NOT ASSERT. Confining the `mine` failure
 // means the "Published by me" panel renders its empty state over a failed read,
@@ -26,9 +31,15 @@
 // the viewer's data, made where the app does not know it. That is an OPEN defect
 // and it was deliberately left open here, which is why no case below asserts
 // anything about that panel's copy: a test pinning the current wording would make
-// the falsehood harder to fix, not easier. It is named in `components/Browse.tsx`
-// beside the empty state, and in the `myPublished` docblock in `App.tsx`, so the
-// next reader finds it from the code rather than from a tracker.
+// the falsehood harder to fix, not easier. It is named at THREE sites, so the next
+// reader finds it from the code rather than from a tracker: in
+// `components/Browse.tsx` beside the empty state, in that file's `myPublished`
+// PROP docblock (which is where a `publishedError` prop would be added), and in
+// the `myPublished` state docblock in `App.tsx`.
+// ⚠️ Note what IS asserted, so this paragraph is not read too widely: the two
+// cases below pin the console warn on a failed read and its absence on a
+// successful one. That is the DEVELOPER surface, not the panel's copy — asserting
+// it does not pin the wording this paragraph is about.
 
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -175,6 +186,42 @@ describe('App — Browse load, a failing read is confined to the panel that fail
           ),
         ).toBe(true),
       );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  // 🔴 THE OTHER HALF, AND WITHOUT IT THE GUARD ABOVE IS ONE-SIDED. A mutant that
+  // drops the `if (… === 'rejected')` branch and warns UNCONDITIONALLY satisfies
+  // the case above and SURVIVES the whole suite — it would log
+  // "my-published read failed undefined" into every viewer's console on every
+  // successful Browse load. Measured: that mutant passed 509/509 before this case
+  // existed. A warn is a developer surface, so a false one costs the next person
+  // debugging this panel their starting assumption.
+  it('a SUCCESSFUL my-published read does not warn', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const shared = setup();
+      await screen.findByTestId('discover-list');
+      // Precondition: the `mine` read really was issued and really did resolve —
+      // otherwise this passes against an app that never asked, which is the
+      // vacuous way to be silent.
+      await waitFor(() => expect(shared.listCalls.length).toBe(2));
+      expect(shared.listCalls.some((c) => c.mine === true)).toBe(true);
+      // ...and it RESOLVED: a rejection would surface no view-level error (that is
+      // the whole point of confining it), so the discriminator is that the load
+      // completed without one while both reads were issued.
+      // 🔴 NOT `published-empty` — that node lives in the Mine panel and the
+      // default tab is Discover, so asserting it here fails for a reason that has
+      // nothing to do with warning. Cost me one red run.
+      expect(screen.queryByTestId('browse-error')).toBeNull();
+
+      expect(
+        warn.mock.calls.filter(
+          (args: unknown[]) =>
+            typeof args[0] === 'string' && args[0].includes('my-published read failed'),
+        ),
+      ).toEqual([]);
     } finally {
       warn.mockRestore();
     }
