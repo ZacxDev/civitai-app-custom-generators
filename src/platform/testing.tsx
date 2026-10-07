@@ -155,6 +155,12 @@ export interface FakeCivitaiOptions {
   createPostHold?: boolean;
   /** Seeded per-viewer app storage. */
   storage?: { seed?: Record<string, unknown> };
+  /**
+   * The host route the block is opened at: `PageSlotContext.subPath` in the init
+   * context. Defaults to `''` (the app root). A LATER route change is a
+   * `ROUTE_CHANGED` push; deliver it with {@link pushFromHost}.
+   */
+  subPath?: string;
   /** Observe every outbound bridge message (requests AND notifications). */
   onOutbound?: (message: { type: string; payload: unknown }) => void;
 }
@@ -552,7 +558,7 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
     context: {
       slotId: 'app.page',
       slug: 'custom-generators',
-      subPath: '',
+      subPath: options.subPath ?? '',
       viewerUserId: viewerId,
       theme: options.theme ?? 'dark',
     },
@@ -654,7 +660,33 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
     },
   };
 
+  activeFake = fake;
   return { transport, fetch: fakeFetch, rows, calls };
+}
+
+/**
+ * The fake transport the most recent {@link createFakeCivitai} built, so a test
+ * can deliver a host push from OUTSIDE the render tree (wrap the call in `act`).
+ */
+let activeFake: FakeTransport | null = null;
+
+/**
+ * Deliver an unsolicited host push (e.g. `ROUTE_CHANGED`) to the app's `on()`
+ * subscribers, through the same fake transport the app is reading. Throws when
+ * no fake has been built, rather than silently delivering to nobody.
+ */
+export function pushFromHost(type: string, payload: unknown): void {
+  if (!activeFake) throw new Error('pushFromHost: no fake platform has been configured');
+  activeFake.push(type, payload);
+}
+
+/**
+ * Patch the fake host's snapshot (a token refresh, a theme change), which emits
+ * to snapshot subscribers exactly as the real transport does on those pushes.
+ */
+export function setHostSnapshot(next: Parameters<FakeTransport['setSnapshot']>[0]): void {
+  if (!activeFake) throw new Error('setHostSnapshot: no fake platform has been configured');
+  activeFake.setSnapshot(next);
 }
 
 export interface HarnessProps extends FakeCivitaiOptions {

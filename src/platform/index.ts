@@ -86,5 +86,8 @@ export {
 export { useCreatePostFromApp } from './useCreatePostFromApp.js';
 export type { UseCreatePostFromApp } from './useCreatePostFromApp.js';
 
+export { useHostRoute, subPathOfRouteChanged, ROUTE_CHANGED } from './route.js';
+export type { HostRoute } from './route.js';
+
 export { BlockGate, DirectLoadFallback, hostToRunUrl, useDirectLoad } from './BlockGate.js';
 export type { BlockGateProps, DirectLoadFallbackProps } from './BlockGate.js';

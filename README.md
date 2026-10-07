@@ -60,8 +60,8 @@ rendered; the viewer sees copy keyed off `.code`.
   list is its OWN server-filtered read (`list({ mine: true })`), not a filter
   over the Discover page — the board read is one page, so a client filter lost
   every generator of yours that had scrolled past it. Each published
-  card has **up-vote** (optimistic + rollback), **Share** (copies a `?g=<key>`
-  deeplink), and **Make a copy** (fork into your own draft) affordances. The
+  card has **up-vote** (optimistic + rollback), **Share** (copies a
+  `https://civitai.com/apps/run/<slug>/g/<key>` link), and **Make a copy** (fork into your own draft) affordances. The
   Discover/Mine switcher is an ARIA tablist (roving tabindex + arrow keys).
   Create → Builder; Open → Runner; Edit → Builder.
 - **Builder** (`components/Builder.tsx` + `ButtonEditor.tsx`) — name, description,
@@ -82,8 +82,8 @@ rendered; the viewer sees copy keyed off `.code`.
 
 Core logic is centralized (and unit-tested) in `lib/generator.ts` (pure —
 including the untrusted-param **range clamp**, see below), `lib/workflow.ts`
-(poll loop), `lib/drafts.ts` (per-user KV), `lib/deeplink.ts` (`?g=` parse +
-share-URL build), `lib/buzz.ts` (insufficient-Buzz classifier), `lib/meta.ts`
+(poll loop), `lib/drafts.ts` (per-user KV), `lib/deeplink.ts` (`g/<key>` route +
+`?g=` parse, share-URL build), `lib/buzz.ts` (insufficient-Buzz classifier), `lib/meta.ts`
 (best-effort OG/meta). A React `ErrorBoundary` (`components/ErrorBoundary.tsx`)
 wraps the app so a thrown render error shows a recoverable fallback instead of a
 blank iframe.
@@ -96,13 +96,27 @@ deleted. A caught render error is recovered on screen and reported nowhere.
 
 ## Deeplinks + OG/meta
 
-A published generator is linkable with `?g=<sharedKey>`. On mount the app reads
-that param and, once the shared list has loaded, deep-opens the matching
-generator directly in the Runner (then cleans the address bar). The "Share"
-affordance copies a self-referential `?g=` URL. `lib/meta.ts` sets
-`document.title` + `og:*` tags for the opened generator.
+A published generator is linkable at
+`https://civitai.com/apps/run/<slug>/g/<sharedKey>`. The host forwards the path
+after the slug to the block as `subPath` (in the init context, then as a
+`ROUTE_CHANGED` push on every later change); `src/platform/route.ts` exposes it
+as `useHostRoute()`. Once the shared list has loaded the app deep-opens the
+matching generator in the Runner. Only the exact shape `g/<key>` (key
+`[A-Za-z0-9_-]{1,64}`) is routed; any other path opens nothing.
 
-- **Known defect (not a platform limit):** both deeplink resolvers in
+- **`?g=<sharedKey>` still works** as a fallback (links shared before 0.9.2).
+  When both are present the host route wins.
+- **The app writes the route back.** Opening a published generator sends an
+  app-scoped `NAVIGATE` to `g/<key>`, and returning to Browse sends one to the
+  app root, so the address bar tracks what is open and browser Back closes the
+  Runner. The host's shallow push echoes as `ROUTE_CHANGED`, which the app
+  ignores when it already matches the screen.
+- **Share** copies `https://civitai.com/apps/run/<slug>/g/<key>`; the slug is the
+  host's `context.slug`, falling back to the manifest `blockId`.
+
+`lib/meta.ts` sets `document.title` + `og:*` tags for the opened generator.
+
+- **Known defect (not a platform limit):** the deeplink resolvers in
   `src/App.tsx` match the key against the loaded Discover page only, so a key past
   that page leaves the viewer on Browse. ⚠️ This used to be written up here as a
   missing host seam — "the shared store exposes `list`/`getCount(s)` but no

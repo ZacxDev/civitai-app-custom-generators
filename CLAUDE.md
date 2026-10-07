@@ -84,8 +84,9 @@ here.
 
 ⚠️ **A "fetch one shared row by key" host gap used to be claimed here, and it is
 FALSE** — `shared.get(key)` is live in this app's own adapter
-(`src/platform/sharedStorage.ts`, over `GET blocks/shared-storage/item`). The two
-`?g=` deeplink resolvers in `src/App.tsx` still go through `shared.find(...)` over
+(`src/platform/sharedStorage.ts`, over `GET blocks/shared-storage/item`). The
+by-key resolvers in `src/App.tsx` (the first-load deeplink, the `ROUTE_CHANGED`
+handler, and `openPublishedByKey`) still go through `shared.find(...)` over
 the single loaded Discover page and therefore still miss a key past it, but that is
 a defect HERE with an available seam, not something waiting on the platform. Do not
 re-file it upstream.
