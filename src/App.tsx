@@ -1090,21 +1090,10 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       } catch (e) {
         rollback(); // undo the optimistic removal on BOTH lists
         setError(errMsg(e));
-        return;
       }
-      // Take its App Store card down too — as a FALLBACK. The server's shared
-      // withdraw already awaits its own mirror onto the store item before it
-      // answers, so normally the card is gone by now and this returns
-      // `withdrawn: false`. That mirror is best-effort (it logs and swallows its
-      // errors), and this call is what covers it failing. Cost: one of the
-      // author's 30/h store writes per withdraw, since the server rate-limits
-      // before it looks. Idempotent; fire-and-forget; the in-app withdraw stands.
-      if (canListInStoreRef.current) {
-        depsRef.current.store.withdraw(item.key).catch((err: unknown) => {
-          // eslint-disable-next-line no-console
-          console.warn('[custom-generators] App Store withdraw failed', err);
-        });
-      }
+      // No App Store call here: the server's shared withdraw itself takes the
+      // author's store card down (it awaits that before answering), so a second
+      // call from the app would only spend one of the author's store writes.
     },
     [patchBoardRows],
   );

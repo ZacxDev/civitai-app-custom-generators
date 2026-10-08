@@ -1,5 +1,5 @@
 // App Store sub-listings, driven through the whole App against the app's own fake
-// platform: publish → upsert, withdraw → withdraw, and the once-per-session
+// platform: publish → upsert, withdraw → NO store call, and the once-per-session
 // backfill on open. The REAL adapter (`platform/storeListings.ts`) and the real
 // shared-storage adapter run; only the server is fake.
 //
@@ -203,7 +203,10 @@ describe('publish → store upsert', () => {
   });
 });
 
-describe('withdraw → store withdraw', () => {
+describe('withdraw → no store call', () => {
+  // civitai's shared-storage withdraw takes the author's store card down itself
+  // (it awaits that mirror before answering), so the app makes no store call of
+  // its own: a second one would only spend one of the author's 30/h store writes.
   async function withdrawFirstPublished() {
     await userEvent.click(await screen.findByTestId('tab-mine'));
     const card = await screen.findByTestId('published-card');
@@ -211,7 +214,7 @@ describe('withdraw → store withdraw', () => {
     await userEvent.click(await screen.findByTestId('confirm-delete-published'));
   }
 
-  it('withdrawing from Discover also withdraws the store item', async () => {
+  it('a successful in-app withdraw makes no store call and stands', async () => {
     const fake = renderApp({
       options: {
         shared: { seed: [{ key: 'kPub', authorUserId: ME, value: genValue('Mine') }] },
@@ -219,24 +222,12 @@ describe('withdraw → store withdraw', () => {
       },
     });
     await withdrawFirstPublished();
-    await waitFor(() => expect(storeCalls(fake, 'withdraw').length).toBe(1));
-    expect(storeCalls(fake, 'withdraw')[0]!.body).toStrictEqual({ itemKey: 'kPub' });
-    expect(fake.rows()).toEqual([]);
-  });
-
-  it('a failed store withdraw does not undo the in-app withdraw', async () => {
-    const fake = renderApp({
-      options: {
-        shared: { seed: [{ key: 'kPub', authorUserId: ME, value: genValue('Mine') }] },
-        subListings: { seed: [{ itemKey: 'kPub', status: 'approved' }], fail: { withdraw: { status: 500 } } },
-      },
-    });
-    await withdrawFirstPublished();
-    await waitFor(() => expect(storeCalls(fake, 'withdraw').length).toBe(1));
+    await waitFor(() => expect(fake.rows()).toEqual([]));
+    expect(fake.calls.filter((c) => c.path === 'blocks/shared-storage/withdraw')).toHaveLength(1);
     await new Promise((r) => setTimeout(r, 20));
+    expect(storeCalls(fake, 'withdraw')).toEqual([]);
     expect(screen.queryByTestId('browse-error')).toBeNull();
     expect(screen.queryByTestId('published-card')).toBeNull();
-    expect(fake.rows()).toEqual([]);
   });
 
   it('a FAILED in-app withdraw makes no store call', async () => {

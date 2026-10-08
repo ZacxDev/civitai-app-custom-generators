@@ -94,17 +94,6 @@ describe('upsert', () => {
   });
 });
 
-describe('withdraw', () => {
-  it('POSTs { itemKey } to blocks/sub-listings/withdraw', async () => {
-    install({ subListings: { seed: [{ itemKey: 'k1', status: 'pending' }] } });
-    const res = await createStoreListings().withdraw('k1');
-    const [call] = callsTo('blocks/sub-listings/withdraw');
-    expect(call?.method).toBe('POST');
-    expect(call?.body).toStrictEqual({ itemKey: 'k1' });
-    expect(res).toEqual({ withdrawn: true });
-  });
-});
-
 describe('mine', () => {
   it('GETs blocks/sub-listings/mine and returns the items', async () => {
     install({ subListings: { seed: [{ itemKey: 'k1', status: 'approved' }] } });

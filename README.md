@@ -144,10 +144,8 @@ the manifest; consent-exempt; never minted for dev, tunnel or review tokens).
   `contentRating` (unset inherits the app's own). Every new item and every edit
   to an approved one waits for a moderator; the Builder says so in one line
   under "Published!".
-- **Withdraw** → `POST blocks/sub-listings/withdraw`, after the in-app withdraw
-  succeeds — a fallback: the server's shared withdraw already awaits its own
-  (best-effort) mirror onto the store item, so this usually answers
-  `withdrawn: false`. It costs one store write per withdraw.
+- **Withdraw** → no store call. civitai's shared-storage withdraw takes the
+  author's card down itself, server-side, before it answers.
 - **Backfill** → off the "Published by me" read, the app calls
   `GET blocks/sub-listings/mine` and upserts the viewer's published generators
   that have no card yet: at most 10 per run, at most one run per 6 hours across

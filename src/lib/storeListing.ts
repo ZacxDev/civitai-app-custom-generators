@@ -3,7 +3,7 @@
 //
 // 🔴 BEST-EFFORT, ALWAYS. The store is a second, optional home for a generator
 // that is already published in this app's Discover. Nothing here may fail or
-// delay the in-app publish/withdraw: callers fire these AFTER the shared-storage
+// delay the in-app publish: callers fire these AFTER the shared-storage
 // write has succeeded, do not await them on the publish path, and swallow every
 // rejection (see `App.tsx`).
 //
@@ -37,7 +37,7 @@ export const STORE_TAGLINE_MAX = 140;
  * Upserts one backfill run may send.
  *
  * The server allows 30 store writes per user per hour (and 100/day), shared
- * with the author's own publishes, edits and withdraws, and counts a refused
+ * with every other store write the author makes, and counts a refused
  * upsert too. With {@link BACKFILL_INTERVAL_MS} between runs, ten leaves the
  * author at least two-thirds of any hour for what they do in the app; the next
  * run (after the interval) picks up whatever this one did not reach.

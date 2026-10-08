@@ -1,5 +1,8 @@
-// App Store sub-listings, over the three routes under
-// `/api/v1/blocks/sub-listings/` (civitai/civitai#5511).
+// App Store sub-listings, over two of the routes under
+// `/api/v1/blocks/sub-listings/` (civitai/civitai#5511): `upsert` and `mine`.
+// The third, `withdraw`, is deliberately unused: civitai's shared-storage
+// withdraw already takes the author's store card down server-side, so calling
+// it from here would only spend one of the author's store writes.
 //
 // A parent app may place individual items it contains — here, one published
 // generator — into the `/apps` store as their own cards, badged "in Custom
@@ -7,7 +10,7 @@
 // the server; this app only supplies the `subPath` (`g/<key>`, the 0.9.2 host
 // route that opens the generator).
 //
-// Scope: `apps:store:items:write` on all three, plus a signed-in subject. The
+// Scope: `apps:store:items:write` on both, plus a signed-in subject. The
 // parent is the calling app's own listing, taken from the token — never the body.
 //
 // 🔴 THE UPSERT BODY IS `.strict()` SERVER-SIDE. Only `itemKey, title, tagline?,
@@ -56,8 +59,6 @@ export interface MyStoreListing {
 
 export interface StoreListings {
   upsert(input: StoreListingInput): Promise<StoreListingResult>;
-  /** Idempotent: `withdrawn: false` when there was nothing of the viewer's to withdraw. */
-  withdraw(itemKey: string): Promise<{ withdrawn: boolean }>;
   mine(): Promise<MyStoreListing[]>;
 }
 
@@ -121,14 +122,6 @@ export function createStoreListings(): StoreListings {
           throw new StoreListingError(null, 'malformed_response');
         }
         return { id: res.id, status: res.status, pendingEdit: res.pendingEdit === true };
-      });
-    },
-
-    withdraw(itemKey) {
-      return guarded(async () => {
-        const app = await getClient();
-        const res = await app.site.post<{ withdrawn?: unknown }>('blocks/sub-listings/withdraw', { itemKey });
-        return { withdrawn: res?.withdrawn === true };
       });
     },
 

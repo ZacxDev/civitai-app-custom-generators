@@ -63,7 +63,6 @@ function fakeStore(opts: { mine?: MyStoreListing[]; mineError?: unknown; upsertE
       if (err) throw err;
       return { id: `asl_${input.itemKey}`, status: 'pending' as const, pendingEdit: false };
     }),
-    withdraw: vi.fn(async () => ({ withdrawn: true })),
     mine: vi.fn(async () => {
       if (opts.mineError) throw opts.mineError;
       return opts.mine ?? [];
