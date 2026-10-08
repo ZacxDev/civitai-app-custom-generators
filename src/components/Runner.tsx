@@ -20,7 +20,7 @@ import type {
   WorkflowBody,
 } from '@civitai/app-sdk/blocks';
 
-import { Alert, Badge, Button, Card, Collapse, Group, Loader, Modal, NumberInput, Stack, TextInput } from '../ui/index.js';
+import { Alert, Badge, Button, Card, Collapse, Group, Loader, Modal, NumberInput, Stack, TextInput , Image } from '../ui/index.js';
 
 import type { GenButton, GeneratorConfig, GenButtonParams, QueueItem, QueueStatus } from '../types.js';
 import { DEFAULT_PROMPT_PLACEHOLDER, buildSubmitBody, canRunButton, exposesImage, exposesPrompt, missingRequiredInputs, newId } from '../lib/generator.js';
@@ -29,7 +29,6 @@ import type { KeptImageCell, KeptRun } from '../lib/runs.js';
 import { isTerminalSnapshot, mapSnapshotStatus, pollToTerminal, queueStatusLabel } from '../lib/workflow.js';
 import { isInsufficientBuzzError } from '../lib/buzz.js';
 import { ESTIMATE_NO_COST_MESSAGE, estimateFailureMessage, isPricedSnapshot } from '../lib/estimate.js';
-import { Image } from '@civitai/components-react';
 
 import { CLASS_LIFT, motionClass, useMotion } from '../motion.js';
 import { token, radius, elevate, metaText, type Palette } from '../theme.js';
@@ -38,8 +37,37 @@ import { KeptGallery } from './KeptGallery.js';
 import { ResultLightbox } from './ResultLightbox.js';
 import { SafeImage } from './SafeImage.js';
 
+/**
+ * Viewer-safe copy for a generation that failed after pricing.
+ *
+ * 🔴 The workflow snapshot's `error` is SERVER-AUTHORED AND UNSANITISED — the
+ * same rule `lib/estimate.ts` applies to the estimate path. It is logged for
+ * the developer and used only to CLASSIFY (insufficient Buzz), never rendered.
+ * This constant is the copy a failed card shows instead.
+ */
+export const GENERATION_FAILED_MESSAGE = 'This generation failed. Please try again in a moment.';
+
+/** Route a server workflow error to the developer surface, never the screen. */
+function logWorkflowError(where: string, serverError: string | undefined): void {
+  if (serverError) console.warn(`[custom-generators] ${where}`, { serverError });
+}
+
+/** A stable idempotency key for ONE generation intent (one queue item). */
+function newSubmitKey(): string {
+  const c = globalThis.crypto;
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  return `k-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 interface RunnerItem extends QueueItem {
   body: WorkflowBody;
+  /**
+   * Idempotency key minted when this queue item was created and sent
+   * unchanged on its submit — one key per intent, so a retried submit of
+   * THIS item can never mint a second Buzz reservation. A rerun is a new
+   * queue item and gets a fresh key.
+   */
+  submitKey: string;
   /** How many images this gen requested (for partial-failure "N of M" messaging). */
   requested: number;
   /** Set when a terminal failure is classified as insufficient Buzz (top-up path). */
@@ -94,7 +122,7 @@ export interface RunnerProps {
   /** UNSCANNED img2img source upload (generationSource purpose) → real `{ url, width, height }`. */
   uploadSourceImage: () => Promise<BlockGenerationSourceImageInfo | null>;
   estimate: (body: WorkflowBody) => Promise<BlockWorkflowSnapshot>;
-  submit: (body: WorkflowBody) => Promise<BlockWorkflowSnapshot>;
+  submit: (body: WorkflowBody, opts?: { idempotencyKey?: string }) => Promise<BlockWorkflowSnapshot>;
   poll: (workflowId: string) => Promise<BlockWorkflowSnapshot>;
   onBack: () => void;
   /**
@@ -297,6 +325,7 @@ export function Runner(props: RunnerProps) {
       buttonLabel: button.label,
       status: 'estimating',
       body,
+      submitKey: newSubmitKey(),
       requested,
       // Captured AT PRESS TIME, not read back later: the shared prompt box is
       // live, so a viewer who edits it while a run is in flight would otherwise
@@ -331,10 +360,13 @@ export function Runner(props: RunnerProps) {
   function applyPollResult(id: string, snap: BlockWorkflowSnapshot) {
     if (isTerminalSnapshot(snap.status)) {
       const status = mapSnapshotStatus(snap.status);
+      // The snapshot error classifies (insufficient Buzz) and is logged; the
+      // card renders app-owned copy, never the server's words.
+      logWorkflowError('workflow failed', snap.error);
       patchItem(id, {
         status,
         imageUrls: snap.imageUrls,
-        error: snap.error,
+        error: status === 'failed' ? GENERATION_FAILED_MESSAGE : undefined,
         insufficientBuzz: status === 'failed' && isInsufficientBuzzError(snap.error),
       });
       // A terminal result (success or spend-failure) may have moved the balance.
@@ -350,7 +382,7 @@ export function Runner(props: RunnerProps) {
       maxDurationMs: props.pollMaxDurationMs,
       sleep: props.sleep,
       onUpdate: (s: BlockWorkflowSnapshot) =>
-        patchItem(id, { status: mapSnapshotStatus(s.status), imageUrls: s.imageUrls, error: s.error }),
+        patchItem(id, { status: mapSnapshotStatus(s.status), imageUrls: s.imageUrls, error: undefined }),
     };
   }
 
@@ -361,13 +393,16 @@ export function Runner(props: RunnerProps) {
     if (item.status !== 'confirming') return;
     patchItem(item.id, { status: 'submitting', error: undefined, insufficientBuzz: undefined });
     try {
-      const snap = await submit(item.body);
+      // One idempotency key per queue item, minted at press time — a retry
+      // of THIS submit reuses it and cannot reserve Buzz twice.
+      const snap = await submit(item.body, { idempotencyKey: item.submitKey });
       // A submit that comes straight back failed (e.g. insufficient Buzz) never
       // reaches the poll loop — classify + surface it here.
       if (snap.status === 'failed') {
+        logWorkflowError('submit refused', snap.error);
         patchItem(item.id, {
           status: 'failed',
-          error: snap.error,
+          error: GENERATION_FAILED_MESSAGE,
           insufficientBuzz: isInsufficientBuzzError(snap.error),
         });
         onBalanceRefresh?.();
@@ -377,13 +412,18 @@ export function Runner(props: RunnerProps) {
         workflowId: snap.workflowId,
         status: mapSnapshotStatus(snap.status),
         imageUrls: snap.imageUrls,
-        error: snap.error,
+        error: undefined,
       });
       const terminal = await pollToTerminal(poll, snap, pollOpts(item.id));
       applyPollResult(item.id, terminal);
     } catch (e) {
+      // A thrown submit may mean the spend already committed and the reply
+      // was lost — never render its (server-shaped) message, and never tell
+      // the viewer it was free. The item keeps its submitKey, so any retry
+      // of this same intent reuses it.
       const msg = errMsg(e);
-      patchItem(item.id, { status: 'failed', error: msg, insufficientBuzz: isInsufficientBuzzError(msg) });
+      logWorkflowError('submit threw', msg);
+      patchItem(item.id, { status: 'failed', error: GENERATION_FAILED_MESSAGE, insufficientBuzz: isInsufficientBuzzError(msg) });
     }
   }
 
@@ -416,6 +456,9 @@ export function Runner(props: RunnerProps) {
       buttonLabel: item.buttonLabel,
       status: 'estimating',
       body: item.body,
+      // A rerun is a NEW intent (fresh estimate + fresh Confirm), so it
+      // mints a fresh key rather than reusing the original item's.
+      submitKey: newSubmitKey(),
       requested: item.requested,
       promptUsed: item.promptUsed,
       recipe: item.recipe,
@@ -444,7 +487,8 @@ export function Runner(props: RunnerProps) {
       const terminal = await pollToTerminal(poll, seed, pollOpts(item.id));
       applyPollResult(item.id, terminal);
     } catch (e) {
-      patchItem(item.id, { status: 'failed', error: errMsg(e) });
+      logWorkflowError('check-again poll threw', errMsg(e));
+      patchItem(item.id, { status: 'failed', error: GENERATION_FAILED_MESSAGE });
     }
   }
 

@@ -12,12 +12,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react';
 
-import { Alert, Badge, Button, Card, Group, Loader, Modal, Stack, TextInput } from '../ui/index.js';
-// Design-system primitives (`@civitai/components-react` 0.3.1): the accessible
-// SegmentedControl, hover/focus Tooltip, and the Toast notification system. These
-// render the same `data-civitai-ui` + `--civitai-*` token contract as the
-// blocks-react/ui pack, so they sit alongside it as one visual system.
-import { SegmentedControl, Tooltip, ToastProvider, useToast } from '@civitai/components-react';
+import { Alert, Badge, Button, Card, Group, Loader, Modal, Stack, TextInput, SegmentedControl, Tooltip, ToastProvider, useToast } from '../ui/index.js';
+// The SegmentedControl, hover/focus Tooltip, and Toast system render the
+// `@civitai/components` markup contract (`data-civitai-ui` + `--civitai-*`
+// tokens), same as the control adapters in ui/primitives — one visual system.
 
 import type { BlockGatedImage } from '@civitai/app-sdk/blocks';
 import type { SharedListItem } from '../platform/index.js';

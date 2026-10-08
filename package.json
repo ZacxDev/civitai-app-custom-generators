@@ -15,10 +15,10 @@
   },
   "dependencies": {
     "@civitai/app-sdk": "^0.59.0",
-    "@civitai/components": "^0.5.0",
-    "@civitai/components-react": "^0.5.0",
-    "@civitai/sdk": "^0.3.0",
-    "@civitai/theme": "^0.4.0",
+    "@civitai/components": "^0.9.3",
+    "@civitai/components-react": "^0.9.1",
+    "@civitai/sdk": "^0.10.2",
+    "@civitai/theme": "^0.5.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

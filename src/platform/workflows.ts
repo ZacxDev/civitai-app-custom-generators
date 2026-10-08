@@ -113,7 +113,7 @@ function isPriced(snapshot: BlockWorkflowSnapshot): boolean {
 }
 
 /**
- * A fresh idempotency key per submit attempt.
+ * A fresh idempotency key, minted once by the caller per submit INTENT.
  *
  * 🔴 REQUIRED BY THE ROUTE — no `?`. The bridge input had it optional and the
  * host filled it in; on REST a submit without one is a 400. It exists because a
@@ -121,9 +121,10 @@ function isPriced(snapshot: BlockWorkflowSnapshot): boolean {
  * a retry, would mint a second workflow and debit the viewer's Buzz twice.
  *
  * Charset is the server's `/^[A-Za-z0-9_-]{1,64}$/`, which `randomUUID()`'s hex
- * and hyphens satisfy. Per CALL rather than per body: two deliberate submits of
- * the same generator are two generations the viewer asked for, and must not
- * collapse into one.
+ * and hyphens satisfy. One key per intent, reused unchanged on retry: the
+ * caller (the Runner) mints it when the queue item is created and passes the
+ * same value on every submit of that item. Two deliberate presses are two
+ * queue items with two keys, so they still price and run as two generations.
  */
 function newIdempotencyKey(): string {
   const c = globalThis.crypto;
@@ -135,7 +136,7 @@ function newIdempotencyKey(): string {
 
 export interface WorkflowClient {
   estimate: (body: WorkflowBody) => Promise<BlockWorkflowSnapshot>;
-  submit: (body: WorkflowBody) => Promise<BlockWorkflowSnapshot>;
+  submit: (body: WorkflowBody, opts?: { idempotencyKey?: string }) => Promise<BlockWorkflowSnapshot>;
   poll: (workflowId: string) => Promise<BlockWorkflowSnapshot>;
   cancel: (workflowId: string) => Promise<BlockWorkflowSnapshot>;
 }
@@ -185,12 +186,13 @@ export function createWorkflowClient(): WorkflowClient {
      * A genuine transport/authorisation failure still throws, and `Runner`'s
      * catch renders it.
      */
-    async submit(body) {
+    async submit(body, opts) {
       const app = await getClient();
       return requireSnapshot(
         await app.site.post<{ snapshot?: BlockWorkflowSnapshot }>('blocks/workflows/submit', {
           body,
-          idempotencyKey: newIdempotencyKey(),
+          // The caller's per-intent key wins; mint only when none was given.
+          idempotencyKey: opts?.idempotencyKey ?? newIdempotencyKey(),
         }),
       );
     },

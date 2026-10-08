@@ -23,25 +23,44 @@ later phase.
 ## SDK
 
 Pinned to the published contract: `@civitai/app-sdk@^0.59.0` +
-`@civitai/blocks-react@^0.43.0` (+ `@civitai/theme@^0.2.1`,
-`@civitai/components@^0.3.1` and `@civitai/components-react@^0.3.1` for the
-design system). Hooks used: `useBlockContext`, `useBlockToken`, `useResourcePicker`,
-`useImageUpload`, `useGenerationResources`, `useBuzzWorkflow`, `useBuzzBalance`,
-`useBuzzPurchase`, `useSharedStorage`, `useAppStorage`,
-`useCivitaiNavigate`, `useRequestConsent` / `useRequestSignIn`, `useBlockResize`.
-UI is composed on the `@civitai/blocks-react/ui` component pack, which as of 0.36
-delegates its theming to `@civitai/theme`'s `--civitai-*` design tokens — the
-app chrome (`theme.ts`) reads those same tokens (no hand-coded palette).
+`@civitai/sdk@^0.10.2` (+ `@civitai/theme@^0.5.2` and
+`@civitai/components@^0.9.3` for the design system; `@civitai/components-react`
+stays in the tree as the elements package's peer but the app renders the
+documented markup contract — see "Component pack" below).
 
-🔴 **`estimate()` REJECTS as of `@civitai/blocks-react@0.43.0`.** A host reply
-carrying no usable price used to resolve as a cost-less "success"
-(civitai/civitai#4159); it now throws `WorkflowEstimateError` with a `.code`
-(`'failed' | 'no-cost'`) and the host's verbatim `.snapshot` . Every `estimate()`
-call site must sit in a `try/catch` — moderator **review preview** answers every
-workflow request with a failure, so a missing `catch` turns a reviewer's first
-click into an unhandled rejection. `src/lib/estimate.ts` owns the mapping:
-`.snapshot.error` is server-authored and UNSANITISED, so it is logged and never
-rendered; the viewer sees copy keyed off `.code`.
+The platform seam lives in **`src/platform/`** — the only files allowed to
+import `@civitai/sdk` (enforced by `src/platform-seam.test.ts`). It binds the
+transport to plain SDK functions and exposes the app's hook vocabulary under
+the names the components already used: `useBlockContext`, `useBlockToken`,
+`useResourcePicker`, `useImageUpload`, `useGenerationResources`,
+`useBuzzWorkflow`, `useBuzzBalance`, `useBuzzPurchase`, `useSharedStorage`,
+`useAppStorage`, `useCivitaiNavigate`, `useRequestConsent` /
+`useRequestSignIn`. Host UI goes through `app.host.*`, data through
+`app.site.*` over `/api/v1/blocks/*`, per-viewer KV through `app.storage`.
+UI is composed on the `@civitai/components` markup contract
+(`data-civitai-ui` + `--civitai-*` design tokens) through the adapters in
+`src/ui/` — the app chrome (`theme.ts`) reads those same tokens (no
+hand-coded palette).
+
+🔴 **`estimate()` REJECTS.** A host reply carrying no usable price used to
+resolve as a cost-less "success" (civitai/civitai#4159); the workflow client
+now throws `WorkflowEstimateError` with a `.code` (`'failed' | 'no-cost'`)
+and the host's verbatim `.snapshot`. Every `estimate()` call site must sit
+in a `try/catch` — moderator **review preview** answers every workflow
+request with a failure, so a missing `catch` turns a reviewer's first click
+into an unhandled rejection. `src/lib/estimate.ts` owns the mapping:
+`.snapshot.error` is server-authored and UNSANITISED, so it is logged and
+never rendered; the viewer sees copy keyed off `.code`. The same rule covers
+submit/poll failures: the Runner classifies the snapshot error (insufficient
+Buzz), logs it, and renders app-owned copy.
+
+Consent requests are **bounded**: `app.requestGrants` is called with an
+`AbortSignal` timeout, because the promise never settles when the host
+dialog is dismissed — a timed-out request reads as "not granted", never as
+a hang. Submit is **idempotent per intent**: the Runner mints one
+idempotency key per queue item and sends it unchanged on that item's
+submit, so a retried submit cannot reserve Buzz twice; a rerun is a new
+queue item (fresh estimate + fresh Confirm) and mints a fresh key.
 
 `useImageUpload` is used with TWO purposes:
 
@@ -243,25 +262,33 @@ every round and nothing asserts on it — read it off the run):
   `useGenerationResources` hook via stubbed fetch), and a full **build → publish
   → discover → open → run** e2e against that same fake platform.
 
-## Component pack + Track U
+## Component pack
 
-As of `@civitai/blocks-react@0.36` the `/ui` pack provides **Slider**, **Select**,
-**NumberInput**, **SegmentedControl**, **Collapse**, and **Modal** — so the app
-composes entirely on the pack (no more hand-rolled range/select/number inputs).
-**Toast**, **Tooltip** and **Image** shipped in `@civitai/components@0.3.0`
-(Track U) and the app consumes them from `@civitai/components-react` — the
-hand-rolled interims are gone.
+The app renders the **`@civitai/components` markup contract**: `data-civitai-ui`
+attributes styled by the package's stylesheet, injected via its
+`injectStyles()`. The 0.9 line retired the hand-written React bindings in
+`@civitai/components-react` (its exports are now `@lit/react` wrappers over
+the shadow-DOM `<civitai-*>` elements), and the package documents the markup
+contract as the framework-agnostic consumption path — so `src/ui/` writes
+that markup in React: the control adapters in `ui/primitives.tsx` (Stack,
+Group, Card, Button, Badge, Alert, Loader, and the field chrome for
+TextInput / NumberInput / Select / Slider / Textarea), plus `ui/Image.tsx`,
+`ui/SegmentedControl.tsx`, `ui/Tooltip.tsx` and the `ui/Toast.tsx` queue.
+**Modal**, **Collapse** and **ReportButton** are local implementations —
+the contract carries no modal/collapse styling — with their CSS in
+`ui/styles.ts` alongside the injection.
 
-🔴 **They need a SINGLE resolved `@civitai/components`.** Both
-`@civitai/blocks-react`'s `injectBlocksStyles()` and `@civitai/components-react`'s
-`useComponentStyles()` inject through the same `style[data-civitai-components]`
-marker, so whichever runs first wins and the second no-ops. When the installer
-nests an older copy under `blocks-react` (the case in
-`civitai/civitai-app-starters#247`), the older, smaller stylesheet is the one
-that lands and Tooltip/Toast/Image render **unstyled** — a tooltip becomes
-visible layout text with no console error. Keep `@civitai/components` deduped to
-ONE version: `pnpm why @civitai/components` must print a single resolution with
-no nested copy.
+🔴 **They need a SINGLE resolved `@civitai/components`.** Every stylesheet
+injection writes through the same `style[data-civitai-components]` marker
+and bails early when the marker is already present, so whichever copy runs
+first wins and the second no-ops. When an installer nests an older copy
+(the case in civitai/civitai-app-starters#247), the older, smaller
+stylesheet is the one that lands and Tooltip/Toast/Image render
+**unstyled** — a tooltip becomes visible layout text with no console
+error. Keep `@civitai/components` deduped to ONE version: `pnpm why
+@civitai/components` must print a single resolution with no nested copy.
+`src/design-system-styles.test.tsx` pins the observable: the injected
+stylesheet carries the rules for every primitive this app renders.
 
 ## Not verified without a live host
 

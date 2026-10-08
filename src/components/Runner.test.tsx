@@ -158,14 +158,26 @@ describe('Runner — estimate → confirm → submit → poll queue', () => {
     expect(screen.queryByTestId('queue-failed')).not.toBeInTheDocument();
   });
 
-  it('surfaces a GENERIC failed submit (non-Buzz) in the queue with its raw error', async () => {
+  it('surfaces a GENERIC failed submit (non-Buzz) with app-owned copy — the server error is never rendered', async () => {
     const wf = mockWorkflow({ failSubmit: 'Orchestrator unavailable.' });
     renderRunner(txtConfig(), { estimate: wf.estimate, submit: wf.submit, poll: wf.poll });
     await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
     await userEvent.click(screen.getByTestId('gen-button'));
     await userEvent.click(await screen.findByTestId('queue-confirm'));
-    expect(await screen.findByTestId('queue-failed')).toHaveTextContent(/orchestrator unavailable/i);
+    const failed = await screen.findByTestId('queue-failed');
+    expect(failed).toHaveTextContent(/this generation failed/i);
+    expect(failed).not.toHaveTextContent(/orchestrator unavailable/i);
     expect(screen.queryByTestId('queue-failed-insufficient')).not.toBeInTheDocument();
+  });
+
+  it('sends one idempotency key per queue item, in the server charset', async () => {
+    const { wf } = renderRunner(txtConfig());
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+    await waitFor(() => expect(wf.calls.submit).toHaveLength(1));
+    expect(wf.calls.submitKeys).toHaveLength(1);
+    expect(wf.calls.submitKeys[0]).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
   });
 
   it('resolves a slow gen that terminates well past the old ~48s window (does not lose the result)', async () => {
