@@ -116,6 +116,7 @@ describe('the platform seam', () => {
     expect(importers).toEqual([
       'platform/client.ts',
       'platform/hooks.ts',
+      'platform/storeListings.ts',
       'platform/testing.tsx',
       'platform/workflows.ts',
     ]);

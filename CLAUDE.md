@@ -105,7 +105,8 @@ edges and several guards here were ported from them:
 1. **The installed package itself.** `node_modules/@civitai/<pkg>/dist/*.d.ts`
    and its `README.md` are the only source guaranteed to describe *the version
    this repo builds against*. Check `package.json` for that version first.
-   Subpaths matter: `@civitai/app-sdk` exports `./blocks`, `./scopes`,
+   Subpaths matter: `@civitai/app-sdk` exports `./blocks`, `./manifest`
+   (Node-only `defineBlock`, needs `ajv`), `./scopes`,
    `./orchestrator`, `./schemas/app-block/v1.json`; `@civitai/blocks-react`
    exports `./ui` and `./testing`.
 2. **https://developer.civitai.com/apps/** — `guide/{quickstart,concepts,embedding,theming,text-to-image,comfy-cloud}`

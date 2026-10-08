@@ -2,14 +2,16 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
+import { BLOCK_SCOPES, BlockManifestError } from '@civitai/app-sdk/blocks';
+
 import { manifest, manifestBuzzBudgetPerGen, validateManifest } from './manifest.js';
 
 describe('block.manifest.json', () => {
-  it('validates against the SDK defineBlock gate (augmented to runtime shape)', () => {
+  it('validates against the SDK defineBlock gate, as committed', () => {
     expect(() => validateManifest()).not.toThrow();
   });
 
-  it('declares exactly the seven scopes the app uses', () => {
+  it('declares exactly the eight scopes the app uses', () => {
     expect(manifest.scopes).toEqual([
       'ai:write:budgeted',
       'buzz:read:self',
@@ -18,7 +20,36 @@ describe('block.manifest.json', () => {
       'apps:storage:shared:read',
       'apps:storage:shared:write',
       'posts:write:self',
+      'apps:store:items:write',
     ]);
+  });
+
+  /**
+   * Every declared scope is one the installed SDK's `defineBlock` gate knows —
+   * nothing is filtered out before it runs any more (`apps:store:items:write`
+   * joined `BLOCK_SCOPES` in 0.59.0) — and the gate is not a blanket pass: an
+   * unknown scope still fails it.
+   */
+  it('declares only scopes the installed SDK knows, and the gate rejects an unknown one', () => {
+    const known = new Set<string>(Object.values(BLOCK_SCOPES));
+    for (const scope of manifest.scopes as string[]) {
+      expect(known.has(scope), `${scope} is not in the installed @civitai/app-sdk BLOCK_SCOPES`).toBe(true);
+    }
+    // APPEND the unknown scope rather than replacing the list: replacing it
+    // would orphan all eight `scopeJustifications`, which `defineBlock` rejects
+    // on its own — so the case would stay red with the enum check deleted.
+    // Pinned to the error's FIELD, so only the scope-enum check can satisfy it.
+    let caught: unknown;
+    try {
+      validateManifest({ ...manifest, scopes: [...(manifest.scopes as string[]), 'apps:made:up'] });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(BlockManifestError);
+    expect((caught as BlockManifestError).field).toBe('scopes[8]');
+    expect((caught as BlockManifestError).message).toMatch(
+      /^manifest\.scopes\[8\] must be equal to one of the allowed values/,
+    );
   });
 
   /**
@@ -34,7 +65,7 @@ describe('block.manifest.json', () => {
    * Asserted as a RELATIONSHIP over every declared scope rather than a list of
    * the sensitive ones: this repo cannot see civitai's sensitivity table, and a
    * copy of it here would rot silently the next time a scope is reclassified.
-   * Justifying all seven is cheap and cannot be wrong.
+   * Justifying all of them is cheap and cannot be wrong.
    */
   it('justifies every declared scope, with a justification for nothing else', () => {
     const scopes = manifest.scopes as string[];
