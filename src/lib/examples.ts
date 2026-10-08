@@ -1,10 +1,11 @@
-// Onboarding EXAMPLE generators, surfaced in the IntroPanel so a first-time
-// viewer can "Make a copy" and immediately see how a generator is built. These
+// EXAMPLE generators, seeded fixtures a first-time viewer could "Make a copy"
+// of to immediately see how a generator is built. (The onboarding panel that
+// surfaced them was replaced by a one-line intro; kept as forkable fixtures.) These
 // are NOT real shared-storage rows — they are synthesized `SharedListItem`s
 // whose `value` is a normal publish payload, so the existing fork path
 // (`parsePublishedGenerator(item.value)` → new draft) forks them with zero
 // special-casing. They never appear in the real Discover list; they only live
-// inside the intro panel.
+// in tests and future onboarding surfaces.
 
 import type { SharedListItem } from '../platform/index.js';
 

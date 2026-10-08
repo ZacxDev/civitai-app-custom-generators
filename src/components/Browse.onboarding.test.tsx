@@ -1,11 +1,12 @@
 // Browse — dogfood UX fixes: the persistent anon sign-in header, the per-card
-// Discover cost signal, and the one-time onboarding IntroPanel.
+// Discover cost signal, and the one-line Discover intro.
 
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { Browse, type BrowseProps } from './Browse.js';
+import { setViewport } from '../test-setup.js';
 import { palette } from '../theme.js';
 import { buildPublishPayload, newButton } from '../lib/generator.js';
 import type { GeneratorConfig } from '../types.js';
@@ -123,33 +124,35 @@ describe('Browse — Discover cost signal (fix #3)', () => {
   });
 });
 
-describe('Browse — onboarding IntroPanel (fix #1)', () => {
-  it('shows the concept panel on Discover and hides it after dismiss', async () => {
+describe('Browse — Discover intro line (fix #1)', () => {
+  it('shows the simple intro copy on Discover — no explainer card', () => {
     renderBrowse();
-    expect(screen.getByTestId('intro-panel')).toBeInTheDocument();
-    // seeded examples are copy-able
-    expect(screen.getAllByTestId('intro-example').length).toBeGreaterThan(0);
-    await userEvent.click(screen.getByTestId('intro-dismiss'));
+    expect(screen.getByTestId('discover-intro')).toHaveTextContent(
+      'Use premade generators for various specific purposes, copy and customize them, or build your own from scratch!',
+    );
     expect(screen.queryByTestId('intro-panel')).not.toBeInTheDocument();
   });
 
-  it('"Make a copy" of a seeded example routes through onFork', async () => {
-    const onFork = vi.fn();
-    renderBrowse({ onFork });
-    const first = screen.getAllByTestId('intro-example')[0];
-    await userEvent.click(within(first).getByTestId('intro-example-copy'));
-    expect(onFork).toHaveBeenCalledTimes(1);
-  });
-
-  it('suppresses the redundant plain empty-state while the intro is showing (no query)', () => {
+  it('shows the plain empty-state alongside the intro when Discover is empty', () => {
     renderBrowse({ discover: [] });
-    expect(screen.getByTestId('intro-panel')).toBeInTheDocument();
-    expect(screen.queryByTestId('discover-empty')).not.toBeInTheDocument();
-  });
-
-  it('shows the plain empty-state once the intro is dismissed', async () => {
-    renderBrowse({ discover: [] });
-    await userEvent.click(screen.getByTestId('intro-dismiss'));
     expect(screen.getByTestId('discover-empty')).toBeInTheDocument();
+  });
+});
+
+describe('Browse — sections in a side nav (sidenav)', () => {
+  it('renders the section tabs as a vertical tablist in a nav landmark on wide frames', () => {
+    setViewport('desktop');
+    renderBrowse();
+    const nav = screen.getByTestId('tab-discover').closest('nav');
+    expect(nav).not.toBeNull();
+    const tablist = screen.getByTestId('tab-discover').closest('[role="tablist"]');
+    expect(tablist).toHaveAttribute('aria-orientation', 'vertical');
+  });
+
+  it('switching sections from the sidenav still swaps panels', async () => {
+    renderBrowse();
+    await userEvent.click(screen.getByTestId('tab-mine'));
+    expect(screen.getByTestId('mine-list')).toBeInTheDocument();
+    expect(screen.queryByTestId('discover-list')).not.toBeInTheDocument();
   });
 });

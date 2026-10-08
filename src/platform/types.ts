@@ -9,7 +9,7 @@
 // routes are thin adapters over the SAME server functions the bridge messages
 // called, so the payloads are the same payloads. Keeping the shapes identical is
 // what let this port stay a transport swap instead of a rewrite of the board —
-// `Browse`, `IntroPanel`, `lib/examples.ts` and four test files consume
+// `Browse`, `lib/examples.ts` and the test files consume
 // `SharedListItem` and none of them changed.
 
 import type { SharedStorageValue } from '@civitai/app-sdk/blocks';

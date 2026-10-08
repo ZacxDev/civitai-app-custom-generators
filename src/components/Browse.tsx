@@ -7,7 +7,8 @@
 // covers, and `--civitai-*` tokens (via ../theme) so it flips with `[data-theme]`.
 //
 // a11y: the Discover/Mine switcher is an ARIA tablist with roving tabindex +
-// arrow-key navigation; each panel is a labelled `role="tabpanel"`.
+// arrow-key navigation; each panel is a labelled `role="tabpanel"`. It renders
+// as a sticky side nav on wide frames and a top strip on narrow ones.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react';
@@ -28,9 +29,8 @@ import { token, radius, metaText, type Palette } from '../theme.js';
 // `useMotion()` — see ../motion.ts for the single-guard rationale.
 import { CLASS_LIFT, CLASS_RISE, CLASS_TICK, motionClass, staggerDelayMs, useChangeTick, useMotion } from '../motion.js';
 import { formatCostRange, generatorCostRange } from '../lib/cost.js';
-import { EXAMPLE_SHARED_ITEMS } from '../lib/examples.js';
 import { EmptyState } from './EmptyState.js';
-import { IntroPanel } from './IntroPanel.js';
+import { useIsMobile } from '../useMediaQuery.js';
 import { SafeImage } from './SafeImage.js';
 import { ReportButton } from '../ui/index.js';
 
@@ -248,11 +248,12 @@ interface VoteState {
 export function Browse(props: BrowseProps) {
   const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, keptTruncated = false, keptIncomplete = false, keptError = null, getImages, onOpenGeneratorKey, posting, onRequestSignIn, copyToClipboard, onRetry } = props;
   const [tab, setTab] = useState<Tab>('discover');
+  // The section switcher is a sticky side nav on wide frames and a top strip
+  // on narrow ones (below the civitai `sm` tier — see useMediaQuery).
+  const isMobile = useIsMobile();
   // Motion gate for the chrome Browse owns directly (draft cards). Cards rendered
-  // by PublishedCard/IntroPanel read it themselves.
+  // by PublishedCard read it themselves.
   const motion = useMotion();
-  // One-time onboarding intro on Discover; dismissed for the session.
-  const [introDismissed, setIntroDismissed] = useState(false);
   // Confirm-gated withdraw of an own published generator.
   const [pendingDelete, setPendingDelete] = useState<SharedListItem | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -427,35 +428,6 @@ export function Browse(props: BrowseProps) {
         )}
       </Group>
 
-      <div ref={tablistRef}>
-        <Group gap={8} role="tablist" aria-label="Generator source" onKeyDown={onTabKeyDown}>
-          {visibleTabs.map((t) => (
-            <Button
-              key={t}
-              id={`tab-${t}`}
-              size="sm"
-              variant={tab === t ? 'filled' : 'subtle'}
-              role="tab"
-              aria-selected={tab === t}
-              aria-controls={`panel-${t}`}
-              tabIndex={tab === t ? 0 : -1}
-              data-testid={`tab-${t}`}
-              onClick={() => setTab(t)}
-            >
-              {TAB_LABELS[t]}
-              {t === 'kept' && keptTotal > 0 && (
-                <>
-                  {' '}
-                  <Badge variant="light" data-testid="tab-kept-count">
-                    {keptTotal}
-                  </Badge>
-                </>
-              )}
-            </Button>
-          ))}
-        </Group>
-      </div>
-
       {error && (
         <Alert color="error" data-testid="browse-error">
           {error}{' '}
@@ -465,18 +437,73 @@ export function Browse(props: BrowseProps) {
         </Alert>
       )}
 
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: isMobile ? 'column' : 'row',
+          gap: isMobile ? 12 : 20,
+          alignItems: 'stretch',
+          minWidth: 0,
+        }}
+      >
+        <nav
+          ref={tablistRef}
+          aria-label="Sections"
+          style={
+            isMobile
+              ? undefined
+              : { flex: '0 0 176px', width: 176, position: 'sticky', top: 12, alignSelf: 'flex-start' }
+          }
+        >
+          <div
+            role="tablist"
+            aria-label="Generator source"
+            aria-orientation={isMobile ? 'horizontal' : 'vertical'}
+            onKeyDown={onTabKeyDown}
+            style={{
+              display: 'flex',
+              flexDirection: isMobile ? 'row' : 'column',
+              flexWrap: isMobile ? 'wrap' : undefined,
+              gap: 6,
+            }}
+          >
+            {visibleTabs.map((t) => (
+              <Button
+                key={t}
+                id={`tab-${t}`}
+                size="sm"
+                variant={tab === t ? 'filled' : 'subtle'}
+                role="tab"
+                aria-selected={tab === t}
+                aria-controls={`panel-${t}`}
+                tabIndex={tab === t ? 0 : -1}
+                data-testid={`tab-${t}`}
+                onClick={() => setTab(t)}
+                style={isMobile ? undefined : { justifyContent: 'flex-start', width: '100%' }}
+              >
+                {TAB_LABELS[t]}
+                {t === 'kept' && keptTotal > 0 && (
+                  <>
+                    {' '}
+                    <Badge variant="light" data-testid="tab-kept-count">
+                      {keptTotal}
+                    </Badge>
+                  </>
+                )}
+              </Button>
+            ))}
+          </div>
+        </nav>
+
+        <div style={{ flex: '1 1 auto', minWidth: 0 }}>
+
       {tab === 'discover' && (
         <div role="tabpanel" id="panel-discover" aria-labelledby="tab-discover" tabIndex={0}>
           <Stack gap={10} data-testid="discover-list">
-            {!introDismissed && (
-              <IntroPanel
-                c={c}
-                examples={EXAMPLE_SHARED_ITEMS}
-                onTryExample={onFork}
-                onCreate={onCreate}
-                onDismiss={() => setIntroDismissed(true)}
-              />
-            )}
+            <p style={{ margin: 0, fontSize: 14, color: c.muted }} data-testid="discover-intro">
+              Use premade generators for various specific purposes, copy and customize them, or build
+              your own from scratch!
+            </p>
             <Group justify="space-between" gap={8} style={{ flexWrap: 'wrap' }}>
               <div style={{ flex: '1 1 200px', minWidth: 160 }}>
                 <TextInput
@@ -533,10 +560,7 @@ export function Browse(props: BrowseProps) {
                 <span style={metaText}>Loading generators…</span>
               </Group>
             )}
-            {/* When the intro panel is showing and there's no query, it already
-                carries the concept + a "Build your own" CTA, so the plain empty
-                panel would be redundant — suppress it in that case. */}
-            {!loading && filteredDiscover.length === 0 && (query.trim() || introDismissed) && (
+            {!loading && filteredDiscover.length === 0 && (
               <EmptyState
                 data-testid="discover-empty"
                 title={query.trim() ? 'No matches' : 'No published generators yet'}
@@ -817,6 +841,8 @@ export function Browse(props: BrowseProps) {
           </Stack>
         </div>
       )}
+        </div>
+      </div>
 
       {/* The payoff view for a kept image, with the way back to the generator
           that made it — the one place the app turns "look what I made" into

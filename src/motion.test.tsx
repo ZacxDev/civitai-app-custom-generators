@@ -177,7 +177,7 @@ describe('motion — the live-app measurement, reproduced', () => {
     const { container } = renderBrowse({ discover: THREE });
     const m = measureMotion(container);
 
-    // The claim: 0 -> N. Every discover card + the intro panel gets an entrance
+    // The claim: 0 -> N. Every discover card gets an entrance
     // animation, and every card gets a hover-lift transition.
     expect(m.animated).toBeGreaterThan(0);
     expect(m.transitioned).toBeGreaterThan(0);
@@ -190,10 +190,8 @@ describe('motion — the live-app measurement, reproduced', () => {
       expect(isAnimated(card)).toBe(true);
       expect(hasTransition(card)).toBe(true);
     }
-    // The intro panel fades in too.
-    expect(screen.getByTestId('intro-panel').className).toContain(CLASS_RISE);
-    // 4 animated elements at minimum: 3 cards + the intro panel.
-    expect(m.animated).toBeGreaterThanOrEqual(4);
+    // 3 animated elements at minimum: the 3 cards.
+    expect(m.animated).toBeGreaterThanOrEqual(3);
   });
 
   it('MOTION ON: the entrance is staggered, and the stagger is capped', () => {
@@ -268,7 +266,6 @@ describe('motion — prefers-reduced-motion: reduce (accessibility guard)', () =
       // No stray inline animation-delay either.
       expect((card as HTMLElement).style.animationDelay).toBe('');
     }
-    expect(screen.getByTestId('intro-panel').className).not.toContain(CLASS_RISE);
   });
 
   it('REDUCED: the vote still lands, it just does not tick', async () => {
@@ -297,7 +294,7 @@ describe('motion — prefers-reduced-motion: reduce (accessibility guard)', () =
 
     expect(off.total).toBe(on.total); // same tree, same element count
     expect(off.animated).toBe(0);
-    expect(on.animated).toBeGreaterThanOrEqual(4);
+    expect(on.animated).toBeGreaterThanOrEqual(3);
     expect(on.transitioned).toBeGreaterThan(off.transitioned);
   });
 });
