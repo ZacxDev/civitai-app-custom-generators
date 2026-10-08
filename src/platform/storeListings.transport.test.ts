@@ -12,7 +12,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { __configurePlatform } from './client.js';
 import { createStoreListings, StoreListingError } from './storeListings.js';
 import { createFakeCivitai, SITE_URL, type FakeCivitai, type FakeCivitaiOptions } from './testing.js';
+import type { SharedListItem } from './index.js';
 import { APPS_STORE_ITEMS_WRITE } from '../scopes.js';
+import { type BackfillLedger, classifyStoreFailure, reconcileStoreListings } from '../lib/storeListing.js';
+import type { GeneratorData } from '../types.js';
 
 const ME = 99;
 
@@ -117,4 +120,86 @@ describe('mine', () => {
     const items = await createStoreListings().mine();
     expect(items.map((i) => i.itemKey)).toEqual(['ok']);
   });
+
+  /**
+   * 🔴 A 2xx WITHOUT AN `items` ARRAY IS NOT "NOTHING LISTED". Read as `[]` it
+   * tells the backfill that none of the author's generators has a card, and the
+   * backfill re-upserts every one of them — spending the author's store writes
+   * on items that may already be listed. It rejects the way a malformed `upsert`
+   * reply does, which the backfill classifies as transient and stops on.
+   */
+  describe.each([
+    ['no items key', {}],
+    ['a non-array items', { items: { itemKey: 'k1', status: 'approved' } }],
+    ['a null body', null],
+  ])('a 200 with %s', (_label, body) => {
+    const malformedMine = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : (input as Request).url;
+      if (url.includes('sub-listings/mine')) {
+        return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return fake.fetch(input, init);
+    }) as typeof fetch;
+
+    it('rejects as a malformed_response StoreListingError with no status', async () => {
+      install({}, malformedMine);
+      const err = (await createStoreListings()
+        .mine()
+        .catch((e: unknown) => e)) as StoreListingError;
+      expect(err).toBeInstanceOf(StoreListingError);
+      expect(err.status).toBeNull();
+      expect(err.code).toBe('malformed_response');
+      expect(classifyStoreFailure(err)).toBe('transient');
+    });
+
+    it('stops the backfill before ANY upsert, and records no new refusals', async () => {
+      install({}, malformedMine);
+      let saved: BackfillLedger | null = null;
+      const ledger = {
+        get: async (): Promise<BackfillLedger | null> => ({ v: 1, lastRunAt: 0, refused: ['k2'] }),
+        set: async (next: BackfillLedger) => {
+          saved = next;
+        },
+      };
+      const report = await reconcileStoreListings({
+        viewerId: ME,
+        published: [generatorRow('k1'), generatorRow('k2'), generatorRow('k3')],
+        store: createStoreListings(),
+        ledger,
+        now: 1_800_000_000_000,
+      });
+      // (The `mine` reply is served by the override above, so only the fake's
+      // own routes — `upsert` among them — are recorded in `fake.calls`.)
+      expect(callsTo('blocks/sub-listings/upsert')).toHaveLength(0);
+      expect(report).toEqual({ attempted: true, upserted: [], stoppedBy: 'transient' });
+      // Only the refusal it already had (k2, still published) survives.
+      expect(saved).toEqual({ v: 1, lastRunAt: 1_800_000_000_000, refused: ['k2'] });
+    });
+  });
 });
+
+/** A shared row of the viewer's whose `value` parses as a one-button generator. */
+function generatorRow(key: string): SharedListItem {
+  const data = {
+    v: 1,
+    buttons: [
+      {
+        id: 'b1',
+        label: 'Go',
+        workflowType: 'txt2img',
+        loras: [],
+        promptTemplate: 'a {prompt}',
+        params: { steps: 20, cfgScale: 7, width: 512, height: 512, quantity: 1 },
+      },
+    ],
+  } as unknown as GeneratorData;
+  return {
+    key,
+    authorUserId: ME,
+    value: { title: `Gen ${key}`, body: 'A short description\nButtons:\n• Go: a {prompt}', data },
+    count: 0,
+    viewerVoted: false,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  };
+}

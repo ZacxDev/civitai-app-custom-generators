@@ -129,9 +129,14 @@ export function createStoreListings(): StoreListings {
       return guarded(async () => {
         const app = await getClient();
         const res = await app.site.get<{ items?: unknown }>('blocks/sub-listings/mine');
-        const items = Array.isArray(res?.items) ? res.items : [];
+        // 🔴 A 2xx without an `items` array is NOT an empty list: read as `[]` it
+        // tells the backfill nothing is listed, and it re-upserts every generator.
+        // Reject it like a malformed `upsert` reply (classified transient).
+        if (!res || !Array.isArray(res.items)) {
+          throw new StoreListingError(null, 'malformed_response');
+        }
         const out: MyStoreListing[] = [];
-        for (const raw of items) {
+        for (const raw of res.items as unknown[]) {
           if (!raw || typeof raw !== 'object') continue;
           const r = raw as Record<string, unknown>;
           if (typeof r.itemKey !== 'string' || !isStatus(r.status)) continue;
