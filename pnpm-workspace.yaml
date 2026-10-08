@@ -22,5 +22,11 @@
 # rather than wrong, which is exactly why it is easy to forget. There is precedent
 # for the cleanup in this repo's own history: #26, "chore: drop the expired
 # minimumReleaseAge exception".
+#
+# `@civitai/app-sdk@0.59.0` — same reason, same rule: published 2026-10-08
+# 03:21Z, the first release whose `BLOCK_SCOPES` carries `apps:store:items:write`
+# (the App Store sub-listing scope this app declares). ⏳ Delete the entry once
+# that release is more than 24 hours old.
 minimumReleaseAgeExclude:
   - '@civitai/sdk@0.3.0'
+  - '@civitai/app-sdk@0.59.0'

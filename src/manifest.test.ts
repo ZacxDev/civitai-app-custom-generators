@@ -4,10 +4,10 @@ import { describe, expect, it } from 'vitest';
 
 import { BLOCK_SCOPES } from '@civitai/app-sdk/blocks';
 
-import { SCOPES_AHEAD_OF_SDK, manifest, manifestBuzzBudgetPerGen, validateManifest } from './manifest.js';
+import { manifest, manifestBuzzBudgetPerGen, validateManifest } from './manifest.js';
 
 describe('block.manifest.json', () => {
-  it('validates against the SDK defineBlock gate (augmented to runtime shape)', () => {
+  it('validates against the SDK defineBlock gate, as committed', () => {
     expect(() => validateManifest()).not.toThrow();
   });
 
@@ -25,20 +25,16 @@ describe('block.manifest.json', () => {
   });
 
   /**
-   * 🔴 THE SHIM'S TRIPWIRE. `apps:store:items:write` is live on civitai but not yet
-   * in the pinned `@civitai/app-sdk`'s `BLOCK_SCOPES`, so `validateManifest`
-   * filters the names in `SCOPES_AHEAD_OF_SDK` out before `defineBlock` sees them
-   * (otherwise the gate above would reject a scope the platform accepts). That
-   * filter must not outlive its reason: once the installed SDK knows a scope,
-   * this goes red and says to delete it from the list (and to swap
-   * `scopes.ts`'s local string for the SDK's constant).
+   * Every declared scope is one the installed SDK's `defineBlock` gate knows —
+   * nothing is filtered out before it runs any more (`apps:store:items:write`
+   * joined `BLOCK_SCOPES` in 0.59.0) — and the gate is not a blanket pass: an
+   * unknown scope still fails it.
    */
-  it('only shims scopes the installed SDK genuinely does not know yet', () => {
+  it('declares only scopes the installed SDK knows, and the gate rejects an unknown one', () => {
     const known = new Set<string>(Object.values(BLOCK_SCOPES));
-    for (const scope of SCOPES_AHEAD_OF_SDK) {
-      expect(known.has(scope), `${scope} is now in @civitai/app-sdk — remove it from SCOPES_AHEAD_OF_SDK`).toBe(false);
+    for (const scope of manifest.scopes as string[]) {
+      expect(known.has(scope), `${scope} is not in the installed @civitai/app-sdk BLOCK_SCOPES`).toBe(true);
     }
-    // ...and the shim is not a blanket pass: an unknown scope NOT on the list still fails.
     expect(() => validateManifest({ ...manifest, scopes: ['apps:made:up'] })).toThrow();
   });
 

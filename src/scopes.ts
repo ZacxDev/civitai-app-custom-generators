@@ -5,6 +5,8 @@
 // TOKEN_REFRESH). So the runner must check the live token scopes before
 // generating and, if absent, request consent first.
 
+import { BLOCK_SCOPES } from '@civitai/app-sdk/blocks';
+
 export const AI_WRITE_BUDGETED = 'ai:write:budgeted';
 export const BUZZ_READ_SELF = 'buzz:read:self';
 export const APPS_STORAGE_READ = 'apps:storage:read';
@@ -33,12 +35,10 @@ export const POSTS_WRITE_SELF = 'posts:write:self';
  * from the token is the normal state outside an approved production build — the
  * app checks for it and makes no store call without it ({@link hasStoreScope}).
  *
- * ⚠️ A LOCAL STRING, NOT THE SDK'S CONSTANT. `@civitai/app-sdk` gains
- * `APPS_STORE_ITEMS_WRITE` in civitai/civitai-app-starters#569, which is not
- * published yet. Swap this for the SDK export once a release carrying it is
- * installed — `src/manifest.test.ts` has a tripwire that goes red when it is.
+ * The SDK's own constant (`BLOCK_SCOPES.APPS_STORE_ITEMS_WRITE`, since
+ * `@civitai/app-sdk` 0.59.0).
  */
-export const APPS_STORE_ITEMS_WRITE = 'apps:store:items:write';
+export const APPS_STORE_ITEMS_WRITE = BLOCK_SCOPES.APPS_STORE_ITEMS_WRITE;
 
 /** Does the current token carry the generation scope (consent-gated)? */
 export function hasGenerateScope(tokenScopes: readonly string[] | undefined): boolean {

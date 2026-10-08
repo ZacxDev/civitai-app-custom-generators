@@ -22,7 +22,7 @@ later phase.
 
 ## SDK
 
-Pinned to the published contract: `@civitai/app-sdk@^0.35.0` +
+Pinned to the published contract: `@civitai/app-sdk@^0.59.0` +
 `@civitai/blocks-react@^0.43.0` (+ `@civitai/theme@^0.2.1`,
 `@civitai/components@^0.3.1` and `@civitai/components-react@^0.3.1` for the
 design system). Hooks used: `useBlockContext`, `useBlockToken`, `useResourcePicker`,
@@ -159,10 +159,9 @@ the manifest; consent-exempt; never minted for dev, tunnel or review tokens).
   can fail or delay the in-app publish. "Unavailable" answers are silent.
 - **No store call without the scope on the token**, which is the normal state
   outside an approved production build.
-- `@civitai/app-sdk` does not list the scope yet (civitai/civitai-app-starters#569),
-  so `src/scopes.ts` carries it as a string and `src/manifest.ts` filters it out
-  of the local `defineBlock` gate; `src/manifest.test.ts` goes red once an
-  installed SDK knows it.
+- `@civitai/app-sdk` 0.59.0 lists the scope (`BLOCK_SCOPES.APPS_STORE_ITEMS_WRITE`),
+  so `src/scopes.ts` takes it from the SDK and the local `defineBlock` gate checks
+  it like every other scope.
 - **Inherits the deeplink defect above:** a card for a generator past the loaded
   Discover page opens on Browse instead of the generator.
 
