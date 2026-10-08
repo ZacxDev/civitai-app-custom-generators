@@ -15,6 +15,9 @@ import { Harness } from './Harness.js';
 import { injectMotionStyles } from './motion.js';
 
 import './index.css';
+// AFTER the theme stylesheet import above: the custom palette layer (token
+// redefinitions per `data-palette`) must win ties on the app root.
+import './palette.css';
 
 // `<ErrorBoundary>` is mounted bare, with NO `onError`. It used to carry one that
 // fed an `APP_CRASHED` event into `useBlockAnalytics()` — a no-op shim nothing
