@@ -49,7 +49,7 @@ import { Loader } from './ui/index.js';
 
 import { AI_WRITE_BUDGETED, hasGenerateScope, hasStoreScope } from './scopes.js';
 import { palette, pageStyle, contentStyle, metaText } from './theme.js';
-import { PALETTES, initialPalette, storePalette, type PaletteId } from './palette.js';
+
 import { paintTheme } from './bootTheme.js';
 import type { BackgroundScanResult, GeneratorConfig } from './types.js';
 import { newGenerator, newId } from './lib/generator.js';
@@ -316,77 +316,6 @@ interface RunTarget {
   headerUrl?: string | null;
 }
 
-/**
- * Review switcher for the candidate palettes. Fixed to the corner so every
- * view can be compared under each palette without navigating; one tap cycles
- * the whole app's tokens (src/palette.css). A review tool, not a viewer
- * preference — it leaves once a palette is chosen for good.
- */
-function PaletteSwitcher({ active, onPick }: { active: PaletteId; onPick: (id: PaletteId) => void }) {
-  return (
-    <div
-      data-testid="palette-switcher"
-      role="group"
-      aria-label="Theme palette"
-      style={{
-        position: 'fixed',
-        right: 12,
-        bottom: 12,
-        zIndex: 60,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: 6,
-        borderRadius: 999,
-        background: 'var(--civitai-color-surface)',
-        border: '1px solid var(--civitai-color-border)',
-        boxShadow: '0 6px 20px rgba(0,0,0,0.35)',
-      }}
-    >
-      <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--civitai-color-text-dimmed)', padding: '0 2px 0 6px' }}>
-        THEME
-      </span>
-      {PALETTES.map((p) => {
-        const selected = p.id === active;
-        return (
-          <button
-            key={p.id}
-            type="button"
-            data-testid={`palette-${p.id}`}
-            aria-pressed={selected}
-            onClick={() => onPick(p.id)}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '5px 10px',
-              borderRadius: 999,
-              border: `1px solid ${selected ? 'var(--civitai-color-primary)' : 'var(--civitai-color-border)'}`,
-              background: selected ? 'var(--civitai-color-primary-light)' : 'transparent',
-              color: 'var(--civitai-color-text)',
-              fontSize: 12,
-              fontWeight: selected ? 700 : 500,
-              cursor: 'pointer',
-            }}
-          >
-            <span
-              aria-hidden
-              style={{
-                width: 12,
-                height: 12,
-                borderRadius: 999,
-                background: `linear-gradient(135deg, ${p.swatch[0]} 50%, ${p.swatch[1]} 50%)`,
-                border: '1px solid var(--civitai-color-border)',
-              }}
-            />
-            {p.name}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 export function App({ deps: depsOverride }: AppProps = {}) {
   const { ready, viewer, theme } = useBlockContext();
   const token = useBlockToken();
@@ -486,14 +415,6 @@ export function App({ deps: depsOverride }: AppProps = {}) {
    * success notice — or `null` for nothing (including "store publishing is
    * unavailable", which is not the author's to act on).
    */
-  // Review palette (src/palette.ts): `?palette=` › stored › 'forge'. The pick
-  // re-skins the app via `data-palette` token redefinitions (src/palette.css).
-  const [paletteId, setPaletteId] = useState<PaletteId>(() => initialPalette());
-  const pickPalette = useCallback((id: PaletteId) => {
-    setPaletteId(id);
-    storePalette(id);
-  }, []);
-
   const [storeNotice, setStoreNotice] = useState<string | null>(null);
   /** Which publish the notice belongs to, so a slow answer cannot land on a later one. */
   const storeNoticeSeq = useRef(0);
@@ -1377,7 +1298,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   // ---- render ----
   if (!ready) {
     return (
-      <div data-theme={paintTheme(ready, theme)} data-palette={paletteId} style={pageStyle(c)}>
+      <div data-theme={paintTheme(ready, theme)} data-palette="forge" style={pageStyle(c)}>
         <div
           style={{ margin: 'auto', display: 'grid', justifyItems: 'center', gap: 12 }}
           data-testid="app-loading"
@@ -1392,8 +1313,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   }
 
   return (
-    <div data-theme={paintTheme(ready, theme)} data-palette={paletteId} style={pageStyle(c)}>
-      <PaletteSwitcher active={paletteId} onPick={pickPalette} />
+    <div data-theme={paintTheme(ready, theme)} data-palette="forge" style={pageStyle(c)}>
       <div style={contentStyle}>
         {view === 'browse' && (
           <Browse

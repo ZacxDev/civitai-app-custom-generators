@@ -1,15 +1,16 @@
-/* Custom Generators — custom palette layer ("Forge" / "Signal Violet" /
-   "Slate Workshop"), chosen via the review switcher in App.tsx.
+/* Custom Generators — the Forge theme (warm charcoal + molten amber).
 
-   The app consumes ONLY `--civitai-*` vars (see src/theme.ts), so a palette is
-   a token REDEFINITION scoped to the app root's `data-palette` attribute:
+   The app consumes ONLY `--civitai-*` vars (see src/theme.ts), so the theme
+   is a token REDEFINITION scoped to the app root's `data-palette="forge"`:
    every component downstream resolves the vars anew, no component is themed
-   individually, and the pack stays on the same contract.
+   individually, and the pack stays on the same contract. (Two candidate
+   palettes — Signal Violet and Slate Workshop — were built and reviewed
+   behind a switcher in v0.11.0; Forge was chosen and the switcher removed.
+   The losing blocks live in git history, not in the shipped CSS.)
 
-   Dark is the unqualified base for every palette (the app's standing rule:
-   never follow the OS preference). A light value is reachable ONLY under an
-   explicit `[data-theme='light']` — the host's site-theme signal — combined
-   with the palette.
+   Dark is the unqualified base (the app's standing rule: never follow the
+   OS preference). A light value is reachable ONLY under an explicit
+   `[data-theme='light']` — the host's site-theme signal.
 
    The selectors carry TWO attributes (`[data-theme][data-palette=…]`) on
    purpose: the pack APPENDS its token `<style>` to `<head>` at runtime,
@@ -17,9 +18,8 @@
    lose the cascade to the stock tokens. Two attributes outrank its one
    regardless of document order.
 
-   The DEFAULT palette (Forge, `src/palette.ts`) is what the boot skeleton in
-   index.html is pinned to; `src/bootTokens.test.ts` keeps those literals in
-   step with the Forge blocks below. */
+   The boot skeleton in index.html is pinned to these Forge literals;
+   `src/bootTokens.test.ts` keeps the two in step. */
 
 [data-theme][data-palette='forge'] {
   --civitai-color-text: #f5efe6;
@@ -53,67 +53,3 @@
   --civitai-color-media-placeholder: #f3ead9;
 }
 
-[data-theme][data-palette='violet'] {
-  --civitai-color-text: #f1eefa;
-  --civitai-color-text-dimmed: #a89cc4;
-  --civitai-color-body: #14101f;
-  --civitai-color-surface: #1e1830;
-  --civitai-color-surface-2: #291f42;
-  --civitai-color-border: #3b2e5c;
-  --civitai-color-primary: #8b5cf6;
-  --civitai-color-primary-hover: #a78bfa;
-  --civitai-color-primary-fg: #fdfcff;
-  --civitai-color-primary-light: rgba(139, 92, 246, 0.16);
-  --civitai-color-track: #291f42;
-  --civitai-color-segmented-bg: #291f42;
-  --civitai-color-media-placeholder: #291f42;
-}
-
-[data-theme='light'][data-palette='violet'] {
-  --civitai-color-text: #241a3f;
-  --civitai-color-text-dimmed: #6e6390;
-  --civitai-color-body: #f6f3fc;
-  --civitai-color-surface: #fffefc;
-  --civitai-color-surface-2: #eee8fa;
-  --civitai-color-border: #d3c6ee;
-  --civitai-color-primary: #7c3aed;
-  --civitai-color-primary-hover: #6d28d9;
-  --civitai-color-primary-fg: #fbfaff;
-
-  --civitai-color-primary-light: rgba(124, 58, 237, 0.1);
-  --civitai-color-track: #eee8fa;
-  --civitai-color-segmented-bg: #eee8fa;
-  --civitai-color-media-placeholder: #eee8fa;
-}
-
-[data-theme][data-palette='slate'] {
-  --civitai-color-text: #edf3f7;
-  --civitai-color-text-dimmed: #94a8b8;
-  --civitai-color-body: #10151a;
-  --civitai-color-surface: #171e26;
-  --civitai-color-surface-2: #1f2933;
-  --civitai-color-border: #2e3b47;
-  --civitai-color-primary: #38bdf8;
-  --civitai-color-primary-hover: #5ccbf9;
-  --civitai-color-primary-fg: #06202e;
-  --civitai-color-primary-light: rgba(56, 189, 248, 0.14);
-  --civitai-color-track: #1f2933;
-  --civitai-color-segmented-bg: #1f2933;
-  --civitai-color-media-placeholder: #1f2933;
-}
-
-[data-theme='light'][data-palette='slate'] {
-  --civitai-color-text: #17242e;
-  --civitai-color-text-dimmed: #60788a;
-  --civitai-color-body: #f2f7fa;
-  --civitai-color-surface: #fdfeff;
-  --civitai-color-surface-2: #e6eef3;
-  --civitai-color-border: #c3d2dd;
-  --civitai-color-primary: #0284c7;
-  --civitai-color-primary-hover: #0369a1;
-  --civitai-color-primary-fg: #f5fbfe;
-  --civitai-color-primary-light: rgba(2, 132, 199, 0.1);
-  --civitai-color-track: #e6eef3;
-  --civitai-color-segmented-bg: #e6eef3;
-  --civitai-color-media-placeholder: #e6eef3;
-}
