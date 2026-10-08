@@ -182,6 +182,17 @@ describe('publish → store upsert', () => {
     await expectInAppPublishStood(fake, 'Patient');
   });
 
+  it('a later Save draft does not keep showing the previous publish’s store line', async () => {
+    const fake = renderApp();
+    await buildGenerator('Saver', 'Desc.');
+    await userEvent.click(screen.getByTestId('publish'));
+    await waitFor(() => expect(storeCalls(fake, 'upsert').length).toBe(1));
+    await screen.findByTestId('builder-store-notice');
+    await userEvent.click(screen.getByTestId('save-draft'));
+    await waitFor(() => expect(screen.getByTestId('builder-notice')).not.toHaveTextContent('Published!'));
+    expect(screen.queryByTestId('builder-store-notice')).toBeNull();
+  });
+
   it('makes NO store call when the token lacks the store scope', async () => {
     const fake = renderApp({ options: { scopes: MANIFEST_SCOPES } });
     await buildGenerator('No Scope', 'Desc.');
@@ -300,6 +311,31 @@ describe('reconcile on open', () => {
     await waitFor(() => expect(fake.calls.filter((c) => c.path === 'blocks/shared-storage/list').length).toBe(2));
     await new Promise((r) => setTimeout(r, 20));
     expect(storeCalls(fake)).toEqual([]);
+  });
+
+  it('🔴 a backfill recorded in the viewer’s storage within the interval is not re-run on a new page load', async () => {
+    const fake = renderApp({
+      options: {
+        shared: { seed: MY_THREE },
+        storage: { seed: { 'store-backfill:v1': { v: 1, lastRunAt: Date.now() - 60_000, refused: [] } } },
+      },
+    });
+    await screen.findByTestId('discover-list');
+    await waitFor(() => expect(fake.calls.some((c) => c.path === 'blocks/app-storage/get')).toBe(true));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(storeCalls(fake)).toEqual([]);
+  });
+
+  it('records the run in the viewer’s storage so the next page load skips it', async () => {
+    const fake = renderApp({ options: { shared: { seed: MY_THREE } } });
+    await waitFor(() => expect(storeCalls(fake, 'upsert').length).toBe(3));
+    await waitFor(() =>
+      expect(
+        fake.calls.some(
+          (c) => c.path === 'blocks/app-storage/set' && (c.body as { key?: string }).key === 'store-backfill:v1',
+        ),
+      ).toBe(true),
+    );
   });
 
   it('a 503 from `mine` stops the backfill and leaves Browse untouched', async () => {

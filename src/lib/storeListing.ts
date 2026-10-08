@@ -37,9 +37,10 @@ export const STORE_TAGLINE_MAX = 140;
  * Upserts one backfill run may send.
  *
  * The server allows 30 store writes per user per hour (and 100/day), shared
- * with the author's own publishes, edits and withdraws. Ten leaves the author
- * two-thirds of the hour for what they actually do in the app, and a second
- * session picks up whatever the first did not reach.
+ * with the author's own publishes, edits and withdraws, and counts a refused
+ * upsert too. With {@link BACKFILL_INTERVAL_MS} between runs, ten leaves the
+ * author at least two-thirds of any hour for what they do in the app; the next
+ * run (after the interval) picks up whatever this one did not reach.
  */
 export const RECONCILE_MAX_UPSERTS = 10;
 
@@ -170,6 +171,58 @@ export function storeNoticeFor(outcome: StoreOutcome): string | null {
   }
 }
 
+/**
+ * The backfill runs at most once per this interval per viewer, across page loads.
+ *
+ * 🔴 WHY A PERSISTED INTERVAL AND NOT "ONCE PER MOUNT". A mount is every page
+ * load, and the server counts each upsert — refused or not, since the rate
+ * limit is checked before the item and text checks — against the author's 30/h
+ * and 100/day. Per mount, an author with many unlisted (or refused) generators
+ * would spend 10 writes on every open and could exhaust the hour in three,
+ * leaving their next real publish throttled. At 10 per 6 h the backfill spends at
+ * most 40 writes a day and never more than 10 in an hour.
+ */
+export const BACKFILL_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+/** The viewer's per-app storage key holding the {@link BackfillLedger}. */
+export const STORE_BACKFILL_KEY = 'store-backfill:v1';
+
+/**
+ * What the backfill remembers between page loads, in the viewer's own app
+ * storage: when it last contacted the store, and the item keys the store
+ * refused for reasons a retry will not change (`item` failures other than a lost
+ * write race). A refused generator is not retried by the backfill; republishing
+ * it from the Builder still upserts it, and a success there lists it so it is no
+ * longer "missing".
+ */
+export interface BackfillLedger {
+  v: 1;
+  lastRunAt: number;
+  refused: string[];
+}
+
+export interface BackfillLedgerStore {
+  get(): Promise<BackfillLedger | null>;
+  set(ledger: BackfillLedger): Promise<void>;
+}
+
+/** The ledger over the per-viewer KV (`DraftStore`-shaped). A malformed value reads as none. */
+export function backfillLedgerIn(kv: {
+  get<T = unknown>(key: string): Promise<T | null>;
+  set<T = unknown>(key: string, value: T): Promise<unknown>;
+}): BackfillLedgerStore {
+  return {
+    async get() {
+      const raw = await kv.get<Partial<BackfillLedger>>(STORE_BACKFILL_KEY);
+      if (!raw || raw.v !== 1 || typeof raw.lastRunAt !== 'number' || !Array.isArray(raw.refused)) return null;
+      return { v: 1, lastRunAt: raw.lastRunAt, refused: raw.refused.filter((k): k is string => typeof k === 'string') };
+    },
+    async set(ledger) {
+      await kv.set(STORE_BACKFILL_KEY, ledger);
+    },
+  };
+}
+
 export interface ReconcileReport {
   /** Whether the store was consulted at all (false: the viewer has no own items). */
   attempted: boolean;
@@ -195,13 +248,26 @@ export interface ReconcileReport {
  *
  * Sequential, at most `maxUpserts`, and it stops at the first answer that would
  * repeat for every item (`unavailable`, `throttled`, `transient`); an `item`
- * refusal skips only that item.
+ * refusal skips only that item, and is remembered in the ledger so later runs do
+ * not spend a write on it again.
+ *
+ * With a `ledger`, a run happens at most once per {@link BACKFILL_INTERVAL_MS}
+ * (stamped whenever the store was contacted, including a failed `mine`), and an
+ * unreadable ledger skips the run.
+ *
+ * ⚠️ Known blind spot: the server's `mine` returns an author's OLDEST 200 rows,
+ * and withdrawn rows are kept. Past 200 the newest cards are invisible here and
+ * the backfill re-upserts them (a no-op server-side, but a write each) — bounded
+ * by the per-run cap and the interval.
  */
 export async function reconcileStoreListings(args: {
   viewerId: number;
   published: readonly SharedListItem[];
   store: StoreListings;
   maxUpserts?: number;
+  /** Cross-page-load memory; without it the run is bounded per call only. */
+  ledger?: BackfillLedgerStore;
+  now?: number;
 }): Promise<ReconcileReport> {
   const report: ReconcileReport = { attempted: false, upserted: [], stoppedBy: null };
   const candidates = args.published
@@ -210,19 +276,48 @@ export async function reconcileStoreListings(args: {
     .filter((input): input is StoreListingInput => input !== null);
   if (candidates.length === 0) return report;
 
+  const now = args.now ?? Date.now();
+  let previouslyRefused = new Set<string>();
+  if (args.ledger) {
+    let ledger: BackfillLedger | null;
+    try {
+      ledger = await args.ledger.get();
+    } catch {
+      // Cannot tell whether a run just happened: skip, rather than risk spending
+      // the author's write budget on every page load.
+      return report;
+    }
+    if (ledger && now - ledger.lastRunAt < BACKFILL_INTERVAL_MS) return report;
+    previouslyRefused = new Set(ledger?.refused ?? []);
+  }
+
   report.attempted = true;
+  const refused = new Set<string>();
+  const finish = async () => {
+    if (!args.ledger) return;
+    const candidateKeys = new Set(candidates.map((c) => c.itemKey));
+    // Keep a refusal only while that generator is still published.
+    for (const k of previouslyRefused) if (candidateKeys.has(k)) refused.add(k);
+    try {
+      await args.ledger.set({ v: 1, lastRunAt: now, refused: [...refused] });
+    } catch {
+      /* best-effort: the next load may run again, still bounded per run */
+    }
+  };
+
   let listedKeys: Set<string>;
   try {
     listedKeys = new Set((await args.store.mine()).map((m) => m.itemKey));
   } catch (err) {
     report.stoppedBy = classifyStoreFailure(err);
+    await finish();
     return report;
   }
 
   const budget = args.maxUpserts ?? RECONCILE_MAX_UPSERTS;
   let sent = 0;
   for (const input of candidates) {
-    if (listedKeys.has(input.itemKey)) continue;
+    if (listedKeys.has(input.itemKey) || previouslyRefused.has(input.itemKey)) continue;
     if (sent >= budget) break;
     sent += 1;
     try {
@@ -234,7 +329,10 @@ export async function reconcileStoreListings(args: {
         report.stoppedBy = kind;
         break;
       }
+      // A lost write race (409) is worth retrying next time; anything else is not.
+      if (!(err instanceof StoreListingError && err.status === 409)) refused.add(input.itemKey);
     }
   }
+  await finish();
   return report;
 }

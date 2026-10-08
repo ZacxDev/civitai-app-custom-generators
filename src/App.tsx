@@ -71,7 +71,7 @@ import {
 } from './lib/deeplink.js';
 import blockManifest from '../block.manifest.json';
 import { setGeneratorMeta } from './lib/meta.js';
-import { reconcileStoreListings, storeListingFor, storeNoticeFor } from './lib/storeListing.js';
+import { backfillLedgerIn, reconcileStoreListings, storeListingFor, storeNoticeFor } from './lib/storeListing.js';
 import type { DraftStore, StoredDraft } from './lib/drafts.js';
 import { deleteDraft as deleteDraftFn, listDrafts, saveDraft as saveDraftFn } from './lib/drafts.js';
 import type { KeptRun } from './lib/runs.js';
@@ -409,7 +409,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   const canListInStore = Boolean(viewer) && hasStoreScope(token.scopes);
   const canListInStoreRef = useRef(canListInStore);
   canListInStoreRef.current = canListInStore;
-  /** The backfill runs at most once per session (one mount of the app). */
+  /** The backfill runs at most once per mount (and per interval — see `lib/storeListing.ts`). */
   const storeReconciledRef = useRef(false);
   /**
    * The store's answer to the LAST publish, as one line under the Builder's
@@ -612,9 +612,11 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         // have no store card yet. Off the `mine` page this effect just read, so it
         // costs no extra shared-storage request, and only on a FULFILLED read — a
         // failed one says nothing about what the viewer has published, and the
-        // next load retries. Once per session; never awaited; never fails the
-        // view. A viewer with nothing of their own never reaches the store
-        // (`reconcileStoreListings` returns before calling it).
+        // next load retries. Once per mount, and at most once per
+        // BACKFILL_INTERVAL_MS across page loads (a ledger in the viewer's own app
+        // storage); never awaited; never fails the view. A viewer with nothing of
+        // their own never reaches the store (`reconcileStoreListings` returns
+        // before calling it).
         if (
           mineSettled.status === 'fulfilled' &&
           viewer &&
@@ -626,6 +628,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             viewerId: viewer.id,
             published: mineSettled.value.items,
             store: depsRef.current.store,
+            ledger: backfillLedgerIn(depsRef.current.drafts),
           })
             .then((report) => {
               if (report.stoppedBy && report.stoppedBy !== 'unavailable') {
@@ -953,6 +956,9 @@ export function App({ deps: depsOverride }: AppProps = {}) {
 
   const handleSaveDraft = useCallback(
     async (config: GeneratorConfig) => {
+      // The store line describes the last PUBLISH; a draft save is not one.
+      storeNoticeSeq.current += 1;
+      setStoreNotice(null);
       await persistDraft(config);
       reload();
     },
@@ -1086,10 +1092,13 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         setError(errMsg(e));
         return;
       }
-      // Take its App Store card down too. The server already mirrors an in-app
-      // withdraw onto the store item, best-effort; this call makes it immediate
-      // and is idempotent (`withdrawn: false` when there was nothing to take
-      // down). Fire-and-forget: the in-app withdraw has succeeded and stands.
+      // Take its App Store card down too — as a FALLBACK. The server's shared
+      // withdraw already awaits its own mirror onto the store item before it
+      // answers, so normally the card is gone by now and this returns
+      // `withdrawn: false`. That mirror is best-effort (it logs and swallows its
+      // errors), and this call is what covers it failing. Cost: one of the
+      // author's 30/h store writes per withdraw, since the server rate-limits
+      // before it looks. Idempotent; fire-and-forget; the in-app withdraw stands.
       if (canListInStoreRef.current) {
         depsRef.current.store.withdraw(item.key).catch((err: unknown) => {
           // eslint-disable-next-line no-console

@@ -12,6 +12,8 @@ import { StoreListingError } from '../platform/index.js';
 import type { MyStoreListing, StoreListingInput, StoreListings, SharedListItem } from '../platform/index.js';
 import type { GeneratorData } from '../types.js';
 import {
+  BACKFILL_INTERVAL_MS,
+  type BackfillLedger,
   RECONCILE_MAX_UPSERTS,
   STORE_TAGLINE_MAX,
   STORE_TITLE_MAX,
@@ -68,6 +70,21 @@ function fakeStore(opts: { mine?: MyStoreListing[]; mineError?: unknown; upsertE
     }),
   };
   return { store, upserts };
+}
+
+const NOW = 1_800_000_000_000;
+
+function memoryLedger(initial: BackfillLedger | null) {
+  const l = {
+    value: initial,
+    saved: null as BackfillLedger | null,
+    get: async () => l.value,
+    set: async (next: BackfillLedger) => {
+      l.saved = next;
+      l.value = next;
+    },
+  };
+  return l;
 }
 
 function listed(itemKey: string, status: MyStoreListing['status'] = 'pending'): MyStoreListing {
@@ -270,6 +287,70 @@ describe('reconcileStoreListings', () => {
     const report = await reconcileStoreListings({ viewerId: ME, published: [row('k1', 'One', ME)], store });
     expect(store.upsert).not.toHaveBeenCalled();
     expect(report.stoppedBy).toBe('unavailable');
+  });
+
+  it('🔴 skips the whole run when the ledger says one ran within the interval', async () => {
+    const { store } = fakeStore();
+    const ledger = memoryLedger({ v: 1, lastRunAt: NOW - BACKFILL_INTERVAL_MS + 60_000, refused: [] });
+    const report = await reconcileStoreListings({ viewerId: ME, published: [row('k1', 'One', ME)], store, ledger, now: NOW });
+    expect(store.mine).not.toHaveBeenCalled();
+    expect(store.upsert).not.toHaveBeenCalled();
+    expect(report.attempted).toBe(false);
+    // ...and runs again once the interval has passed.
+    const stale = memoryLedger({ v: 1, lastRunAt: NOW - BACKFILL_INTERVAL_MS - 1, refused: [] });
+    await reconcileStoreListings({ viewerId: ME, published: [row('k1', 'One', ME)], store, ledger: stale, now: NOW });
+    expect(store.upsert).toHaveBeenCalledTimes(1);
+    expect(BACKFILL_INTERVAL_MS).toBe(6 * 60 * 60 * 1000);
+  });
+
+  it('🔴 does not retry an item the store refused on a previous run, and records new refusals (not 409s)', async () => {
+    const { store, upserts } = fakeStore({
+      upsertError: (key) =>
+        key === 'k2'
+          ? new StoreListingError(400, 'text_rejected')
+          : key === 'k3'
+            ? new StoreListingError(409, 'conflict')
+            : null,
+    });
+    const ledger = memoryLedger({ v: 1, lastRunAt: 0, refused: ['k1', 'kGone'] });
+    await reconcileStoreListings({
+      viewerId: ME,
+      published: [row('k1', 'One', ME), row('k2', 'Two', ME), row('k3', 'Three', ME), row('k4', 'Four', ME)],
+      store,
+      ledger,
+      now: NOW,
+    });
+    expect(upserts.map((u) => u.itemKey)).toEqual(['k2', 'k3', 'k4']);
+    // k1 still refused (still a candidate), k2 newly refused, k3 (a lost race) is
+    // retryable, and kGone (no longer published) is dropped.
+    expect(ledger.saved?.refused.sort()).toEqual(['k1', 'k2']);
+    expect(ledger.saved?.lastRunAt).toBe(NOW);
+  });
+
+  it('a ledger that cannot be READ skips the run rather than risk draining the write budget', async () => {
+    const { store } = fakeStore();
+    const ledger = {
+      get: async () => {
+        throw new Error('kv down');
+      },
+      set: vi.fn(async () => {}),
+    };
+    const report = await reconcileStoreListings({ viewerId: ME, published: [row('k1', 'One', ME)], store, ledger, now: NOW });
+    expect(store.mine).not.toHaveBeenCalled();
+    expect(report.attempted).toBe(false);
+  });
+
+  it('a ledger that cannot be WRITTEN does not fail the run', async () => {
+    const { store, upserts } = fakeStore();
+    const ledger = {
+      get: async () => null,
+      set: async () => {
+        throw new Error('kv down');
+      },
+    };
+    const report = await reconcileStoreListings({ viewerId: ME, published: [row('k1', 'One', ME)], store, ledger, now: NOW });
+    expect(upserts.map((u) => u.itemKey)).toEqual(['k1']);
+    expect(report.upserted).toEqual(['k1']);
   });
 
   it(`sends at most RECONCILE_MAX_UPSERTS (${RECONCILE_MAX_UPSERTS}) per run, well inside the 30/hour limit`, async () => {

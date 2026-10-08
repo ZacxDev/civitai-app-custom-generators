@@ -145,12 +145,16 @@ the manifest; consent-exempt; never minted for dev, tunnel or review tokens).
   to an approved one waits for a moderator; the Builder says so in one line
   under "Published!".
 - **Withdraw** → `POST blocks/sub-listings/withdraw`, after the in-app withdraw
-  succeeds. The server mirrors the in-app withdraw on its own as well; this just
-  makes it immediate.
-- **Backfill** → once per session, off the "Published by me" read, the app calls
+  succeeds — a fallback: the server's shared withdraw already awaits its own
+  (best-effort) mirror onto the store item, so this usually answers
+  `withdrawn: false`. It costs one store write per withdraw.
+- **Backfill** → off the "Published by me" read, the app calls
   `GET blocks/sub-listings/mine` and upserts the viewer's published generators
-  that have no card yet, at most 10 per run (the server allows 30 writes an hour).
-  A viewer with no published generators never reaches the store routes.
+  that have no card yet: at most 10 per run, at most one run per 6 hours across
+  page loads (a ledger under `store-backfill:v1` in the viewer's app storage),
+  and an item the store refused is not retried by the backfill. The server counts
+  every upsert, refused or not, against 30 writes/hour and 100/day. A viewer with
+  no published generators never reaches the store routes.
 - **Best-effort, always.** Store calls run after the shared-storage write has
   succeeded and are not awaited, so no store failure (503 while the feature's
   tables are missing, 403 when the app is not enabled, 429, 5xx, a dead network)
