@@ -1,70 +1,58 @@
-// Prop adapters over `@civitai/components-react`.
+// Prop adapters rendering the `@civitai/components` MARKUP contract.
 //
-// 🔴 THESE WRAPPERS EXIST SO THE VOCABULARY DIFFERENCE LIVES IN ONE PLACE. The
-// components the app used from `@civitai/blocks-react/ui` and the ones
-// `@civitai/components-react` ships are the same components, but they do not
-// take the same props. The alternative to this file was editing ~200 JSX sites
-// across nine files, which would have made the port a visual redesign as well as
-// a transport change — two risks in one diff, with no way to tell which one broke
-// a rendering assertion.
+// 🔴 THE 0.9 LINE RETIRED THE REACT LAYER THESE WRAPPERS USED TO FORWARD TO.
+// `@civitai/components-react@0.9` binds the `<civitai-*>` custom elements
+// (shadow DOM), and `@civitai/components` documents the markup contract —
+// `data-civitai-ui` attributes styled by its `components.css`, injected via
+// `injectStyles()` — as the framework-agnostic consumption path: "Consuming
+// this document means writing the markup yourself, in whatever framework."
+// That is what this file does now. The exported prop vocabulary is UNCHANGED
+// from the old adapters, so the ~200 JSX call sites did not move; only the
+// rendering underneath them did.
 //
 // The measured deltas this file absorbs:
-//   Stack   gap: string|number    → gap: 'sm'|'md'|'lg';  align/justify dropped
-//   Group   gap: string|number    → gap: 'sm'|'md'|'lg';  align/justify/wrap dropped
-//   Card    radius dropped
-//   Alert   withCloseButton dropped; closeButtonLabel → closeLabel; role dropped
-//   Badge   color widened → BadgeColor
-//   Button  color dropped
-//   Loader  color dropped
-//   NumberInput  value:number|null + onChange(number|null) → native input events
+//   Stack/Group  numeric gap → inline `gap` (presets remain `data-gap`)
+//   Card    radius dropped by the contract; re-applied inline
+//   Alert   `title` → the alert-title row; close affordance rendered here
+//   Button  `color` (non-primary) → inline token tint (the contract colours
+//           Badge/Alert via `data-color`; Button reads variant/size only)
+//   NumberInput  value:number|null + onChange(number|null) → native input
+//           events, with "" / non-numeric reported as `null`, never NaN
+//   Select  declarative `options` → native `<option>` children
+//   Slider  `showValue` → the value read-out `<output>` + `aria-valuetext`
 //
-// 🔴 NUMERIC GAPS ARE PASSED THROUGH AS EXACT PIXELS rather than bucketed into
-// the pack's three presets. This app uses eight distinct spacings (4, 6, 8, 10,
-// 12, 14, 16, 18); collapsing those into 'sm'|'md'|'lg' would silently redesign
-// every screen while the diff claimed to be a transport change. Presets remain
-// the right choice for NEW code — this is a compatibility layer, not a
-// recommendation.
+// Field chrome follows MARKUP.md: a wrapper carrying `data-civitai-ui`, an
+// optional `<label data-civitai-ui-label for>`, description/error spans the
+// control is `aria-describedby`-wired to, and the control itself carrying
+// `data-civitai-ui-control` (except the slider's native range input).
 
-import { forwardRef } from 'react';
+import { forwardRef, useId } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-
-import {
-  Alert as PackAlert,
-  Badge as PackBadge,
-  Button as PackButton,
-  Card as PackCard,
-  Group as PackGroup,
-  Loader as PackLoader,
-  NumberInput as PackNumberInput,
-  Select as PackSelect,
-  Slider as PackSlider,
-  Stack as PackStack,
-  TextInput as PackTextInput,
-  Textarea as PackTextarea,
-} from '@civitai/components-react';
-import type {
-  AlertColor,
-  BadgeSize,
-  BadgeVariant,
-  ButtonSize,
-  ButtonVariant,
-  CardPadding,
-  LoaderSize,
-  TextInputProps,
-} from '@civitai/components-react';
 
 import { useBlocksStyles } from './styles.js';
 
-/** The colour vocabulary the app passes; wider than the pack's `BadgeColor`. */
+export type ButtonVariant = 'filled' | 'light' | 'outline' | 'subtle';
+export type ButtonSize = 'sm' | 'md' | 'lg';
+export type BadgeVariant = 'filled' | 'light' | 'outline';
+export type BadgeSize = 'sm' | 'md' | 'lg';
+export type CardPadding = 'sm' | 'md' | 'lg';
+export type LoaderSize = 'sm' | 'md' | 'lg';
+export type AlertColor = 'info' | 'success' | 'warning' | 'error';
+
+/** The colour vocabulary the app passes; wider than the contract's intent set. */
 type AppColor = 'primary' | 'error' | 'success' | 'warning' | 'info' | (string & {});
 
+const INTENTS: ReadonlySet<string> = new Set(['info', 'success', 'warning', 'error']);
+
 /**
- * A numeric gap becomes an inline `gap`; a preset is forwarded to the pack so its
- * own CSS applies. `undefined` leaves the pack's default alone.
+ * A numeric gap becomes an inline `gap`; a preset is forwarded as `data-gap`
+ * so the contract's own CSS applies. `undefined` leaves the default alone.
  */
-function gapStyle(gap: string | number | undefined): CSSProperties | undefined {
-  if (gap === undefined) return undefined;
-  return { gap: typeof gap === 'number' ? `${gap}px` : gap };
+function gapAttrs(gap: string | number | undefined): { dataGap?: string; styleGap?: string } {
+  if (gap === undefined) return {};
+  if (typeof gap === 'number') return { styleGap: `${gap}px` };
+  if (gap === 'sm' || gap === 'md' || gap === 'lg') return { dataGap: gap };
+  return { styleGap: gap };
 }
 
 // ---------------------------------------------------------------- layout
@@ -80,11 +68,19 @@ export const Stack = forwardRef<HTMLDivElement, StackProps>(function Stack(
   { gap, align, justify, style, ...rest },
   ref,
 ) {
+  const g = gapAttrs(gap);
   return (
-    <PackStack
+    <div
       ref={ref}
+      data-civitai-ui="stack"
+      {...(g.dataGap ? { 'data-gap': g.dataGap } : {})}
       {...rest}
-      style={{ ...gapStyle(gap), ...(align ? { alignItems: align } : {}), ...(justify ? { justifyContent: justify } : {}), ...style }}
+      style={{
+        ...(g.styleGap ? { gap: g.styleGap } : {}),
+        ...(align ? { alignItems: align } : {}),
+        ...(justify ? { justifyContent: justify } : {}),
+        ...style,
+      }}
     />
   );
 });
@@ -93,7 +89,7 @@ export interface GroupProps extends Omit<React.HTMLAttributes<HTMLDivElement>, '
   gap?: string | number;
   align?: CSSProperties['alignItems'];
   justify?: CSSProperties['justifyContent'];
-  /** `false` pins the row to one line. The pack's CSS wraps by default. */
+  /** `false` pins the row to one line. The contract wraps by default. */
   wrap?: boolean;
   style?: CSSProperties;
 }
@@ -102,12 +98,16 @@ export const Group = forwardRef<HTMLDivElement, GroupProps>(function Group(
   { gap, align, justify, wrap, style, ...rest },
   ref,
 ) {
+  const g = gapAttrs(gap);
   return (
-    <PackGroup
+    <div
       ref={ref}
+      data-civitai-ui="group"
+      {...(g.dataGap ? { 'data-gap': g.dataGap } : {})}
+      {...(wrap === false ? { 'data-nowrap': 'true' } : {})}
       {...rest}
       style={{
-        ...gapStyle(gap),
+        ...(g.styleGap ? { gap: g.styleGap } : {}),
         ...(align ? { alignItems: align } : {}),
         ...(justify ? { justifyContent: justify } : {}),
         ...(wrap === false ? { flexWrap: 'nowrap' } : wrap === true ? { flexWrap: 'wrap' } : {}),
@@ -120,18 +120,21 @@ export const Group = forwardRef<HTMLDivElement, GroupProps>(function Group(
 export interface CardProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 'style'> {
   withBorder?: boolean;
   padding?: CardPadding;
-  /** Dropped by the pack; re-applied inline so rounded cards stay rounded. */
+  /** Not in the contract; re-applied inline so rounded cards stay rounded. */
   radius?: string | number;
   style?: CSSProperties;
 }
 
 export const Card = forwardRef<HTMLDivElement, CardProps>(function Card(
-  { radius, style, ...rest },
+  { withBorder, padding, radius, style, ...rest },
   ref,
 ) {
   return (
-    <PackCard
+    <div
       ref={ref}
+      data-civitai-ui="card"
+      {...(withBorder ? { 'data-with-border': 'true' } : {})}
+      {...(padding ? { 'data-padding': padding } : {})}
       {...rest}
       style={{
         ...(radius !== undefined
@@ -150,8 +153,7 @@ export interface ButtonProps
   variant?: ButtonVariant;
   size?: ButtonSize;
   /**
-   * Dropped by the pack — it reads `data-color` for Alert and Badge only. Applied
-   * here as inline tokens.
+   * Not a contract colour for Button — applied as inline tokens.
    *
    * 🔴 THE THEME DEFINES EXACTLY ONE ERROR TOKEN, `--civitai-color-error`. There
    * is no paired foreground token, so a destructive button is rendered as an
@@ -168,7 +170,7 @@ export interface ButtonProps
 }
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { color, style, ...rest },
+  { color, loading, fullWidth, variant, size, leftSection, rightSection, disabled, style, children, ...rest },
   ref,
 ) {
   const tinted: CSSProperties | undefined =
@@ -179,7 +181,25 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
           borderColor: `var(--civitai-color-${color})`,
         }
       : undefined;
-  return <PackButton ref={ref} {...rest} style={{ ...tinted, ...style }} />;
+  return (
+    <button
+      ref={ref}
+      type="button"
+      data-civitai-ui="button"
+      {...(variant ? { 'data-variant': variant } : {})}
+      {...(size ? { 'data-size': size } : {})}
+      {...(fullWidth ? { 'data-full-width': 'true' } : {})}
+      {...(loading ? { 'aria-busy': true } : {})}
+      disabled={disabled || loading}
+      {...rest}
+      style={{ ...tinted, ...style }}
+    >
+      {loading ? <span data-civitai-ui="loader" data-size="sm" aria-hidden="true" /> : null}
+      {leftSection ? <span data-civitai-ui-section="left">{leftSection}</span> : null}
+      {children}
+      {rightSection ? <span data-civitai-ui-section="right">{rightSection}</span> : null}
+    </button>
+  );
 });
 
 export interface BadgeProps extends Omit<React.HTMLAttributes<HTMLSpanElement>, 'color'> {
@@ -188,17 +208,26 @@ export interface BadgeProps extends Omit<React.HTMLAttributes<HTMLSpanElement>, 
   color?: AppColor;
 }
 
-export const Badge = forwardRef<HTMLSpanElement, BadgeProps>(function Badge({ color, ...rest }, ref) {
-  // The pack narrows `color` to its own union but still forwards it to
-  // `data-color`, which its CSS keys on — so a wider string is passed through
-  // rather than dropped.
-  return <PackBadge ref={ref} {...(rest as object)} color={color as never} />;
+export const Badge = forwardRef<HTMLSpanElement, BadgeProps>(function Badge(
+  { color, variant, size, ...rest },
+  ref,
+) {
+  return (
+    <span
+      ref={ref}
+      data-civitai-ui="badge"
+      {...(variant ? { 'data-variant': variant } : {})}
+      {...(size ? { 'data-size': size } : {})}
+      {...(color && INTENTS.has(color) ? { 'data-color': color } : {})}
+      {...rest}
+    />
+  );
 });
 
 export interface AlertProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 'title' | 'role'> {
   color?: AlertColor;
   title?: ReactNode;
-  /** The pack always shows the close affordance when `onClose` is given. */
+  /** The close affordance renders when this and `onClose` are both given. */
   withCloseButton?: boolean;
   onClose?: () => void;
   closeButtonLabel?: string;
@@ -206,45 +235,122 @@ export interface AlertProps extends Omit<React.HTMLAttributes<HTMLDivElement>, '
 }
 
 export function Alert({
+  color,
+  title,
   withCloseButton,
   onClose,
   closeButtonLabel,
   role,
+  children,
   ...rest
 }: AlertProps): React.JSX.Element {
-  // `withCloseButton={false}` must actually suppress the button, and the pack
-  // decides that from `onClose` alone — so withholding the handler is how the
-  // old prop is honoured.
   const closable = withCloseButton !== false && onClose !== undefined;
   return (
-    <PackAlert
-      {...rest}
-      {...(role ? { role } : {})}
-      {...(closable ? { onClose } : {})}
-      {...(closeButtonLabel ? { closeLabel: closeButtonLabel } : {})}
-    />
+    <div data-civitai-ui="alert" data-color={color ?? 'info'} role={role ?? 'alert'} {...rest}>
+      <div data-civitai-ui-alert-body>
+        {title ? <div data-civitai-ui-alert-title>{title}</div> : null}
+        {children}
+      </div>
+      {closable ? (
+        <button type="button" data-civitai-ui-alert-close aria-label={closeButtonLabel ?? 'Dismiss'} onClick={onClose}>
+          ×
+        </button>
+      ) : null}
+    </div>
   );
 }
 
 export interface LoaderProps extends React.HTMLAttributes<HTMLSpanElement> {
   size?: LoaderSize;
-  /** Dropped by the pack; applied as `currentColor` so the spinner inherits it. */
+  /** Not a contract colour; applied as `currentColor` so the spinner inherits it. */
   color?: string;
 }
 
-export function Loader({ color, style, ...rest }: LoaderProps): React.JSX.Element {
-  return <PackLoader {...rest} style={{ ...(color ? { color } : {}), ...style }} />;
+export function Loader({ color, size, style, ...rest }: LoaderProps): React.JSX.Element {
+  return (
+    <span
+      data-civitai-ui="loader"
+      {...(size ? { 'data-size': size } : {})}
+      aria-hidden="true"
+      {...rest}
+      style={{ ...(color ? { color } : {}), ...style }}
+    />
+  );
+}
+
+// ---------------------------------------------------------------- fields
+
+interface FieldChromeProps {
+  label?: ReactNode;
+  description?: ReactNode;
+  error?: ReactNode;
+  required?: boolean;
+  className?: string;
+}
+
+function useFieldIds(idProp: string | undefined, hasDesc: boolean, hasErr: boolean) {
+  const auto = useId().replace(/[^A-Za-z0-9_-]/g, '');
+  const id = idProp ?? `f-${auto}`;
+  return {
+    id,
+    descId: hasDesc ? `${id}-desc` : undefined,
+    errId: hasErr ? `${id}-err` : undefined,
+  };
+}
+
+function fieldChrome(
+  ui: string,
+  chrome: FieldChromeProps,
+  ids: ReturnType<typeof useFieldIds>,
+  control: ReactNode,
+): React.JSX.Element {
+  const { label, description, error, required, className } = chrome;
+  return (
+    <div
+      data-civitai-ui={ui}
+      className={className}
+      {...(error ? { 'data-invalid': 'true' } : {})}
+    >
+      {label ? (
+        <label data-civitai-ui-label htmlFor={ids.id}>
+          {label}
+          {required ? (
+            <span data-civitai-ui-required aria-hidden="true">
+              {' *'}
+            </span>
+          ) : null}
+        </label>
+      ) : null}
+      {description ? (
+        <span id={ids.descId} data-civitai-ui-description>
+          {description}
+        </span>
+      ) : null}
+      {control}
+      {error ? (
+        <span id={ids.errId} data-civitai-ui-error role="alert">
+          {error}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function describedBy(ids: ReturnType<typeof useFieldIds>): string | undefined {
+  const parts = [ids.descId, ids.errId].filter(Boolean);
+  return parts.length > 0 ? parts.join(' ') : undefined;
 }
 
 /**
  * NumberInput — the one adapter with real behaviour, not just prop renaming.
  *
- * 🔴 THE SIGNATURES ARE INCOMPATIBLE. The pack's NumberInput is a native
- * `<input type="number">`: `value` is a string and `onChange` receives a DOM
- * event. The app's call sites pass `value={number | null}` and
- * `onChange={(n: number | null) => …}` — a cleared field must arrive as `null`,
- * not as `NaN` and not as `0`, because both Runner and ButtonEditor treat `null`
- * as "use the server default" and `0` is a meaningful seed.
+ * 🔴 THE SIGNATURES ARE INCOMPATIBLE WITH THE NATIVE CONTROL. The contract's
+ * NumberInput is a native `<input type="number">`: its value is a string and
+ * changes arrive as DOM events. The app's call sites pass
+ * `value={number | null}` and `onChange={(n: number | null) => …}` — a cleared
+ * field must arrive as `null`, not as `NaN` and not as `0`, because both Runner
+ * and ButtonEditor treat `null` as "use the server default" and `0` is a
+ * meaningful seed.
  */
 export interface NumberInputProps
   extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'size' | 'type' | 'value' | 'onChange'> {
@@ -259,12 +365,22 @@ export interface NumberInputProps
 }
 
 export const NumberInput = forwardRef<HTMLInputElement, NumberInputProps>(function NumberInput(
-  { value, onChange, ...rest },
+  { value, onChange, label, description, error, required, className, inputClassName, id, ...rest },
   ref,
 ) {
-  return (
-    <PackNumberInput
+  const ids = useFieldIds(id, description !== undefined, error !== undefined);
+  return fieldChrome(
+    'number-input',
+    { label, description, error, required, className },
+    ids,
+    <input
       ref={ref}
+      data-civitai-ui-control
+      className={inputClassName}
+      id={ids.id}
+      type="number"
+      aria-describedby={describedBy(ids)}
+      {...(error ? { 'aria-invalid': true } : {})}
       {...rest}
       // An empty string, not `undefined`: `undefined` would make this an
       // uncontrolled input and React would keep the last typed text on screen
@@ -281,16 +397,17 @@ export const NumberInput = forwardRef<HTMLInputElement, NumberInputProps>(functi
         // value" rather than forwarding NaN into a workflow parameter.
         onChange(Number.isNaN(n) ? null : n);
       }}
-    />
+    />,
   );
 });
 
 /**
  * Select — another real adapter, for the same reason as NumberInput.
  *
- * The pack ships the framework-agnostic NATIVE select: `<option>` children and a
- * DOM `onChange`. The app's call site passes a declarative `options` array and
- * expects `onChange` to receive the selected VALUE. Both are converted here.
+ * The contract ships the framework-agnostic NATIVE select: `<option>` children
+ * and a DOM `onChange`. The app's call site passes a declarative `options`
+ * array and expects `onChange` to receive the selected VALUE. Both are
+ * converted here.
  */
 export interface SelectOption {
   value: string;
@@ -319,12 +436,21 @@ export interface AppSelectProps
 }
 
 export const Select = forwardRef<HTMLSelectElement, AppSelectProps>(function Select(
-  { value, onChange, options, placeholder, children, ...rest },
+  { value, onChange, options, placeholder, children, label, description, error, required, className, inputClassName, id, ...rest },
   ref,
 ) {
-  return (
-    <PackSelect
+  const ids = useFieldIds(id, description !== undefined, error !== undefined);
+  return fieldChrome(
+    'select',
+    { label, description, error, required, className },
+    ids,
+    <select
       ref={ref}
+      data-civitai-ui-control
+      className={inputClassName}
+      id={ids.id}
+      aria-describedby={describedBy(ids)}
+      {...(error ? { 'aria-invalid': true } : {})}
       {...rest}
       value={value}
       onChange={(e) => onChange(e.currentTarget.value)}
@@ -345,13 +471,14 @@ export const Select = forwardRef<HTMLSelectElement, AppSelectProps>(function Sel
       ) : (
         children
       )}
-    </PackSelect>
+    </select>,
   );
 });
 
 /**
  * Slider — converts the native range event to the numeric `onChange` the app's
- * LoRA-weight control expects, and maps `showValue` onto the pack's `valueLabel`.
+ * LoRA-weight control expects, and renders the `showValue` read-out (plus the
+ * `aria-valuetext` the contract explicitly leaves to the author).
  */
 export interface AppSliderProps
   extends Omit<
@@ -371,23 +498,65 @@ export interface AppSliderProps
 }
 
 export const Slider = forwardRef<HTMLInputElement, AppSliderProps>(function Slider(
-  { value, onChange, showValue, ...rest },
+  { value, onChange, showValue, label, description, error, required, className, inputClassName, id, ...rest },
   ref,
 ) {
-  return (
-    <PackSlider
+  const ids = useFieldIds(id, description !== undefined, error !== undefined);
+  const control = (
+    <input
       ref={ref}
+      className={inputClassName}
+      id={ids.id}
+      type="range"
+      aria-describedby={describedBy(ids)}
+      {...(error ? { 'aria-invalid': true } : {})}
+      {...(showValue ? { 'aria-valuetext': String(value) } : {})}
       {...rest}
-      {...(showValue ? { valueLabel: (v: number) => String(v) } : {})}
       value={value}
       onChange={(e) => onChange(e.currentTarget.valueAsNumber)}
     />
   );
+  return (
+    <div data-civitai-ui="slider" className={className} {...(error ? { 'data-invalid': 'true' } : {})}>
+      {label ? (
+        showValue ? (
+          <div data-civitai-ui-slider-header>
+            <label data-civitai-ui-label htmlFor={ids.id}>
+              {label}
+            </label>
+            <output data-civitai-ui-slider-value htmlFor={ids.id}>
+              {value}
+            </output>
+          </div>
+        ) : (
+          <label data-civitai-ui-label htmlFor={ids.id}>
+            {label}
+            {required ? (
+              <span data-civitai-ui-required aria-hidden="true">
+                {' *'}
+              </span>
+            ) : null}
+          </label>
+        )
+      ) : null}
+      {description ? (
+        <span id={ids.descId} data-civitai-ui-description>
+          {description}
+        </span>
+      ) : null}
+      {control}
+      {error ? (
+        <span id={ids.errId} data-civitai-ui-error role="alert">
+          {error}
+        </span>
+      ) : null}
+    </div>
+  );
 });
 
 /**
- * Textarea — prop-compatible except for `minRows`, which the pack spells as the
- * native `rows`, and `textareaClassName`, which it spells `inputClassName`.
+ * Textarea — prop-compatible except for `minRows`, which the contract spells
+ * as the native `rows`, and `textareaClassName`, spelled `inputClassName`.
  */
 export interface AppTextareaProps
   extends Omit<React.TextareaHTMLAttributes<HTMLTextAreaElement>, 'rows'> {
@@ -401,24 +570,58 @@ export interface AppTextareaProps
 }
 
 export const Textarea = forwardRef<HTMLTextAreaElement, AppTextareaProps>(function Textarea(
-  { minRows, textareaClassName, ...rest },
+  { minRows, textareaClassName, label, description, error, required, className, id, ...rest },
   ref,
 ) {
-  return (
-    <PackTextarea
+  const ids = useFieldIds(id, description !== undefined, error !== undefined);
+  return fieldChrome(
+    'textarea',
+    { label, description, error, required, className },
+    ids,
+    <textarea
       ref={ref}
+      data-civitai-ui-control
+      className={textareaClassName}
+      id={ids.id}
+      rows={minRows}
+      aria-describedby={describedBy(ids)}
+      {...(error ? { 'aria-invalid': true } : {})}
       {...rest}
-      {...(minRows !== undefined ? { rows: minRows } : {})}
-      {...(textareaClassName !== undefined ? { inputClassName: textareaClassName } : {})}
-    />
+    />,
   );
 });
 
 // ---------------------------------------------------------------- pass-through
-// Prop-compatible as shipped, so this one is a plain re-export — it is here only
-// so every call site has a single import to change.
 
-export const TextInput = PackTextInput;
+export interface TextInputProps
+  extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'size'> {
+  label?: ReactNode;
+  description?: ReactNode;
+  error?: ReactNode;
+  required?: boolean;
+  className?: string;
+  inputClassName?: string;
+}
 
-export type { TextInputProps };
+export const TextInput = forwardRef<HTMLInputElement, TextInputProps>(function TextInput(
+  { label, description, error, required, className, inputClassName, id, ...rest },
+  ref,
+) {
+  const ids = useFieldIds(id, description !== undefined, error !== undefined);
+  return fieldChrome(
+    'text-input',
+    { label, description, error, required, className },
+    ids,
+    <input
+      ref={ref}
+      data-civitai-ui-control
+      className={inputClassName}
+      id={ids.id}
+      aria-describedby={describedBy(ids)}
+      {...(error ? { 'aria-invalid': true } : {})}
+      {...rest}
+    />,
+  );
+});
+
 export { useBlocksStyles };

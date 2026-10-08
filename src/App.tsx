@@ -20,7 +20,6 @@ import type {
 
 import {
   useBlockContext,
-  useBlockResize,
   useBlockToken,
   useBuzzBalance,
   useBuzzPurchase,
@@ -50,6 +49,7 @@ import { Loader } from './ui/index.js';
 
 import { AI_WRITE_BUDGETED, hasGenerateScope, hasStoreScope } from './scopes.js';
 import { palette, pageStyle, contentStyle, metaText } from './theme.js';
+
 import { paintTheme } from './bootTheme.js';
 import type { BackgroundScanResult, GeneratorConfig } from './types.js';
 import { newGenerator, newId } from './lib/generator.js';
@@ -134,7 +134,7 @@ export interface AppDeps {
    */
   getImages: (imageIds: number[]) => Promise<BlockGatedImage[]>;
   estimate: (body: WorkflowBody) => Promise<BlockWorkflowSnapshot>;
-  submit: (body: WorkflowBody) => Promise<BlockWorkflowSnapshot>;
+  submit: (body: WorkflowBody, opts?: { idempotencyKey?: string }) => Promise<BlockWorkflowSnapshot>;
   poll: (workflowId: string) => Promise<BlockWorkflowSnapshot>;
   /**
    * KEEP a run's outputs — turn one of THIS app's own workflows' images into
@@ -338,9 +338,8 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   const { navigate } = useCivitaiNavigate();
   const hostRoute = useHostRoute();
 
-  const rootRef = useRef<HTMLDivElement>(null);
-  useBlockResize(rootRef);
-
+  // A page app fills the frame the host gave it — there is no content-height
+  // resize to report, so no resize hook is wired here.
   const c = palette();
 
   // Assemble the dependency bag (hooks by default; tests override any field).
@@ -1299,7 +1298,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   // ---- render ----
   if (!ready) {
     return (
-      <div ref={rootRef} data-theme={paintTheme(ready, theme)} style={pageStyle(c)}>
+      <div data-theme={paintTheme(ready, theme)} data-palette="forge" style={pageStyle(c)}>
         <div
           style={{ margin: 'auto', display: 'grid', justifyItems: 'center', gap: 12 }}
           data-testid="app-loading"
@@ -1314,7 +1313,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   }
 
   return (
-    <div ref={rootRef} data-theme={paintTheme(ready, theme)} style={pageStyle(c)}>
+    <div data-theme={paintTheme(ready, theme)} data-palette="forge" style={pageStyle(c)}>
       <div style={contentStyle}>
         {view === 'browse' && (
           <Browse

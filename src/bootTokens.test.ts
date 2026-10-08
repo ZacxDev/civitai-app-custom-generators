@@ -14,7 +14,7 @@
 //   main.tsx, module scope:
 //     import '@civitai/theme/styles.css'  → THE APP'S copy, bundled into the CSS <link>
 //     injectBlocksStyles()                → src/ui/styles.ts
-//       → injectStyles()                    @civitai/components-react → @civitai/components
+//       → injectStyles()                    @civitai/components
 //         → injectTokens()                  @civitai/theme — THE COPY *COMPONENTS* RESOLVES
 //           → head.appendChild(<style> tokensCss)
 //
@@ -65,7 +65,13 @@ const INDEX_HTML = readFileSync(new URL('../index.html', import.meta.url), 'utf8
 
 const THEME_CSS_PATH = createRequire(import.meta.url).resolve('@civitai/theme/styles.css');
 
-const THEME_CSS = readFileSync(THEME_CSS_PATH, 'utf8');
+// The app no longer paints the raw package palette: `src/palette.css`
+// redefines the tokens per `data-palette`, and the boot skeleton is pinned to
+// the DEFAULT palette (Forge). The literals below are therefore read FROM
+// THE PALETTE, so re-pinning the boot skeleton to a new default palette is a
+// palette.css change, not a hand-synced hex hunt. (The lockfile/copy guards
+// above stay: they police WHICH theme package the palette layers over.)
+const PALETTE_CSS = readFileSync(new URL('./palette.css', import.meta.url), 'utf8');
 
 /**
  * The version of the copy the assertions below actually read.
@@ -127,7 +133,7 @@ function bootValue(selector: string, prop: string): string {
   return tokenValue(BOOT_CSS, selector, prop);
 }
 
-describe('boot token parity with @civitai/theme', () => {
+describe('boot token parity with the default palette (Forge) over @civitai/theme', () => {
   /**
    * 🔴 THE GUARD THAT MAKES EVERY OTHER ASSERTION IN THIS FILE MEAN ANYTHING. See the
    * file header: while two `@civitai/theme` copies were installed, this suite asserted
@@ -188,10 +194,10 @@ describe('boot token parity with @civitai/theme', () => {
     expect(realpathSync(componentsTheme)).toBe(realpathSync(THEME_CSS_PATH));
   });
 
-  it('the DARK literals match the package [data-theme=dark] block', () => {
-    const body = tokenValue(THEME_CSS, "[data-theme='dark']", '--civitai-color-body');
-    const text = tokenValue(THEME_CSS, "[data-theme='dark']", '--civitai-color-text');
-    const surface = tokenValue(THEME_CSS, "[data-theme='dark']", '--civitai-color-surface');
+  it('the DARK literals match the default palette’s (Forge) base block', () => {
+    const body = tokenValue(PALETTE_CSS, "[data-theme][data-palette='forge']", '--civitai-color-body');
+    const text = tokenValue(PALETTE_CSS, "[data-theme][data-palette='forge']", '--civitai-color-text');
+    const surface = tokenValue(PALETTE_CSS, "[data-theme][data-palette='forge']", '--civitai-color-surface');
 
     expect(bootValue(':root', '--cg-boot-body')).toBe(body);
     expect(bootValue(':root', '--cg-boot-text')).toBe(text);
@@ -205,10 +211,12 @@ describe('boot token parity with @civitai/theme', () => {
     );
   });
 
-  it('the LIGHT literals match the package :root block', () => {
-    const body = tokenValue(THEME_CSS, ':root', '--civitai-color-body');
-    const text = tokenValue(THEME_CSS, ':root', '--civitai-color-text');
-    const surface = tokenValue(THEME_CSS, ':root', '--civitai-color-surface');
+  it('the LIGHT literals match the default palette’s (Forge) light block', () => {
+    // A light value is reachable only under the explicit `[data-theme='light']`
+    // signal — which is exactly the only way this app lets one be reached.
+    const body = tokenValue(PALETTE_CSS, "[data-theme='light'][data-palette='forge']", '--civitai-color-body');
+    const text = tokenValue(PALETTE_CSS, "[data-theme='light'][data-palette='forge']", '--civitai-color-text');
+    const surface = tokenValue(PALETTE_CSS, "[data-theme='light'][data-palette='forge']", '--civitai-color-surface');
 
     const media = BOOT_CSS.slice(BOOT_CSS.indexOf('@media (prefers-color-scheme: light)'));
     expect(tokenValue(media, ':root', '--cg-boot-body')).toBe(body);
@@ -227,8 +235,8 @@ describe('boot token parity with @civitai/theme', () => {
   // media query or an explicit light signal would make a no-preference viewer boot
   // light while every other layer of this app resolves unknown to dark.
   it('no light value is reachable without an explicit light signal', () => {
-    const lightBody = tokenValue(THEME_CSS, ':root', '--civitai-color-body');
-    const darkBody = tokenValue(THEME_CSS, "[data-theme='dark']", '--civitai-color-body');
+    const lightBody = tokenValue(PALETTE_CSS, "[data-theme='light'][data-palette='forge']", '--civitai-color-body');
+    const darkBody = tokenValue(PALETTE_CSS, "[data-theme][data-palette='forge']", '--civitai-color-body');
     expect(lightBody).not.toBe(darkBody); // sanity: or this test proves nothing
 
     expect(bootValue(':root', '--cg-boot-body')).toBe(darkBody);
@@ -245,8 +253,8 @@ describe('boot token parity with @civitai/theme', () => {
   // `background` DECLARATION is not decoration: it paints the html canvas, the layer
   // beneath the skeleton. Flipping it to white changed nothing and no test failed.
   it('every html-canvas background matches its region', () => {
-    const lightBody = tokenValue(THEME_CSS, ':root', '--civitai-color-body');
-    const darkBody = tokenValue(THEME_CSS, "[data-theme='dark']", '--civitai-color-body');
+    const lightBody = tokenValue(PALETTE_CSS, "[data-theme='light'][data-palette='forge']", '--civitai-color-body');
+    const darkBody = tokenValue(PALETTE_CSS, "[data-theme][data-palette='forge']", '--civitai-color-body');
 
     const baseHtml = BOOT_CSS.indexOf('html {');
     expect(baseHtml).toBeGreaterThan(-1);

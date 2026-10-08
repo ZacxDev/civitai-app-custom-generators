@@ -109,7 +109,7 @@
       so the values below are copied from `@civitai/theme`'s own blocks and
       src/bootTokens.test.ts asserts each against the INSTALLED package.
 
-      🔴 IN LIGHT, `body == surface == surface-2` (all #fefefe) in this design
+      🔴 IN LIGHT, `body == surface == surface-2` (all #FFFDF8) in this design
       system. So a placeholder cannot be a surface fill or it is invisible
       white-on-white; it is a `color-mix()` of text into surface, exactly as
       `elevate()` does in src/theme.ts, which reads in BOTH themes.
@@ -126,7 +126,7 @@
       html {
         /* The strong guarantee, independent of `color-scheme` support entirely.
            --civitai-color-body under [data-theme='dark']. */
-        background: #1a1b1e;
+        background: #171310;
       }
 
       body {
@@ -138,25 +138,25 @@
         font-family:
           -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
 
-        /* DARK — the base, unconditioned values, from @civitai/theme
-           [data-theme='dark']. NOTE that `surface` is NOT `body` here: they were
-           the same literal up to @civitai/theme@0.3.1 and diverged in 0.4.0
-           (surface #1a1b1e → #25262b, body unchanged). */
-        --cg-boot-body: #1a1b1e;
-        --cg-boot-text: #c1c2c5;
-        --cg-boot-surface: #25262b;
+        /* DARK — the base, unconditioned values: the DEFAULT palette's
+           (Forge, src/palette.css) dark block. The boot skeleton cannot run
+           the palette machinery, so the values are pinned literals and
+           src/bootTokens.test.ts keeps them in step with palette.css. */
+        --cg-boot-body: #171310;
+        --cg-boot-text: #F5EFE6;
+        --cg-boot-surface: #211A14;
       }
 
       @media (prefers-color-scheme: light) {
         html {
-          background: #fefefe;
+          background: #FAF5EC;
         }
 
         :root {
-          /* LIGHT — @civitai/theme `:root`. */
-          --cg-boot-body: #fefefe;
-          --cg-boot-text: #222;
-          --cg-boot-surface: #fefefe;
+          /* LIGHT — Forge's `[data-theme='light']` block in palette.css. */
+          --cg-boot-body: #FAF5EC;
+          --cg-boot-text: #2A2018;
+          --cg-boot-surface: #FFFDF8;
         }
       }
 
@@ -183,20 +183,20 @@
          make dark stop being what "no information" means. */
       :root[data-civitai-boot-theme='dark'] {
         color-scheme: dark;
-        background: #1a1b1e;
+        background: #171310;
 
-        --cg-boot-body: #1a1b1e;
-        --cg-boot-text: #c1c2c5;
-        --cg-boot-surface: #25262b;
+        --cg-boot-body: #171310;
+        --cg-boot-text: #F5EFE6;
+        --cg-boot-surface: #211A14;
       }
 
       :root[data-civitai-boot-theme='light'] {
         color-scheme: light;
-        background: #fefefe;
+        background: #FAF5EC;
 
-        --cg-boot-body: #fefefe;
-        --cg-boot-text: #222;
-        --cg-boot-surface: #fefefe;
+        --cg-boot-body: #FAF5EC;
+        --cg-boot-text: #2A2018;
+        --cg-boot-surface: #FFFDF8;
       }
 
       /* ---- geometry ----

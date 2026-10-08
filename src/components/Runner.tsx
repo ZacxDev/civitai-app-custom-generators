@@ -20,7 +20,7 @@ import type {
   WorkflowBody,
 } from '@civitai/app-sdk/blocks';
 
-import { Alert, Badge, Button, Card, Collapse, Group, Loader, Modal, NumberInput, Stack, TextInput } from '../ui/index.js';
+import { Alert, Badge, Button, Card, Collapse, Group, Loader, Modal, NumberInput, Stack, TextInput , Image } from '../ui/index.js';
 
 import type { GenButton, GeneratorConfig, GenButtonParams, QueueItem, QueueStatus } from '../types.js';
 import { DEFAULT_PROMPT_PLACEHOLDER, buildSubmitBody, canRunButton, exposesImage, exposesPrompt, missingRequiredInputs, newId } from '../lib/generator.js';
@@ -29,7 +29,6 @@ import type { KeptImageCell, KeptRun } from '../lib/runs.js';
 import { isTerminalSnapshot, mapSnapshotStatus, pollToTerminal, queueStatusLabel } from '../lib/workflow.js';
 import { isInsufficientBuzzError } from '../lib/buzz.js';
 import { ESTIMATE_NO_COST_MESSAGE, estimateFailureMessage, isPricedSnapshot } from '../lib/estimate.js';
-import { Image } from '@civitai/components-react';
 
 import { CLASS_LIFT, motionClass, useMotion } from '../motion.js';
 import { token, radius, elevate, metaText, type Palette } from '../theme.js';
@@ -38,8 +37,37 @@ import { KeptGallery } from './KeptGallery.js';
 import { ResultLightbox } from './ResultLightbox.js';
 import { SafeImage } from './SafeImage.js';
 
+/**
+ * Viewer-safe copy for a generation that failed after pricing.
+ *
+ * 🔴 The workflow snapshot's `error` is SERVER-AUTHORED AND UNSANITISED — the
+ * same rule `lib/estimate.ts` applies to the estimate path. It is logged for
+ * the developer and used only to CLASSIFY (insufficient Buzz), never rendered.
+ * This constant is the copy a failed card shows instead.
+ */
+export const GENERATION_FAILED_MESSAGE = 'This generation failed. Please try again in a moment.';
+
+/** Route a server workflow error to the developer surface, never the screen. */
+function logWorkflowError(where: string, serverError: string | undefined): void {
+  if (serverError) console.warn(`[custom-generators] ${where}`, { serverError });
+}
+
+/** A stable idempotency key for ONE generation intent (one queue item). */
+function newSubmitKey(): string {
+  const c = globalThis.crypto;
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  return `k-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
 interface RunnerItem extends QueueItem {
   body: WorkflowBody;
+  /**
+   * Idempotency key minted when this queue item was created and sent
+   * unchanged on its submit — one key per intent, so a retried submit of
+   * THIS item can never mint a second Buzz reservation. A rerun is a new
+   * queue item and gets a fresh key.
+   */
+  submitKey: string;
   /** How many images this gen requested (for partial-failure "N of M" messaging). */
   requested: number;
   /** Set when a terminal failure is classified as insufficient Buzz (top-up path). */
@@ -94,7 +122,7 @@ export interface RunnerProps {
   /** UNSCANNED img2img source upload (generationSource purpose) → real `{ url, width, height }`. */
   uploadSourceImage: () => Promise<BlockGenerationSourceImageInfo | null>;
   estimate: (body: WorkflowBody) => Promise<BlockWorkflowSnapshot>;
-  submit: (body: WorkflowBody) => Promise<BlockWorkflowSnapshot>;
+  submit: (body: WorkflowBody, opts?: { idempotencyKey?: string }) => Promise<BlockWorkflowSnapshot>;
   poll: (workflowId: string) => Promise<BlockWorkflowSnapshot>;
   onBack: () => void;
   /**
@@ -214,6 +242,16 @@ export function Runner(props: RunnerProps) {
   // fixed below.
   const showPromptInput = useMemo(() => config.buttons.some(exposesPrompt), [config.buttons]);
   const showImageInput = useMemo(() => config.buttons.some(exposesImage), [config.buttons]);
+  // Which buttons actually consume the shared source image — named under the
+  // field so its requirement reads as per-preset, not generator-wide.
+  const imageNeededBy = useMemo(
+    () =>
+      config.buttons
+        .filter(exposesImage)
+        .map((b) => b.label?.trim() || 'Button')
+        .join(', '),
+    [config.buttons],
+  );
   const promptPlaceholder = config.promptPlaceholder?.trim() || DEFAULT_PROMPT_PLACEHOLDER;
 
   // 🔴 WAS: a UNION of the unmet inputs across EVERY button, rendered as one
@@ -251,6 +289,19 @@ export function Runner(props: RunnerProps) {
     }
   }
 
+  /** Move focus to the first field that can satisfy a missing required input. */
+  function focusFirstMissingInput(missing: readonly string[]) {
+    const tid = missing.includes('prompt')
+      ? 'runner-prompt'
+      : missing.includes('image')
+        ? 'upload-source'
+        : null;
+    if (!tid) return;
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(`[data-testid="${tid}"]`)?.focus();
+    });
+  }
+
   async function pressButton(button: GenButton) {
     setRunnerError(null);
     if (preview) {
@@ -266,14 +317,17 @@ export function Runner(props: RunnerProps) {
       setRunnerError('This button has no checkpoint configured.');
       return;
     }
-    // Required exposed inputs must be satisfied. The gen button is disabled when
-    // they aren't (so this is normally unreachable via the UI), but keep it as a
-    // guard for any non-UI press path.
+    // Required exposed inputs must be satisfied before anything estimates.
+    // The gen button is PRESSABLE but not runnable in this state on purpose:
+    // a disabled button swallows the click and says nothing, so the press
+    // lands here — name the button, say what's missing, and focus the first
+    // field that can fix it.
     const missing = missingRequiredInputs(button, { promptInput, sourceImage });
     if (missing.length > 0) {
       // Per-button and NAMED — the old message was a union across every button and
       // did not say which press it was answering.
       setRunnerError(missingForButtonMessage(button.label?.trim() || 'This button', missing));
+      focusFirstMissingInput(missing);
       return;
     }
 
@@ -297,6 +351,7 @@ export function Runner(props: RunnerProps) {
       buttonLabel: button.label,
       status: 'estimating',
       body,
+      submitKey: newSubmitKey(),
       requested,
       // Captured AT PRESS TIME, not read back later: the shared prompt box is
       // live, so a viewer who edits it while a run is in flight would otherwise
@@ -331,10 +386,13 @@ export function Runner(props: RunnerProps) {
   function applyPollResult(id: string, snap: BlockWorkflowSnapshot) {
     if (isTerminalSnapshot(snap.status)) {
       const status = mapSnapshotStatus(snap.status);
+      // The snapshot error classifies (insufficient Buzz) and is logged; the
+      // card renders app-owned copy, never the server's words.
+      logWorkflowError('workflow failed', snap.error);
       patchItem(id, {
         status,
         imageUrls: snap.imageUrls,
-        error: snap.error,
+        error: status === 'failed' ? GENERATION_FAILED_MESSAGE : undefined,
         insufficientBuzz: status === 'failed' && isInsufficientBuzzError(snap.error),
       });
       // A terminal result (success or spend-failure) may have moved the balance.
@@ -350,7 +408,7 @@ export function Runner(props: RunnerProps) {
       maxDurationMs: props.pollMaxDurationMs,
       sleep: props.sleep,
       onUpdate: (s: BlockWorkflowSnapshot) =>
-        patchItem(id, { status: mapSnapshotStatus(s.status), imageUrls: s.imageUrls, error: s.error }),
+        patchItem(id, { status: mapSnapshotStatus(s.status), imageUrls: s.imageUrls, error: undefined }),
     };
   }
 
@@ -361,13 +419,16 @@ export function Runner(props: RunnerProps) {
     if (item.status !== 'confirming') return;
     patchItem(item.id, { status: 'submitting', error: undefined, insufficientBuzz: undefined });
     try {
-      const snap = await submit(item.body);
+      // One idempotency key per queue item, minted at press time — a retry
+      // of THIS submit reuses it and cannot reserve Buzz twice.
+      const snap = await submit(item.body, { idempotencyKey: item.submitKey });
       // A submit that comes straight back failed (e.g. insufficient Buzz) never
       // reaches the poll loop — classify + surface it here.
       if (snap.status === 'failed') {
+        logWorkflowError('submit refused', snap.error);
         patchItem(item.id, {
           status: 'failed',
-          error: snap.error,
+          error: GENERATION_FAILED_MESSAGE,
           insufficientBuzz: isInsufficientBuzzError(snap.error),
         });
         onBalanceRefresh?.();
@@ -377,13 +438,18 @@ export function Runner(props: RunnerProps) {
         workflowId: snap.workflowId,
         status: mapSnapshotStatus(snap.status),
         imageUrls: snap.imageUrls,
-        error: snap.error,
+        error: undefined,
       });
       const terminal = await pollToTerminal(poll, snap, pollOpts(item.id));
       applyPollResult(item.id, terminal);
     } catch (e) {
+      // A thrown submit may mean the spend already committed and the reply
+      // was lost — never render its (server-shaped) message, and never tell
+      // the viewer it was free. The item keeps its submitKey, so any retry
+      // of this same intent reuses it.
       const msg = errMsg(e);
-      patchItem(item.id, { status: 'failed', error: msg, insufficientBuzz: isInsufficientBuzzError(msg) });
+      logWorkflowError('submit threw', msg);
+      patchItem(item.id, { status: 'failed', error: GENERATION_FAILED_MESSAGE, insufficientBuzz: isInsufficientBuzzError(msg) });
     }
   }
 
@@ -416,6 +482,9 @@ export function Runner(props: RunnerProps) {
       buttonLabel: item.buttonLabel,
       status: 'estimating',
       body: item.body,
+      // A rerun is a NEW intent (fresh estimate + fresh Confirm), so it
+      // mints a fresh key rather than reusing the original item's.
+      submitKey: newSubmitKey(),
       requested: item.requested,
       promptUsed: item.promptUsed,
       recipe: item.recipe,
@@ -444,7 +513,8 @@ export function Runner(props: RunnerProps) {
       const terminal = await pollToTerminal(poll, seed, pollOpts(item.id));
       applyPollResult(item.id, terminal);
     } catch (e) {
-      patchItem(item.id, { status: 'failed', error: errMsg(e) });
+      logWorkflowError('check-again poll threw', errMsg(e));
+      patchItem(item.id, { status: 'failed', error: GENERATION_FAILED_MESSAGE });
     }
   }
 
@@ -749,8 +819,13 @@ export function Runner(props: RunnerProps) {
 
             {showImageInput && (
               <Stack gap={6}>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>
-                  Source image (img2img) <span style={{ color: token.error }} aria-hidden>*</span>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>Source image (img2img)</div>
+                  {/* Required PER PRESET, not for the generator: a txt2img-only
+                      viewer must not read this as a gate on every run. */}
+                  <div style={{ ...metaText }} data-testid="source-needed-by">
+                    Needed by: {imageNeededBy}
+                  </div>
                 </div>
                 {sourceImage ? (
                   <Group gap={10} align="flex-start">
@@ -791,16 +866,20 @@ export function Runner(props: RunnerProps) {
                 union hint that used to demand a source image for txt2img buttons
                 (see `lib/preset.ts`).
 
-                Still disabled until every runtime input THIS button exposes is
-                satisfied, exactly as before (`canRunButton`). Preview is
-                non-runnable so it isn't input-gated: pressing surfaces a note. */}
+                Not runnable until every runtime input THIS button exposes is
+                satisfied (`canRunButton`) — but still PRESSABLE: a disabled
+                button swallows the click silently, so an unmet press lands in
+                `pressButton`, names what's missing, and focuses the field.
+                The caption lists only what's STILL missing, recomputed from
+                the live form. Preview is non-runnable so it isn't
+                input-gated: pressing surfaces a note. */}
             <div
               data-testid="runner-presets"
               style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(210px,1fr))', gap: 10 }}
             >
               {presets.map(({ button: b, preset }) => {
                 const runnable = preview || canRunButton(b, { promptInput, sourceImage });
-                const needs = presetNeedsLabel(preset.needs);
+                const needs = presetNeedsLabel(missingRequiredInputs(b, { promptInput, sourceImage }));
                 const recipe = presetRecipeLabel(preset);
                 return (
                   <button
@@ -813,14 +892,14 @@ export function Runner(props: RunnerProps) {
                     // which is what the old tests had to do, and why a reworded
                     // hint could have quietly broken them.
                     data-runnable={runnable ? 'true' : 'false'}
-                    disabled={!runnable}
+                    aria-disabled={!runnable}
                     onClick={() => pressButton(b)}
                     className={motionClass(motion, runnable ? CLASS_LIFT : undefined)}
                     style={{
                       all: 'unset',
                       boxSizing: 'border-box',
                       display: 'block',
-                      cursor: runnable ? 'pointer' : 'not-allowed',
+                      cursor: 'pointer',
                       opacity: runnable ? 1 : 0.55,
                       padding: '10px 12px',
                       borderRadius: radius.md,

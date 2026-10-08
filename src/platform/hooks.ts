@@ -286,17 +286,32 @@ export interface UseRequestConsent {
  */
 export function useRequestConsent(): UseRequestConsent {
   const requestConsent = useCallback((opts: { scopes: string[] }) => {
-    void getClient()
-      .then((app) => app.requestGrants(opts.scopes as never))
-      .catch(() => {});
+    void requestGrants(opts.scopes).catch(() => {});
   }, []);
   return useMemo(() => ({ requestConsent }), [requestConsent]);
 }
 
+/**
+ * How long a consent request may stay unanswered before it counts as
+ * "not granted". The host's dialog is a human interaction, so this is
+ * generous — but it is BOUNDED: `app.requestGrants` never settles when the
+ * dialog is dismissed without an answer, and an unbounded await would park
+ * the mid-run retry (and leak the promise) forever.
+ */
+export const CONSENT_REQUEST_TIMEOUT_MS = 60_000;
+
 /** The awaited form: `true` when every scope is now held. */
 export async function requestGrants(scopes: string[]): Promise<boolean> {
   const app = await getClient();
-  return app.requestGrants(scopes as never);
+  const signal = typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(CONSENT_REQUEST_TIMEOUT_MS) : undefined;
+  try {
+    return await app.requestGrants(scopes as never, { signal });
+  } catch (e) {
+    // A timed-out (or otherwise aborted) request is a bounded "no", not an
+    // error — swallow it so no caller can park on a promise that never lands.
+    if (e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError')) return false;
+    throw e;
+  }
 }
 
 export interface UseRequestSignIn {

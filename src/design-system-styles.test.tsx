@@ -6,7 +6,7 @@
 // marker and bails early when the marker is already present, so the FIRST one to
 // run decides what the document gets. `src/main.tsx` calls `injectBlocksStyles()`
 // at module scope — that is `src/ui/styles.ts`, which delegates to
-// `@civitai/components-react`'s `injectStyles()` — so that path wins the race, and
+// `@civitai/components`' `injectStyles()` — so that path wins the race, and
 // whichever `@civitai/components` copy it resolves is the stylesheet that lands. A
 // second, different resolution of `@civitai/components` reachable from another
 // injector never gets injected. Nothing errors; a Tooltip simply renders as
@@ -24,7 +24,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import { injectBlocksStyles } from './ui/index.js';
-import { injectStyles as injectComponentStyles } from '@civitai/components-react';
+import { injectStyles as injectComponentStyles } from '@civitai/components';
 
 /**
  * The `data-civitai-ui` primitives this app renders that live in
@@ -37,8 +37,8 @@ const APP_COMPONENT_PRIMITIVES = ['tooltip', 'toast', 'toast-region', 'image'] a
 const ALWAYS_PRESENT = ['button', 'card'] as const;
 
 function injectedComponentCss(): string {
-  // Production order: main.tsx injects the pack up-front, then components-react
-  // components inject on mount. The second call must not be able to lose data.
+  // Production order: main.tsx injects the pack up-front, then the components
+  // stylesheet is asserted. The second call must not be able to lose data.
   injectBlocksStyles();
   injectComponentStyles();
   const el = document.head.querySelector('style[data-civitai-components]');

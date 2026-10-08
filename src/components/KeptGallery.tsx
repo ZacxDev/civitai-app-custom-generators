@@ -27,8 +27,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { BlockCreatePostResult, BlockGatedImage } from '@civitai/app-sdk/blocks';
 import { CreatePostError, useCreatePostFromApp } from '../platform/index.js';
-import { Alert, Badge, Button, Group, Modal, Stack, TextInput, Textarea } from '../ui/index.js';
-import { Image } from '@civitai/components-react';
+import { Alert, Badge, Button, Group, Modal, Stack, TextInput, Textarea , Image } from '../ui/index.js';
 
 import {
   describeCreatePostError,

@@ -6,12 +6,14 @@
 //
 // What is behind each name:
 //   - Alert, Badge, Button, Card, Group, Loader, NumberInput, Select, Slider,
-//     Stack, TextInput, Textarea → `@civitai/components-react`, through the
-//     prop adapters in `./primitives.tsx` (the packs do not agree on props).
-//   - Modal, Collapse, ReportButton → re-implemented locally. Measured: the
-//     React bindings package exports none of the three, and its custom-element
-//     subpath offers only Lit versions of the first two, which jsdom never
-//     upgrades. See each file's header.
+//     Stack, TextInput, Textarea → the `@civitai/components` MARKUP contract
+//     (`data-civitai-ui` attributes + its injected stylesheet), through the
+//     prop adapters in `./primitives.tsx`. The 0.9 line retired the React
+//     bindings layer this used to forward to; writing the documented markup
+//     is the package's framework-agnostic consumption path.
+//   - Image → the same contract's image markup, in `./Image.tsx`.
+//   - Modal, Collapse, ReportButton → re-implemented locally (the contract
+//     carries no modal/collapse styling). See each file's header.
 //   - injectBlocksStyles → `injectStyles()` plus the local Modal/Collapse CSS.
 //
 // `BlockGate` is deliberately NOT here: it has to know whether the host ever
@@ -58,5 +60,17 @@ export type { CollapseProps } from './Collapse.js';
 
 export { ReportButton } from './ReportButton.js';
 export type { ReportButtonProps } from './ReportButton.js';
+
+export { Image } from './Image.js';
+export type { ImageProps } from './Image.js';
+
+export { SegmentedControl } from './SegmentedControl.js';
+export type { SegmentedControlOption, SegmentedControlProps } from './SegmentedControl.js';
+
+export { Tooltip } from './Tooltip.js';
+export type { TooltipProps } from './Tooltip.js';
+
+export { ToastProvider, useToast } from './Toast.js';
+export type { ToastApi, ToastShowOptions } from './Toast.js';
 
 export { injectBlocksStyles } from './styles.js';

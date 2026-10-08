@@ -113,16 +113,16 @@ describe('e2e: build → publish → discover → open → run', () => {
     await userEvent.click(within(card).getByTestId('published-open'));
     await screen.findByTestId('runner');
 
-    // 3. the run button is disabled until BOTH required inputs (prompt + source) exist
-    expect(screen.getByTestId('gen-button')).toBeDisabled();
+    // 3. the run button is not runnable until BOTH required inputs (prompt + source) exist
+    expect(screen.getByTestId('gen-button')).toHaveAttribute('data-runnable', 'false');
     await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
-    expect(screen.getByTestId('gen-button')).toBeDisabled(); // still missing the source
+    expect(screen.getByTestId('gen-button')).toHaveAttribute('data-runnable', 'false'); // still missing the source
 
     // 4. upload the img2img source via the generationSource purpose (the fake's
     //    OPEN_IMAGE_UPLOAD handler, not an override)
     await userEvent.click(screen.getByTestId('upload-source'));
     await screen.findByTestId('source-thumb');
-    await waitFor(() => expect(screen.getByTestId('gen-button')).toBeEnabled());
+    await waitFor(() => expect(screen.getByTestId('gen-button')).toHaveAttribute('data-runnable', 'true'));
 
     // 5. run: estimate → confirm → poll → rendered result
     await userEvent.click(screen.getByTestId('gen-button'));

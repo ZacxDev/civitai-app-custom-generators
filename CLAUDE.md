@@ -12,10 +12,19 @@ Running a button **spends the viewer's Buzz**, so these are the load-bearing
 invariants — read [`README.md`](./README.md) before touching any of them:
 
 - **estimate → confirm → submit.** No Buzz leaves a balance without an explicit
-  Confirm on a real estimate. `estimate()` **rejects** as of
-  `@civitai/blocks-react@0.43.0`; every call site must `try/catch`
+  Confirm on a real estimate. The workflow client in `src/platform/workflows.ts`
+  (over `@civitai/sdk`) turns an unusable estimate into a thrown
+  `WorkflowEstimateError`; every call site must `try/catch`
   (`src/lib/estimate.ts` owns the mapping — `.snapshot.error` is server-authored
-  and UNSANITISED, so it is logged, never rendered).
+  and UNSANITISED, so it is logged, never rendered). The same rule covers
+  submit/poll failures in the Runner: classify, log, render app-owned copy.
+- **One idempotency key per intent.** The Runner mints the key when the queue
+  item is created and sends it unchanged on that item's submit; a retry of
+  the same item reuses it, a rerun (new item, fresh estimate + Confirm)
+  mints a new one.
+- **Consent is bounded.** `app.requestGrants` is always called with an
+  `AbortSignal` timeout (`src/platform/hooks.ts`) — the promise never
+  settles on a dismissed dialog, so the timeout reads as "not granted".
 - **Deterministic balance guard.** Confirm is blocked and a top-up offered when
   the estimate exceeds the balance (`src/lib/buzz.ts` classifies insufficient).
 - **Untrusted-param clamp.** A published generator's `data` is opaque and
@@ -45,7 +54,7 @@ pnpm install --frozen-lockfile
 |---|---|
 | The gates CI runs | `pnpm run typecheck && pnpm test && pnpm run build` |
 | Types only | `pnpm run typecheck` |
-| Mock host (SDK `<Harness>`) | `pnpm run dev:harness` → http://localhost:5188 |
+| Fake platform harness (the app's own, `src/platform/testing.tsx`) | `pnpm run dev:harness` → http://localhost:5188 |
 | Platform approve-time validator | `civitai app validate` (the Go CLI, installed separately — the flake does not ship it) |
 
 **Toolchain pins.** `.nvmrc` is the single authority for the node major — the
@@ -71,16 +80,19 @@ suffix are topic worktrees of the same remotes, usually on someone's branch.
 | The change is about | Repo | Local |
 |---|---|---|
 | This block's builder, runner, browse, deeplinks, money UI | **`ZacxDev/civitai-app-custom-generators`** (here) | — |
-| A hook, a type, the mock host, the design system — anything imported from `@civitai/*` | **`civitai/civitai-app-starters`** | `civitai-app-starters` |
+| A platform binding, a type, the design system — anything imported from `@civitai/*` | **`civitai/civitai-app-starters`** | `civitai-app-starters` |
 | Host/server behavior: the `/apps/run` page surface, block token + scope enforcement, the page money path, app storage, the workflow read-model, submit/approval | **`civitai/civitai`** | `civitai` |
 | `civitai app init/validate/submit`, login, dev tunnel | **`civitai/cli`** (Go) | `cli` |
 | Public developer docs (developer.civitai.com) | **`civitai/civitai-developer-docs`** | `civitai-developer-docs` |
 
-**All five `@civitai/*` dependencies ship from the one starters repo** —
-`packages/civitai-app-sdk`, `civitai-blocks-react`, `civitai-components`,
-`civitai-components-react`, `civitai-theme`. A missing hook, a wrong type, a
-mock host that doesn't simulate something: that is a PR there, not a workaround
-here.
+**The `@civitai/*` dependencies ship from the one starters repo** —
+`packages/civitai-app-sdk`, `civitai-sdk`, `civitai-components`,
+`civitai-components-react`, `civitai-theme`. A missing platform binding, a
+wrong type, a fake platform that doesn't simulate something: that is a PR
+there, not a workaround here. The app talks to the platform through its own
+seam (`src/platform/`, the only importer of `@civitai/sdk`) and renders the
+design system through `src/ui/` adapters over the `@civitai/components`
+markup contract — package gaps surface there first.
 
 ⚠️ **A "fetch one shared row by key" host gap used to be claimed here, and it is
 FALSE** — `shared.get(key)` is live in this app's own adapter
@@ -107,8 +119,9 @@ edges and several guards here were ported from them:
    this repo builds against*. Check `package.json` for that version first.
    Subpaths matter: `@civitai/app-sdk` exports `./blocks`, `./manifest`
    (Node-only `defineBlock`, needs `ajv`), `./scopes`,
-   `./orchestrator`, `./schemas/app-block/v1.json`; `@civitai/blocks-react`
-   exports `./ui` and `./testing`.
+   `./orchestrator`, `./schemas/app-block/v1.json`; `@civitai/components`
+   ships its markup contract in `MARKUP.md`, and `@civitai/components-react`
+   (0.9+) exports only `@lit/react` wrappers over the `<civitai-*>` elements.
 2. **https://developer.civitai.com/apps/** — `guide/{quickstart,concepts,embedding,theming,text-to-image,comfy-cloud}`
    and `reference/{hooks,manifest,messages,scopes,components,generation,cli}`.
    Best for *why* and for the message-bridge contract. ⚠️ The generated pages

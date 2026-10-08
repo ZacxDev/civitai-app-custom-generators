@@ -1,0 +1,55 @@
+/* Custom Generators — the Forge theme (warm charcoal + molten amber).
+
+   The app consumes ONLY `--civitai-*` vars (see src/theme.ts), so the theme
+   is a token REDEFINITION scoped to the app root's `data-palette="forge"`:
+   every component downstream resolves the vars anew, no component is themed
+   individually, and the pack stays on the same contract. (Two candidate
+   palettes — Signal Violet and Slate Workshop — were built and reviewed
+   behind a switcher in v0.11.0; Forge was chosen and the switcher removed.
+   The losing blocks live in git history, not in the shipped CSS.)
+
+   Dark is the unqualified base (the app's standing rule: never follow the
+   OS preference). A light value is reachable ONLY under an explicit
+   `[data-theme='light']` — the host's site-theme signal.
+
+   The selectors carry TWO attributes (`[data-theme][data-palette=…]`) on
+   purpose: the pack APPENDS its token `<style>` to `<head>` at runtime,
+   after this bundle's stylesheet, so an equal-specificity rule here would
+   lose the cascade to the stock tokens. Two attributes outrank its one
+   regardless of document order.
+
+   The boot skeleton in index.html is pinned to these Forge literals;
+   `src/bootTokens.test.ts` keeps the two in step. */
+
+[data-theme][data-palette='forge'] {
+  --civitai-color-text: #f5efe6;
+  --civitai-color-text-dimmed: #b8a88f;
+  --civitai-color-body: #171310;
+  --civitai-color-surface: #211a14;
+  --civitai-color-surface-2: #2a211a;
+  --civitai-color-border: #3d2f22;
+  --civitai-color-primary: #f59e0b;
+  --civitai-color-primary-hover: #ffb020;
+  --civitai-color-primary-fg: #1a1206;
+  --civitai-color-primary-light: rgba(245, 158, 11, 0.15);
+  --civitai-color-track: #2a211a;
+  --civitai-color-segmented-bg: #2a211a;
+  --civitai-color-media-placeholder: #2a211a;
+}
+
+[data-theme='light'][data-palette='forge'] {
+  --civitai-color-text: #2a2018;
+  --civitai-color-text-dimmed: #7a6a55;
+  --civitai-color-body: #faf5ec;
+  --civitai-color-surface: #fffdf8;
+  --civitai-color-surface-2: #f3ead9;
+  --civitai-color-border: #d9c7a8;
+  --civitai-color-primary: #d97706;
+  --civitai-color-primary-hover: #b45309;
+  --civitai-color-primary-fg: #fff9f0;
+  --civitai-color-primary-light: rgba(217, 119, 6, 0.12);
+  --civitai-color-track: #f3ead9;
+  --civitai-color-segmented-bg: #f3ead9;
+  --civitai-color-media-placeholder: #f3ead9;
+}
+

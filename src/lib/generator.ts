@@ -227,12 +227,21 @@ export function clampParams(params: GenButtonParams | undefined): GenButtonParam
   return out;
 }
 
-/** Clamp a weight into [min,max]; non-finite falls back to the default weight. */
+/**
+ * The platform's hard LoRA strength range. A strength outside it is rejected
+ * by the server before any spend, so clamping to it here is defense in
+ * depth — the caller's `[min,max]` comes from an untrusted published blob
+ * and may itself lie outside the hard range.
+ */
+export const LORA_STRENGTH_BOUNDS = { min: -1, max: 2 } as const;
+
+/** Clamp a weight into [min,max], intersected with the hard platform range;
+ * non-finite falls back to the default weight. */
 export function clampWeight(value: number, min: number, max: number): number {
-  const lo = Number.isFinite(min) ? min : DEFAULT_MIN_WEIGHT;
-  const hi = Number.isFinite(max) ? max : DEFAULT_MAX_WEIGHT;
+  const lo = Math.max(LORA_STRENGTH_BOUNDS.min, Number.isFinite(min) ? min : DEFAULT_MIN_WEIGHT);
+  const hi = Math.min(LORA_STRENGTH_BOUNDS.max, Number.isFinite(max) ? max : DEFAULT_MAX_WEIGHT);
   const v = Number.isFinite(value) ? value : DEFAULT_WEIGHT;
-  if (lo > hi) return v; // degenerate range — leave as-is
+  if (lo > hi) return Math.min(LORA_STRENGTH_BOUNDS.max, Math.max(LORA_STRENGTH_BOUNDS.min, v));
   return Math.min(hi, Math.max(lo, v));
 }
 

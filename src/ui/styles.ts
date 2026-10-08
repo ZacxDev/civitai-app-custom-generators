@@ -2,19 +2,17 @@
 // re-implements locally.
 //
 // 🔴 WHY THERE IS LOCAL CSS AT ALL. `@civitai/components` styles the components
-// it ships. `Modal` and `Collapse` are NOT among them — measured on 0.5.0:
-// `grep -o` over `dist/*.css` returns 0 occurrences of `modal` and 0 of
-// `collapse`, against 89 occurrences of `data-civitai-ui` as the positive
-// control. The React bindings package does not export them either. So the
-// markup contract those two components render has no stylesheet behind it and
-// this file supplies one.
+// it ships. `Modal` and `Collapse` are NOT among them — the 0.9 markup contract
+// (MARKUP.md) documents no modal/collapse rules, against the component names
+// it does carry as the positive control. So the markup contract those two
+// components render has no stylesheet behind it and this file supplies one.
 //
 // The rules below are carried verbatim from `@civitai/blocks-react`'s `/ui`
 // pack (its `ui/styles.js`), so the two components look exactly as they did
 // before the port. They reference only `--civitai-*` tokens, which
 // `@civitai/components` defines — nothing here hardcodes a colour.
 
-import { injectStyles } from '@civitai/components-react';
+import { injectStyles } from '@civitai/components';
 
 const STYLE_ID = 'civitai-custom-generators-ui';
 
