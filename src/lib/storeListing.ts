@@ -180,8 +180,8 @@ export function storeNoticeFor(outcome: StoreOutcome): string | null {
  * and 100/day. Per mount, an author with many unlisted (or refused) generators
  * would spend 10 writes on every open and could exhaust the hour in three,
  * leaving their next real publish throttled. At 10 per 6 h the backfill spends at
- * most 40 writes a day and 10 in an hour — barring two tabs that read the ledger
- * in the same instant, before either stamped it.
+ * most 40 writes a day and 10 in an hour — barring two tabs whose ledger reads both
+ * land before either tab's stamp write completes (a storage round trip or two).
  */
 export const BACKFILL_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
