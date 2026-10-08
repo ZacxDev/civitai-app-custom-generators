@@ -340,8 +340,36 @@ describe('reconcileStoreListings', () => {
     expect(report.attempted).toBe(false);
   });
 
-  it('a ledger that cannot be WRITTEN does not fail the run', async () => {
+  it('a FINAL ledger write that fails does not fail the run', async () => {
     const { store, upserts } = fakeStore();
+    let writes = 0;
+    const ledger = {
+      get: async () => null,
+      set: async () => {
+        writes += 1;
+        if (writes > 1) throw new Error('kv down');
+      },
+    };
+    const report = await reconcileStoreListings({ viewerId: ME, published: [row('k1', 'One', ME)], store, ledger, now: NOW });
+    expect(upserts.map((u) => u.itemKey)).toEqual(['k1']);
+    expect(report.upserted).toEqual(['k1']);
+    expect(writes).toBe(2);
+  });
+
+  it('🔴 stamps the ledger BEFORE the first store call, so a reload mid-run cannot run again', async () => {
+    const ledger = memoryLedger({ v: 1, lastRunAt: 0, refused: ['k9'] });
+    let stampedBeforeMine: BackfillLedger | null = null;
+    const { store } = fakeStore();
+    store.mine = vi.fn(async () => {
+      stampedBeforeMine = ledger.saved;
+      return [];
+    });
+    await reconcileStoreListings({ viewerId: ME, published: [row('k1', 'One', ME), row('k9', 'Nine', ME)], store, ledger, now: NOW });
+    expect(stampedBeforeMine).toEqual({ v: 1, lastRunAt: NOW, refused: ['k9'] });
+  });
+
+  it('a pre-run stamp that cannot be written skips the run', async () => {
+    const { store } = fakeStore();
     const ledger = {
       get: async () => null,
       set: async () => {
@@ -349,8 +377,26 @@ describe('reconcileStoreListings', () => {
       },
     };
     const report = await reconcileStoreListings({ viewerId: ME, published: [row('k1', 'One', ME)], store, ledger, now: NOW });
-    expect(upserts.map((u) => u.itemKey)).toEqual(['k1']);
-    expect(report.upserted).toEqual(['k1']);
+    expect(store.mine).not.toHaveBeenCalled();
+    expect(report.attempted).toBe(false);
+  });
+
+  it('a lastRunAt in the FUTURE (a clock that ran ahead) does not switch the backfill off', async () => {
+    const { store } = fakeStore();
+    const ledger = memoryLedger({ v: 1, lastRunAt: NOW + 24 * 60 * 60 * 1000, refused: [] });
+    await reconcileStoreListings({ viewerId: ME, published: [row('k1', 'One', ME)], store, ledger, now: NOW });
+    expect(store.upsert).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not remember an invalid_body refusal (a client bug a later build can fix), and forgets keys now listed', async () => {
+    const { store } = fakeStore({
+      mine: [listed('k1')],
+      upsertError: (key) => (key === 'k2' ? new StoreListingError(400, 'invalid_body') : null),
+    });
+    const ledger = memoryLedger({ v: 1, lastRunAt: 0, refused: ['k1'] });
+    await reconcileStoreListings({ viewerId: ME, published: [row('k1', 'One', ME), row('k2', 'Two', ME)], store, ledger, now: NOW });
+    expect(store.upsert).toHaveBeenCalledTimes(1);
+    expect(ledger.saved?.refused).toEqual([]);
   });
 
   it(`sends at most RECONCILE_MAX_UPSERTS (${RECONCILE_MAX_UPSERTS}) per run, well inside the 30/hour limit`, async () => {

@@ -180,7 +180,8 @@ export function storeNoticeFor(outcome: StoreOutcome): string | null {
  * and 100/day. Per mount, an author with many unlisted (or refused) generators
  * would spend 10 writes on every open and could exhaust the hour in three,
  * leaving their next real publish throttled. At 10 per 6 h the backfill spends at
- * most 40 writes a day and never more than 10 in an hour.
+ * most 40 writes a day and 10 in an hour — barring two tabs that read the ledger
+ * in the same instant, before either stamped it.
  */
 export const BACKFILL_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
@@ -251,9 +252,9 @@ export interface ReconcileReport {
  * refusal skips only that item, and is remembered in the ledger so later runs do
  * not spend a write on it again.
  *
- * With a `ledger`, a run happens at most once per {@link BACKFILL_INTERVAL_MS}
- * (stamped whenever the store was contacted, including a failed `mine`), and an
- * unreadable ledger skips the run.
+ * With a `ledger`, a run happens at most once per {@link BACKFILL_INTERVAL_MS}:
+ * the ledger is stamped BEFORE the first store call, and a ledger that cannot be
+ * read or stamped skips the run. A stamp in the future counts as stale.
  *
  * ⚠️ Known blind spot: the server's `mine` returns an author's OLDEST 200 rows,
  * and withdrawn rows are kept. Past 200 the newest cards are invisible here and
@@ -287,17 +288,30 @@ export async function reconcileStoreListings(args: {
       // the author's write budget on every page load.
       return report;
     }
-    if (ledger && now - ledger.lastRunAt < BACKFILL_INTERVAL_MS) return report;
+    // A stamp in the future (a clock that ran ahead) counts as stale, so it cannot
+    // switch the backfill off until that time arrives.
+    const age = ledger ? now - ledger.lastRunAt : Infinity;
+    if (age >= 0 && age < BACKFILL_INTERVAL_MS) return report;
     previouslyRefused = new Set(ledger?.refused ?? []);
+    // 🔴 STAMP BEFORE THE FIRST STORE CALL. A run takes seconds (each upsert is
+    // text-moderated server-side); stamping only at the end let a reload or a
+    // second tab mid-run start another one, spending writes again. If the stamp
+    // cannot be written, the run cannot be bounded — skip it.
+    try {
+      await args.ledger.set({ v: 1, lastRunAt: now, refused: [...previouslyRefused] });
+    } catch {
+      return report;
+    }
   }
 
   report.attempted = true;
   const refused = new Set<string>();
+  let listedKeys = new Set<string>();
   const finish = async () => {
     if (!args.ledger) return;
     const candidateKeys = new Set(candidates.map((c) => c.itemKey));
-    // Keep a refusal only while that generator is still published.
-    for (const k of previouslyRefused) if (candidateKeys.has(k)) refused.add(k);
+    // Keep a refusal only while that generator is still published and unlisted.
+    for (const k of previouslyRefused) if (candidateKeys.has(k) && !listedKeys.has(k)) refused.add(k);
     try {
       await args.ledger.set({ v: 1, lastRunAt: now, refused: [...refused] });
     } catch {
@@ -305,7 +319,6 @@ export async function reconcileStoreListings(args: {
     }
   };
 
-  let listedKeys: Set<string>;
   try {
     listedKeys = new Set((await args.store.mine()).map((m) => m.itemKey));
   } catch (err) {
@@ -329,8 +342,12 @@ export async function reconcileStoreListings(args: {
         report.stoppedBy = kind;
         break;
       }
-      // A lost write race (409) is worth retrying next time; anything else is not.
-      if (!(err instanceof StoreListingError && err.status === 409)) refused.add(input.itemKey);
+      // Remember only refusals a retry will not change. A lost write race (409) is
+      // worth retrying, and `invalid_body` is this app's own bug, which a later
+      // build can fix — remembering it would outlive the fix.
+      const code = err instanceof StoreListingError ? err.code : null;
+      const retryable = err instanceof StoreListingError && (err.status === 409 || code === 'invalid_body');
+      if (!retryable) refused.add(input.itemKey);
     }
   }
   await finish();
