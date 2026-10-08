@@ -35,6 +35,7 @@ import {
   useGenerationResources,
   useSharedStorage,
   useAppStorage,
+  useHostRoute,
 } from './platform/index.js';
 import type {
   SharedAppendValue,
@@ -58,7 +59,15 @@ import {
   parsePublishedGenerator,
   rehydrateConfig,
 } from './lib/generator.js';
-import { buildShareUrl, parseDeeplinkKey, stripDeeplinkParam } from './lib/deeplink.js';
+import {
+  buildRunShareUrl,
+  isRoutableKey,
+  parseDeeplinkKey,
+  parseRouteKey,
+  routeForKey,
+  stripDeeplinkParam,
+} from './lib/deeplink.js';
+import blockManifest from '../block.manifest.json';
 import { setGeneratorMeta } from './lib/meta.js';
 import type { DraftStore, StoredDraft } from './lib/drafts.js';
 import { deleteDraft as deleteDraftFn, listDrafts, saveDraft as saveDraftFn } from './lib/drafts.js';
@@ -67,6 +76,13 @@ import { KeptRemovalError, listKeptRuns, removeKeptImages, runsForGenerator, sav
 import { Browse } from './components/Browse.js';
 import { Builder } from './components/Builder.js';
 import { Runner } from './components/Runner.js';
+
+/**
+ * The slug share links use when the host has not sent one. The manifest's
+ * `blockId` is the slug the platform serves this app under
+ * (`/apps/run/custom-generators`); the host's own `context.slug` wins when present.
+ */
+const MANIFEST_SLUG: string = (blockManifest as { blockId: string }).blockId;
 
 /** Outcome of the host Buzz-purchase modal (mirrors `useBuzzPurchase`). */
 export interface PurchaseResult {
@@ -311,6 +327,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   const { requestSignIn } = useRequestSignIn();
   const { openPurchaseModal } = useBuzzPurchase();
   const { navigate } = useCivitaiNavigate();
+  const hostRoute = useHostRoute();
 
   const rootRef = useRef<HTMLDivElement>(null);
   useBlockResize(rootRef);
@@ -1037,9 +1054,18 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     setView('builder');
   }, [viewer]);
 
-  // Copy a shareable `?g=<key>` deeplink for a published generator.
+  // Copy a shareable link for a published generator. It points at the host
+  // route, `https://civitai.com/apps/run/<slug>/g/<key>`, not at the block's own
+  // `<slug>.civit.ai` origin (which renders only an "Open on Civitai" landing).
+  const shareSlug = hostRoute.slug ?? MANIFEST_SLUG;
+  const shareSlugRef = useRef(shareSlug);
+  shareSlugRef.current = shareSlug;
   const handleShare = useCallback(async (item: SharedListItem): Promise<boolean> => {
-    const url = buildShareUrl(depsRef.current.getHref(), item.key);
+    const url = buildRunShareUrl({
+      slug: shareSlugRef.current,
+      key: item.key,
+      href: depsRef.current.getHref(),
+    });
     try {
       await depsRef.current.copyToClipboard(url);
       return true;
@@ -1048,9 +1074,13 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     }
   }, []);
 
-  // Deep-open a generator from a `?g=<key>` link. Runs once the shared list has
-  // loaded: find the item by key and open it in the Runner. If the key isn't in
-  // the loaded page, leave the user on Browse.
+  // Deep-open a generator from a link. Runs once the shared list has loaded:
+  // find the item by key and open it in the Runner. If the key isn't in the
+  // loaded page, leave the user on Browse.
+  //
+  // The key comes from the HOST ROUTE (`g/<key>`) first and the iframe's own
+  // `?g=<key>` second — the host route is what the viewer's address bar says, so
+  // it wins when both are present. See `lib/deeplink.ts`.
   //
   // ⚠️ THAT FALLBACK IS A DEFECT, NOT A PLATFORM LIMIT, AND THIS COMMENT USED TO
   // SAY OTHERWISE ("the block can't fetch a single shared row by key"). It can:
@@ -1060,26 +1090,91 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   // its own premise to check (what a `get` on a withdrawn or moderated key should
   // do on screen). Same for `openPublishedByKey` above.
   const deeplinkHandled = useRef(false);
+  /** The last host `subPath` this app acted on, so each route is handled once. */
+  const handledSubPath = useRef<string | null>(null);
+  const sharedRef = useRef(shared);
+  sharedRef.current = shared;
   useEffect(() => {
     if (deeplinkHandled.current || !ready || loading) return;
-    const key = depsRef.current.getDeeplinkKey();
-    if (!key) {
-      deeplinkHandled.current = true;
-      return;
-    }
     deeplinkHandled.current = true;
+    handledSubPath.current = hostRoute.subPath;
+    const routeKey = parseRouteKey(hostRoute.subPath);
+    const key = routeKey ?? depsRef.current.getDeeplinkKey();
+    if (!key) return;
     const item = shared.find((s) => s.key === key);
     if (!item) return; // key not on the loaded page — stay on Browse
     const config = parsePublishedGenerator(item.value);
     if (!config) return;
-    // Clean the address bar so a reload / re-share doesn't re-trigger.
-    try {
-      window.history?.replaceState?.(null, '', stripDeeplinkParam(depsRef.current.getHref()));
-    } catch {
-      /* history API may be unavailable — non-fatal. */
+    if (!routeKey) {
+      // Clean the `?g=` off the iframe URL so a reload doesn't re-trigger.
+      try {
+        window.history?.replaceState?.(null, '', stripDeeplinkParam(depsRef.current.getHref()));
+      } catch {
+        /* history API may be unavailable — non-fatal. */
+      }
     }
     void openConfig(config, item.key);
+    // `hostRoute.subPath` is read at the moment the list lands and deliberately
+    // not a dependency: a route change AFTER this point is the effect below's.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, loading, shared, openConfig]);
+
+  // Follow a host route change AFTER the first load: `ROUTE_CHANGED` from the
+  // viewer's back/forward, or the echo of this app's own navigate below.
+  //   - `g/<key>` opens that generator, unless it is already the one open (the
+  //     echo case, which must be a no-op or the two effects would ping-pong).
+  //   - `''` (the app root) closes a keyed Runner back to Browse — browser Back
+  //     out of a generator. It leaves the Builder and an unkeyed draft Runner
+  //     alone: neither is routed, so the root says nothing about them.
+  //   - anything else is not a route this app has, and does nothing.
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const runningRef = useRef(running);
+  runningRef.current = running;
+  useEffect(() => {
+    const sub = hostRoute.subPath;
+    if (!deeplinkHandled.current || sub === null || sub === handledSubPath.current) return;
+    handledSubPath.current = sub;
+    const openKey = viewRef.current === 'runner' ? runningRef.current?.sharedContentKey : undefined;
+    const key = parseRouteKey(sub);
+    if (key) {
+      if (key === openKey) return;
+      const item = sharedRef.current.find((s) => s.key === key);
+      if (!item) return;
+      const config = parsePublishedGenerator(item.value);
+      if (!config) return;
+      void openConfig(config, item.key);
+      return;
+    }
+    if (sub === '' && openKey) backToBrowse();
+  }, [hostRoute.subPath, openConfig, backToBrowse]);
+
+  // Mirror the open generator into the host route, so the address bar reads
+  // `/apps/run/<slug>/g/<key>` while it is open and the app root otherwise.
+  // App-scoped `NAVIGATE` is a shallow host push: the page stays mounted and
+  // the change comes back as `ROUTE_CHANGED`, which the effect above ignores
+  // because the route then matches what is already on screen.
+  //
+  // Keyed on `desiredRoute` only, so it fires on an app-side TRANSITION, never
+  // on a host-side route change (that would undo the viewer's Back). It waits
+  // for the first load, so the route a page was opened at is not overwritten
+  // before it has been read. No host (`subPath === null`) means nothing to sync.
+  const openRouteKey =
+    view === 'runner' && running?.sharedContentKey && isRoutableKey(running.sharedContentKey)
+      ? running.sharedContentKey
+      : null;
+  const desiredRoute = openRouteKey ? routeForKey(openRouteKey) : '';
+  const hostSubPathRef = useRef(hostRoute.subPath);
+  hostSubPathRef.current = hostRoute.subPath;
+  useEffect(() => {
+    if (!deeplinkHandled.current) return;
+    const current = hostSubPathRef.current;
+    if (current === null || current === desiredRoute) return;
+    // A route this app does not own (`generate`, a typo) is left as-is by
+    // a return to Browse; only a route this app wrote is reset to the root.
+    if (desiredRoute === '' && parseRouteKey(current) === null) return;
+    depsRef.current.navigate(desiredRoute);
+  }, [desiredRoute]);
 
   const requestGenerateConsent = useCallback(() => {
     if (!viewer) {
