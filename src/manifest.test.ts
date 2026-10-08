@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { BLOCK_SCOPES } from '@civitai/app-sdk/blocks';
+import { BLOCK_SCOPES, BlockManifestError } from '@civitai/app-sdk/blocks';
 
 import { manifest, manifestBuzzBudgetPerGen, validateManifest } from './manifest.js';
 
@@ -35,7 +35,21 @@ describe('block.manifest.json', () => {
     for (const scope of manifest.scopes as string[]) {
       expect(known.has(scope), `${scope} is not in the installed @civitai/app-sdk BLOCK_SCOPES`).toBe(true);
     }
-    expect(() => validateManifest({ ...manifest, scopes: ['apps:made:up'] })).toThrow();
+    // APPEND the unknown scope rather than replacing the list: replacing it
+    // would orphan all eight `scopeJustifications`, which `defineBlock` rejects
+    // on its own — so the case would stay red with the enum check deleted.
+    // Pinned to the error's FIELD, so only the scope-enum check can satisfy it.
+    let caught: unknown;
+    try {
+      validateManifest({ ...manifest, scopes: [...(manifest.scopes as string[]), 'apps:made:up'] });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(BlockManifestError);
+    expect((caught as BlockManifestError).field).toBe('scopes[8]');
+    expect((caught as BlockManifestError).message).toMatch(
+      /^manifest\.scopes\[8\] must be equal to one of the allowed values/,
+    );
   });
 
   /**
