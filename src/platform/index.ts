@@ -19,6 +19,7 @@
 //                                             gated images, generation resources, buzz
 //   per-viewer KV→ `app.storage`
 //   post         → still the bridge; there is deliberately no REST route
+//   store items  → `app.site.*` over `/api/v1/blocks/sub-listings/*`
 
 export { getClient, getPlatformTransport, getSnapshot, __configurePlatform } from './client.js';
 export type { PlatformOverrides } from './client.js';
@@ -85,6 +86,15 @@ export {
 } from './createPost.js';
 export { useCreatePostFromApp } from './useCreatePostFromApp.js';
 export type { UseCreatePostFromApp } from './useCreatePostFromApp.js';
+
+export { createStoreListings, StoreListingError } from './storeListings.js';
+export type {
+  MyStoreListing,
+  StoreListingInput,
+  StoreListingResult,
+  StoreListings,
+  StoreListingStatus,
+} from './storeListings.js';
 
 export { useHostRoute, subPathOfRouteChanged, ROUTE_CHANGED } from './route.js';
 export type { HostRoute } from './route.js';

@@ -31,6 +31,12 @@ export interface BuilderProps {
   scanTimeoutMs?: number;
   onSaveDraft: (config: GeneratorConfig) => Promise<void>;
   onPublish: (config: GeneratorConfig) => Promise<void>;
+  /**
+   * The App Store's answer to the last publish, shown as one quiet line under
+   * the success notice — or `null` for nothing. Arrives AFTER the publish has
+   * resolved (the store call is not awaited), and never blocks or replaces it.
+   */
+  storeNotice?: string | null;
   onBack: () => void;
 }
 
@@ -72,7 +78,7 @@ const previewSnapshot = async (): Promise<BlockWorkflowSnapshot> => ({ workflowI
 const previewNoUpload = async (): Promise<BlockGenerationSourceImageInfo | null> => null;
 const noop = () => {};
 
-export function Builder({ initial, c, pickResource, uploadImage, scanBackground, scanTimeoutMs = 30_000, onSaveDraft, onPublish, onBack }: BuilderProps) {
+export function Builder({ initial, c, pickResource, uploadImage, scanBackground, scanTimeoutMs = 30_000, onSaveDraft, onPublish, storeNotice = null, onBack }: BuilderProps) {
   const [config, setConfig] = useState<GeneratorConfig>(initial);
   const [busy, setBusy] = useState<null | 'save' | 'publish' | 'bg'>(null);
   const [error, setError] = useState<string | null>(null);
@@ -395,6 +401,15 @@ export function Builder({ initial, c, pickResource, uploadImage, scanBackground,
         <Alert color="success" data-testid="builder-notice" withCloseButton onClose={() => setNotice(null)}>
           {notice}
         </Alert>
+      )}
+      {notice && storeNotice && (
+        <div
+          role="status"
+          data-testid="builder-store-notice"
+          style={{ fontSize: 13, lineHeight: 1.5, color: c.muted }}
+        >
+          {storeNotice}
+        </div>
       )}
 
       {isMobile ? (

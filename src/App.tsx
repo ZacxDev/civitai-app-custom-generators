@@ -36,17 +36,19 @@ import {
   useSharedStorage,
   useAppStorage,
   useHostRoute,
+  createStoreListings,
 } from './platform/index.js';
 import type {
   SharedAppendValue,
   SharedListItem,
   SharedListResult,
+  StoreListings,
   UseSharedStorage,
 } from './platform/index.js';
 
 import { Loader } from './ui/index.js';
 
-import { AI_WRITE_BUDGETED, hasGenerateScope } from './scopes.js';
+import { AI_WRITE_BUDGETED, hasGenerateScope, hasStoreScope } from './scopes.js';
 import { palette, pageStyle, contentStyle, metaText } from './theme.js';
 import { paintTheme } from './bootTheme.js';
 import type { BackgroundScanResult, GeneratorConfig } from './types.js';
@@ -69,6 +71,7 @@ import {
 } from './lib/deeplink.js';
 import blockManifest from '../block.manifest.json';
 import { setGeneratorMeta } from './lib/meta.js';
+import { reconcileStoreListings, storeListingFor, storeNoticeFor } from './lib/storeListing.js';
 import type { DraftStore, StoredDraft } from './lib/drafts.js';
 import { deleteDraft as deleteDraftFn, listDrafts, saveDraft as saveDraftFn } from './lib/drafts.js';
 import type { KeptRun } from './lib/runs.js';
@@ -155,6 +158,12 @@ export interface AppDeps {
    * with @civitai/blocks-react 0.24 — see the App-level TODO.
    */
   updateSharedGenerator: (key: string, value: SharedAppendValue) => Promise<void>;
+  /**
+   * The App Store sub-listing routes (`platform/storeListings.ts`). Every call is
+   * BEST-EFFORT and fires only after the shared-storage write it mirrors has
+   * succeeded — see `lib/storeListing.ts`.
+   */
+  store: StoreListings;
   drafts: DraftStore;
   requestConsent: (opts: { scopes: string[] }) => void;
   requestSignIn: () => void;
@@ -363,6 +372,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       // `{ title, body?, data? }` shape `buildPublishPayload` produces for append,
       // is author-scoped, and reuses the `apps:storage:shared:write` scope.
       updateSharedGenerator: sharedHook.update,
+      store: createStoreListings(),
       drafts: appStorage as unknown as DraftStore,
       requestConsent,
       requestSignIn,
@@ -386,6 +396,29 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   depsRef.current = deps;
 
   const canGenerate = hasGenerateScope(token.scopes);
+
+  /**
+   * May this session make App Store calls at all? A signed-in viewer AND the
+   * store scope on the token. The scope is consent-exempt, so an approved
+   * build's first token carries it; dev, tunnel and review tokens never do,
+   * which is why its absence means "make no store call", not "ask".
+   *
+   * Read through a ref so the publish/withdraw callbacks and the load effect see
+   * the live value without re-subscribing.
+   */
+  const canListInStore = Boolean(viewer) && hasStoreScope(token.scopes);
+  const canListInStoreRef = useRef(canListInStore);
+  canListInStoreRef.current = canListInStore;
+  /** The backfill runs at most once per session (one mount of the app). */
+  const storeReconciledRef = useRef(false);
+  /**
+   * The store's answer to the LAST publish, as one line under the Builder's
+   * success notice — or `null` for nothing (including "store publishing is
+   * unavailable", which is not the author's to act on).
+   */
+  const [storeNotice, setStoreNotice] = useState<string | null>(null);
+  /** Which publish the notice belongs to, so a slow answer cannot land on a later one. */
+  const storeNoticeSeq = useRef(0);
 
   // ---- view state ----
   const [view, setView] = useState<View>('browse');
@@ -575,6 +608,36 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         }
         setMyPublished(mineSettled.status === 'fulfilled' ? mineSettled.value.items : []);
         setMyDrafts(draftsSettled.value);
+        // App Store backfill: list the viewer's already-published generators that
+        // have no store card yet. Off the `mine` page this effect just read, so it
+        // costs no extra shared-storage request, and only on a FULFILLED read — a
+        // failed one says nothing about what the viewer has published, and the
+        // next load retries. Once per session; never awaited; never fails the
+        // view. A viewer with nothing of their own never reaches the store
+        // (`reconcileStoreListings` returns before calling it).
+        if (
+          mineSettled.status === 'fulfilled' &&
+          viewer &&
+          canListInStoreRef.current &&
+          !storeReconciledRef.current
+        ) {
+          storeReconciledRef.current = true;
+          void reconcileStoreListings({
+            viewerId: viewer.id,
+            published: mineSettled.value.items,
+            store: depsRef.current.store,
+          })
+            .then((report) => {
+              if (report.stoppedBy && report.stoppedBy !== 'unavailable') {
+                // eslint-disable-next-line no-console
+                console.warn('[custom-generators] App Store backfill stopped early', report);
+              }
+            })
+            .catch((err: unknown) => {
+              // eslint-disable-next-line no-console
+              console.warn('[custom-generators] App Store backfill failed', err);
+            });
+        }
       } catch (e) {
         if (!cancelled) setError(errMsg(e));
       } finally {
@@ -864,6 +927,10 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     setView('browse');
     setEditing(null);
     setRunning(null);
+    // The store line belongs to the Builder session it was published from; a
+    // late answer must not appear in the next one.
+    storeNoticeSeq.current += 1;
+    setStoreNotice(null);
     reload();
   }, [reload]);
 
@@ -892,25 +959,58 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     [persistDraft, reload],
   );
 
+  /**
+   * Mirror a just-published generator into the App Store. Fire-and-forget.
+   *
+   * 🔴 NOT AWAITED BY THE PUBLISH, AND NEVER THROWS. The shared-storage write has
+   * already succeeded when this runs; the store is a second, optional home. So a
+   * store call that fails — or never answers — cannot fail, delay or roll back
+   * the in-app publish, and the author's "Published!" is true either way. What
+   * the store said comes back as one line under it (`storeNotice`).
+   */
+  const listInStore = useCallback((key: string, config: GeneratorConfig) => {
+    const seq = ++storeNoticeSeq.current;
+    setStoreNotice(null);
+    if (!canListInStoreRef.current) return;
+    const input = storeListingFor(key, config);
+    if (!input) return;
+    const settle = (notice: string | null) => {
+      if (seq === storeNoticeSeq.current) setStoreNotice(notice);
+    };
+    depsRef.current.store.upsert(input).then(
+      (result) => settle(storeNoticeFor({ ok: true, result })),
+      (error: unknown) => {
+        // eslint-disable-next-line no-console
+        console.warn('[custom-generators] App Store upsert failed', error);
+        settle(storeNoticeFor({ ok: false, error }));
+      },
+    );
+  }, []);
+
   const handlePublish = useCallback(
     async (config: GeneratorConfig) => {
       // Draft first (so it lands in "My generators" even if the publish fails) —
       // upserts the SAME draft id, carrying any existing publishedKey.
       const draft = await persistDraft(config);
       const payload = buildPublishPayload(config);
+      let key: string;
       if (draft.publishedKey) {
         // Already published → UPDATE the same shared row in place. This is the
         // fix for "editing creates a new one": never append a duplicate.
         await depsRef.current.updateSharedGenerator(draft.publishedKey, payload);
+        key = draft.publishedKey;
       } else {
         // First publish → append, then remember the minted key on the draft so a
         // future edit updates in place instead of duplicating.
-        const { key } = await depsRef.current.shared.append(payload);
+        ({ key } = await depsRef.current.shared.append(payload));
         await persistDraft(config, key);
       }
+      // Only after the shared write landed: the server refuses a store item that
+      // does not exist in shared storage.
+      listInStore(key, config);
       reload();
     },
-    [persistDraft, reload],
+    [persistDraft, reload, listInStore],
   );
 
   const handleDeleteDraft = useCallback(
@@ -984,6 +1084,17 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       } catch (e) {
         rollback(); // undo the optimistic removal on BOTH lists
         setError(errMsg(e));
+        return;
+      }
+      // Take its App Store card down too. The server already mirrors an in-app
+      // withdraw onto the store item, best-effort; this call makes it immediate
+      // and is idempotent (`withdrawn: false` when there was nothing to take
+      // down). Fire-and-forget: the in-app withdraw has succeeded and stands.
+      if (canListInStoreRef.current) {
+        depsRef.current.store.withdraw(item.key).catch((err: unknown) => {
+          // eslint-disable-next-line no-console
+          console.warn('[custom-generators] App Store withdraw failed', err);
+        });
       }
     },
     [patchBoardRows],
@@ -1272,6 +1383,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             scanTimeoutMs={deps.bgScanTimeoutMs}
             onSaveDraft={handleSaveDraft}
             onPublish={handlePublish}
+            storeNotice={storeNotice}
             onBack={backToBrowse}
           />
         )}

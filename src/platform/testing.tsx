@@ -163,6 +163,26 @@ export interface FakeCivitaiOptions {
   subPath?: string;
   /** Observe every outbound bridge message (requests AND notifications). */
   onOutbound?: (message: { type: string; payload: unknown }) => void;
+  /**
+   * The App Store sub-listing routes (`blocks/sub-listings/{upsert,withdraw,mine}`).
+   *
+   * `seed` rows belong to the viewer unless `authorUserId` says otherwise. `fail`
+   * answers one route with a fixed status instead: a JSON `{ error, code }` body
+   * (the server's `subListingErrorResponse` shape), or with `html: true` the
+   * Next.js HTML 404 a route miss returns.
+   *
+   * 🔴 The fake enforces the parts of the contract this app can get WRONG — the
+   * `.strict()` body (an unknown key is a 400), the title/tagline/subPath bounds,
+   * the item existing in shared storage and being the viewer's — and none of the
+   * parts it cannot observe (text safety, rate limits, moderation). A test that
+   * needs one of those scripts it with `fail`.
+   */
+  subListings?: {
+    seed?: { itemKey: string; status: 'pending' | 'approved' | 'hidden' | 'withdrawn'; authorUserId?: number }[];
+    fail?: Partial<
+      Record<'upsert' | 'withdraw' | 'mine', { status: number; code?: string; html?: boolean }>
+    >;
+  };
 }
 
 export interface RecordedCall {
@@ -179,6 +199,8 @@ export interface FakeCivitai {
   rows: () => SharedListItem[];
   /** Every REST call the app made, in order. */
   calls: RecordedCall[];
+  /** The fake server's App Store sub-listing rows, keyed by item key. */
+  subListings: () => Map<string, { status: string; title: string; subPath: string; tagline: string | null }>;
 }
 
 const DEFAULT_SCOPES = [
@@ -265,6 +287,19 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
     });
   }
   const storage = new Map<string, unknown>(Object.entries(options.storage?.seed ?? {}));
+  const subListings = new Map<
+    string,
+    { status: string; title: string; subPath: string; tagline: string | null; authorUserId: number }
+  >();
+  for (const s of options.subListings?.seed ?? []) {
+    subListings.set(s.itemKey, {
+      status: s.status,
+      title: s.itemKey,
+      subPath: `g/${s.itemKey}`,
+      tagline: null,
+      authorUserId: s.authorUserId ?? viewerId ?? 1,
+    });
+  }
   const workflows = new Map<string, { snapshot: BlockWorkflowSnapshot; pollsLeft: number }>();
   let workflowCounter = 0;
 
@@ -538,6 +573,81 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
       return json(200, { snapshot: { workflowId: id, status: 'canceled' } });
     }
 
+    // ---- App Store sub-listings (civitai `src/pages/api/v1/blocks/sub-listings/*`)
+    if (path.startsWith('blocks/sub-listings/')) {
+      const op = path.slice('blocks/sub-listings/'.length) as 'upsert' | 'withdraw' | 'mine';
+      const fail = options.subListings?.fail?.[op];
+      if (fail) {
+        if (fail.html) return notFound(path);
+        return json(fail.status, { error: `scripted ${fail.status}`, code: fail.code ?? 'scripted' });
+      }
+      // Every :self-style store scope needs a signed-in subject (block-scope middleware).
+      if (viewerId == null) return json(403, { error: 'apps:store:items:write requires authenticated subject' });
+      if (op === 'mine' && method === 'GET') {
+        const items = [...subListings.entries()]
+          .filter(([, r]) => r.authorUserId === viewerId)
+          .map(([itemKey, r]) => ({
+            id: `asl_${itemKey}`,
+            itemKey,
+            status: r.status,
+            title: r.title,
+            pendingEdit: false,
+            statusReason: null,
+            editRejectionReason: null,
+            updatedAt: '2026-01-02T00:00:00.000Z',
+          }));
+        return json(200, { items });
+      }
+      if (op === 'withdraw' && method === 'POST') {
+        const keys = Object.keys(body ?? {});
+        if (keys.length !== 1 || typeof body?.itemKey !== 'string') {
+          return json(400, { error: 'Invalid request body', code: 'invalid_body' });
+        }
+        const r = subListings.get(body.itemKey);
+        const withdrawn =
+          !!r && r.authorUserId === viewerId && (r.status === 'pending' || r.status === 'approved');
+        if (withdrawn) r!.status = 'withdrawn';
+        return json(200, { ok: true, withdrawn });
+      }
+      if (op === 'upsert' && method === 'POST') {
+        const allowed = new Set(['itemKey', 'title', 'tagline', 'imageId', 'subPath', 'contentRating']);
+        const b = (body ?? {}) as Record<string, unknown>;
+        const bad =
+          Object.keys(b).some((k) => !allowed.has(k)) ||
+          typeof b.itemKey !== 'string' ||
+          typeof b.title !== 'string' ||
+          b.title.length < 1 ||
+          b.title.length > 80 ||
+          (b.tagline != null && (typeof b.tagline !== 'string' || b.tagline.length > 140)) ||
+          typeof b.subPath !== 'string' ||
+          !/^[A-Za-z0-9_-]{1,64}(\/[A-Za-z0-9_-]{1,64}){0,3}$/.test(b.subPath);
+        if (bad) return json(400, { error: 'Invalid request body', code: 'invalid_body' });
+        const item = shared.get(b.itemKey as string);
+        if (!item) return json(404, { error: 'Item not found', code: 'item_not_found' });
+        if (item.authorUserId !== viewerId) {
+          return json(403, { error: 'Only the item author can publish it', code: 'not_your_item' });
+        }
+        const existing = subListings.get(b.itemKey as string);
+        if (existing?.status === 'hidden') {
+          return json(200, { id: `asl_${b.itemKey}`, status: 'hidden', pendingEdit: false });
+        }
+        const approved = existing?.status === 'approved';
+        subListings.set(b.itemKey as string, {
+          status: approved ? 'approved' : 'pending',
+          title: b.title as string,
+          subPath: b.subPath as string,
+          tagline: (b.tagline as string | undefined) ?? null,
+          authorUserId: viewerId,
+        });
+        return json(200, {
+          id: `asl_${b.itemKey}`,
+          status: approved ? 'approved' : 'pending',
+          pendingEdit: approved,
+        });
+      }
+      return json(405, { error: 'Method not allowed' });
+    }
+
     return notFound(path);
   };
 
@@ -661,7 +771,19 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
   };
 
   activeFake = fake;
-  return { transport, fetch: fakeFetch, rows, calls };
+  return {
+    transport,
+    fetch: fakeFetch,
+    rows,
+    calls,
+    subListings: () =>
+      new Map(
+        [...subListings.entries()].map(([k, { status, title, subPath, tagline }]) => [
+          k,
+          { status, title, subPath, tagline },
+        ]),
+      ),
+  };
 }
 
 /**

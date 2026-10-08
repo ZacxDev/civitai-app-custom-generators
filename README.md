@@ -18,7 +18,7 @@ later phase.
 | category | `generation` |
 | trust tier | `unverified` (shared storage requires the opaque-origin sandbox) |
 | `page.buzzBudgetPerGen` | `1000` (the platform cap) |
-| scopes | `ai:write:budgeted`, `buzz:read:self`, `apps:storage:read`, `apps:storage:write`, `apps:storage:shared:read`, `apps:storage:shared:write` |
+| scopes | `ai:write:budgeted`, `buzz:read:self`, `apps:storage:read`, `apps:storage:write`, `apps:storage:shared:read`, `apps:storage:shared:write`, `posts:write:self`, `apps:store:items:write` |
 
 ## SDK
 
@@ -128,6 +128,41 @@ matching generator in the Runner. Only the exact shape `g/<key>` (key
 - **OG caveat:** real crawler-facing Open Graph must come from the host's SSR (a
   crawler never runs the iframe JS); `setGeneratorMeta` is a best-effort,
   live-document update for in-app share / same-tab navigation only.
+
+## App Store sub-listings (0.10.0)
+
+A published generator also goes to the civitai App Store as its own card, badged
+"in Custom Generators" (server: civitai/civitai#5511). The card links to
+`/apps/run/<slug>/g/<key>?sl=<id>`, so it opens the generator through the
+deeplink route above. Scope: `apps:store:items:write` (sensitive, so justified in
+the manifest; consent-exempt; never minted for dev, tunnel or review tokens).
+
+- **Publish / edit** → `POST blocks/sub-listings/upsert` with `itemKey` (the
+  shared key), `title` (the name, ≤80), `tagline` (the description, ≤140, left
+  out when empty) and `subPath: g/<key>`. No `imageId` (a generator cover is not
+  an image in a published post, which the server requires) and no
+  `contentRating` (unset inherits the app's own). Every new item and every edit
+  to an approved one waits for a moderator; the Builder says so in one line
+  under "Published!".
+- **Withdraw** → `POST blocks/sub-listings/withdraw`, after the in-app withdraw
+  succeeds. The server mirrors the in-app withdraw on its own as well; this just
+  makes it immediate.
+- **Backfill** → once per session, off the "Published by me" read, the app calls
+  `GET blocks/sub-listings/mine` and upserts the viewer's published generators
+  that have no card yet, at most 10 per run (the server allows 30 writes an hour).
+  A viewer with no published generators never reaches the store routes.
+- **Best-effort, always.** Store calls run after the shared-storage write has
+  succeeded and are not awaited, so no store failure (503 while the feature's
+  tables are missing, 403 when the app is not enabled, 429, 5xx, a dead network)
+  can fail or delay the in-app publish. "Unavailable" answers are silent.
+- **No store call without the scope on the token**, which is the normal state
+  outside an approved production build.
+- `@civitai/app-sdk` does not list the scope yet (civitai/civitai-app-starters#569),
+  so `src/scopes.ts` carries it as a string and `src/manifest.ts` filters it out
+  of the local `defineBlock` gate; `src/manifest.test.ts` goes red once an
+  installed SDK knows it.
+- **Inherits the deeplink defect above:** a card for a generator past the loaded
+  Discover page opens on Browse instead of the generator.
 
 ## Untrusted-param clamp (defense in depth)
 

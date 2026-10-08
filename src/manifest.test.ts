@@ -2,14 +2,16 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { manifest, manifestBuzzBudgetPerGen, validateManifest } from './manifest.js';
+import { BLOCK_SCOPES } from '@civitai/app-sdk/blocks';
+
+import { SCOPES_AHEAD_OF_SDK, manifest, manifestBuzzBudgetPerGen, validateManifest } from './manifest.js';
 
 describe('block.manifest.json', () => {
   it('validates against the SDK defineBlock gate (augmented to runtime shape)', () => {
     expect(() => validateManifest()).not.toThrow();
   });
 
-  it('declares exactly the seven scopes the app uses', () => {
+  it('declares exactly the eight scopes the app uses', () => {
     expect(manifest.scopes).toEqual([
       'ai:write:budgeted',
       'buzz:read:self',
@@ -18,7 +20,26 @@ describe('block.manifest.json', () => {
       'apps:storage:shared:read',
       'apps:storage:shared:write',
       'posts:write:self',
+      'apps:store:items:write',
     ]);
+  });
+
+  /**
+   * 🔴 THE SHIM'S TRIPWIRE. `apps:store:items:write` is live on civitai but not yet
+   * in the pinned `@civitai/app-sdk`'s `BLOCK_SCOPES`, so `validateManifest`
+   * filters the names in `SCOPES_AHEAD_OF_SDK` out before `defineBlock` sees them
+   * (otherwise the gate above would reject a scope the platform accepts). That
+   * filter must not outlive its reason: once the installed SDK knows a scope,
+   * this goes red and says to delete it from the list (and to swap
+   * `scopes.ts`'s local string for the SDK's constant).
+   */
+  it('only shims scopes the installed SDK genuinely does not know yet', () => {
+    const known = new Set<string>(Object.values(BLOCK_SCOPES));
+    for (const scope of SCOPES_AHEAD_OF_SDK) {
+      expect(known.has(scope), `${scope} is now in @civitai/app-sdk — remove it from SCOPES_AHEAD_OF_SDK`).toBe(false);
+    }
+    // ...and the shim is not a blanket pass: an unknown scope NOT on the list still fails.
+    expect(() => validateManifest({ ...manifest, scopes: ['apps:made:up'] })).toThrow();
   });
 
   /**
@@ -34,7 +55,7 @@ describe('block.manifest.json', () => {
    * Asserted as a RELATIONSHIP over every declared scope rather than a list of
    * the sensitive ones: this repo cannot see civitai's sensitivity table, and a
    * copy of it here would rot silently the next time a scope is reclassified.
-   * Justifying all seven is cheap and cannot be wrong.
+   * Justifying all of them is cheap and cannot be wrong.
    */
   it('justifies every declared scope, with a justification for nothing else', () => {
     const scopes = manifest.scopes as string[];
