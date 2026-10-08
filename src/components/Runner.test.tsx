@@ -97,18 +97,20 @@ describe('Runner — submit body construction', () => {
     // imgConfig exposes BOTH prompt + image — satisfy the prompt first to isolate
     // the image requirement.
     await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
-    // still no image → the gen button is DISABLED (not submittable), no estimate
-    expect(screen.getByTestId('gen-button')).toBeDisabled();
+    // still no image → the gen button is not RUNNABLE (pressable, gated), and
+    // pressing it surfaces the named missing-input error instead of estimating
+    expect(screen.getByTestId('gen-button')).toHaveAttribute('data-runnable', 'false');
     await userEvent.click(screen.getByTestId('gen-button'));
     expect(wf.calls.estimate).toHaveLength(0);
+    expect(screen.getByTestId('runner-error')).toHaveTextContent(/needs a source image/i);
 
-    // upload via the UNSCANNED generationSource dep → the button enables
+    // upload via the UNSCANNED generationSource dep → the button becomes runnable
     await userEvent.click(screen.getByTestId('upload-source'));
     // a preview THUMBNAIL now stands in for the old "Image ready" text
     const thumb = await screen.findByTestId('source-thumb');
     expect(thumb).toHaveAttribute('src', GENERATION_SOURCE_IMAGE.url);
     expect(props.uploadSourceImage).toHaveBeenCalled();
-    await waitFor(() => expect(screen.getByTestId('gen-button')).toBeEnabled());
+    await waitFor(() => expect(screen.getByTestId('gen-button')).toHaveAttribute('data-runnable', 'true'));
     await userEvent.click(screen.getByTestId('gen-button'));
     await waitFor(() => expect(wf.calls.estimate).toHaveLength(1));
     // dims come from the mock RESULT (832×1216), NOT a hardcoded 1024×1024.
@@ -397,64 +399,76 @@ describe('Runner — required exposed inputs gate the run control', () => {
     });
   }
 
-  it('(a) prompt-required button: run disabled while prompt empty/whitespace, enabled once filled', async () => {
+  it('(a) prompt-required button: not runnable while prompt empty/whitespace, runnable once filled — pressing while unmet names the missing input', async () => {
     const { wf } = renderRunner(txtConfig());
     const btn = screen.getByTestId('gen-button');
-    expect(btn).toBeDisabled();
-    // The requirement is now stated ON the preset card, as a property of that
-    // button, and the gate itself is asserted via `data-runnable` rather than via
-    // the presence of hint copy (see `lib/preset.ts`).
+    // Pressable but gated: the gate is asserted via `data-runnable` (and the
+    // caption states what's still missing), not via a disabled attribute that
+    // would swallow the press silently.
+    expect(btn).not.toBeDisabled();
+    expect(btn).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByTestId('preset-needs')).toHaveTextContent(/needs a prompt/i);
     expect(btn).toHaveAttribute('data-runnable', 'false');
 
+    // pressing while unmet surfaces the named error and focus lands on the prompt
+    await userEvent.click(btn);
+    expect(screen.getByTestId('runner-error')).toHaveTextContent(/needs a prompt/i);
+    expect(wf.calls.estimate).toHaveLength(0);
+
     // whitespace-only is still empty
     await userEvent.type(screen.getByTestId('runner-prompt'), '   ');
-    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute('data-runnable', 'false');
 
     await userEvent.clear(screen.getByTestId('runner-prompt'));
     await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
-    expect(btn).toBeEnabled();
+    expect(btn).toHaveAttribute('aria-disabled', 'false');
     expect(btn).toHaveAttribute('data-runnable', 'true');
+    // the caption tracks the live form: the need is satisfied, so it is gone
+    expect(screen.queryByTestId('preset-needs')).not.toBeInTheDocument();
 
     await userEvent.click(btn);
     await waitFor(() => expect(wf.calls.estimate).toHaveLength(1));
   });
 
-  it('(b) image-required button: run disabled with no image, enabled once uploaded', async () => {
+  it('(b) image-required button: not runnable with no image, runnable once uploaded', async () => {
     const { wf } = renderRunner(imgOnlyConfig());
     // no prompt box for a fixed-template img2img button
     expect(screen.queryByTestId('runner-prompt')).not.toBeInTheDocument();
     const btn = screen.getByTestId('gen-button');
-    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute('data-runnable', 'false');
     expect(screen.getByTestId('preset-needs')).toHaveTextContent(/needs your image/i);
+    // the source field names the buttons that need it — no generator-wide asterisk
+    expect(screen.getByTestId('source-needed-by')).toBeInTheDocument();
 
     await userEvent.click(screen.getByTestId('upload-source'));
     await screen.findByTestId('source-thumb');
-    await waitFor(() => expect(btn).toBeEnabled());
+    await waitFor(() => expect(btn).toHaveAttribute('data-runnable', 'true'));
+    expect(screen.queryByTestId('preset-needs')).not.toBeInTheDocument();
     await userEvent.click(btn);
     await waitFor(() => expect(wf.calls.estimate).toHaveLength(1));
   });
 
-  it('(c) button exposing BOTH: run disabled until prompt AND image are both provided', async () => {
+  it('(c) button exposing BOTH: not runnable until prompt AND image are both provided; the caption drops each need as it is met', async () => {
     renderRunner(imgConfig());
     const btn = screen.getByTestId('gen-button');
-    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute('data-runnable', 'false');
 
-    // prompt only → still blocked on the image
+    // prompt only → still blocked on the image, and the caption says only that
     await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
-    expect(btn).toBeDisabled();
-    expect(screen.getByTestId('preset-needs')).toHaveTextContent(/needs a prompt and your image/i);
+    expect(btn).toHaveAttribute('data-runnable', 'false');
+    expect(screen.getByTestId('preset-needs')).toHaveTextContent(/needs your image/i);
 
-    // add the image → now runnable
+    // add the image → now runnable, no needs stated
     await userEvent.click(screen.getByTestId('upload-source'));
     await screen.findByTestId('source-thumb');
-    await waitFor(() => expect(btn).toBeEnabled());
+    await waitFor(() => expect(btn).toHaveAttribute('data-runnable', 'true'));
+    expect(screen.queryByTestId('preset-needs')).not.toBeInTheDocument();
   });
 
   it('(d) button exposing NEITHER is unaffected: runnable immediately, no requirement stated', async () => {
     const { wf } = renderRunner(fixedConfig());
     const btn = screen.getByTestId('gen-button');
-    expect(btn).toBeEnabled();
+    expect(btn).toHaveAttribute('data-runnable', 'true');
     // A self-contained one-tap preset states no requirement at all, rather than
     // an empty one.
     expect(screen.queryByTestId('preset-needs')).not.toBeInTheDocument();
@@ -519,7 +533,7 @@ describe('Runner — required exposed inputs gate the run control', () => {
     // …and the img2img one is still correctly blocked, so this is not "the gate
     // got looser", it is "the gate was always per-button and the COPY lied".
     expect(img).toHaveAttribute('data-runnable', 'false');
-    expect(img).toBeDisabled();
+    expect(img).toHaveAttribute('aria-disabled', 'true');
 
     await userEvent.click(txt);
     await waitFor(() => expect(wf.calls.estimate).toHaveLength(1));

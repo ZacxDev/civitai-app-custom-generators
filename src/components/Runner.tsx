@@ -242,6 +242,16 @@ export function Runner(props: RunnerProps) {
   // fixed below.
   const showPromptInput = useMemo(() => config.buttons.some(exposesPrompt), [config.buttons]);
   const showImageInput = useMemo(() => config.buttons.some(exposesImage), [config.buttons]);
+  // Which buttons actually consume the shared source image — named under the
+  // field so its requirement reads as per-preset, not generator-wide.
+  const imageNeededBy = useMemo(
+    () =>
+      config.buttons
+        .filter(exposesImage)
+        .map((b) => b.label?.trim() || 'Button')
+        .join(', '),
+    [config.buttons],
+  );
   const promptPlaceholder = config.promptPlaceholder?.trim() || DEFAULT_PROMPT_PLACEHOLDER;
 
   // 🔴 WAS: a UNION of the unmet inputs across EVERY button, rendered as one
@@ -279,6 +289,19 @@ export function Runner(props: RunnerProps) {
     }
   }
 
+  /** Move focus to the first field that can satisfy a missing required input. */
+  function focusFirstMissingInput(missing: readonly string[]) {
+    const tid = missing.includes('prompt')
+      ? 'runner-prompt'
+      : missing.includes('image')
+        ? 'upload-source'
+        : null;
+    if (!tid) return;
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(`[data-testid="${tid}"]`)?.focus();
+    });
+  }
+
   async function pressButton(button: GenButton) {
     setRunnerError(null);
     if (preview) {
@@ -294,14 +317,17 @@ export function Runner(props: RunnerProps) {
       setRunnerError('This button has no checkpoint configured.');
       return;
     }
-    // Required exposed inputs must be satisfied. The gen button is disabled when
-    // they aren't (so this is normally unreachable via the UI), but keep it as a
-    // guard for any non-UI press path.
+    // Required exposed inputs must be satisfied before anything estimates.
+    // The gen button is PRESSABLE but not runnable in this state on purpose:
+    // a disabled button swallows the click and says nothing, so the press
+    // lands here — name the button, say what's missing, and focus the first
+    // field that can fix it.
     const missing = missingRequiredInputs(button, { promptInput, sourceImage });
     if (missing.length > 0) {
       // Per-button and NAMED — the old message was a union across every button and
       // did not say which press it was answering.
       setRunnerError(missingForButtonMessage(button.label?.trim() || 'This button', missing));
+      focusFirstMissingInput(missing);
       return;
     }
 
@@ -793,8 +819,13 @@ export function Runner(props: RunnerProps) {
 
             {showImageInput && (
               <Stack gap={6}>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>
-                  Source image (img2img) <span style={{ color: token.error }} aria-hidden>*</span>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>Source image (img2img)</div>
+                  {/* Required PER PRESET, not for the generator: a txt2img-only
+                      viewer must not read this as a gate on every run. */}
+                  <div style={{ ...metaText }} data-testid="source-needed-by">
+                    Needed by: {imageNeededBy}
+                  </div>
                 </div>
                 {sourceImage ? (
                   <Group gap={10} align="flex-start">
@@ -835,16 +866,20 @@ export function Runner(props: RunnerProps) {
                 union hint that used to demand a source image for txt2img buttons
                 (see `lib/preset.ts`).
 
-                Still disabled until every runtime input THIS button exposes is
-                satisfied, exactly as before (`canRunButton`). Preview is
-                non-runnable so it isn't input-gated: pressing surfaces a note. */}
+                Not runnable until every runtime input THIS button exposes is
+                satisfied (`canRunButton`) — but still PRESSABLE: a disabled
+                button swallows the click silently, so an unmet press lands in
+                `pressButton`, names what's missing, and focuses the field.
+                The caption lists only what's STILL missing, recomputed from
+                the live form. Preview is non-runnable so it isn't
+                input-gated: pressing surfaces a note. */}
             <div
               data-testid="runner-presets"
               style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(210px,1fr))', gap: 10 }}
             >
               {presets.map(({ button: b, preset }) => {
                 const runnable = preview || canRunButton(b, { promptInput, sourceImage });
-                const needs = presetNeedsLabel(preset.needs);
+                const needs = presetNeedsLabel(missingRequiredInputs(b, { promptInput, sourceImage }));
                 const recipe = presetRecipeLabel(preset);
                 return (
                   <button
@@ -857,14 +892,14 @@ export function Runner(props: RunnerProps) {
                     // which is what the old tests had to do, and why a reworded
                     // hint could have quietly broken them.
                     data-runnable={runnable ? 'true' : 'false'}
-                    disabled={!runnable}
+                    aria-disabled={!runnable}
                     onClick={() => pressButton(b)}
                     className={motionClass(motion, runnable ? CLASS_LIFT : undefined)}
                     style={{
                       all: 'unset',
                       boxSizing: 'border-box',
                       display: 'block',
-                      cursor: runnable ? 'pointer' : 'not-allowed',
+                      cursor: 'pointer',
                       opacity: runnable ? 1 : 0.55,
                       padding: '10px 12px',
                       borderRadius: radius.md,
