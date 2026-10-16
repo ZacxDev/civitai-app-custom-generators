@@ -32,8 +32,8 @@ import {
   useBuzzWorkflow,
   useGatedImages,
   useGenerationResources,
-  useSharedStorage,
-  useAppStorage,
+  useRecordsStorage,
+  useKvStorage,
   useHostRoute,
   createStoreListings,
   requestGrants as platformRequestGrants,
@@ -323,8 +323,8 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   const genResources = useGenerationResources();
   const gatedImages = useGatedImages();
   const workflow = useBuzzWorkflow();
-  const sharedHook = useSharedStorage();
-  const appStorage = useAppStorage();
+  const sharedHook = useRecordsStorage();
+  const appStorage = useKvStorage();
   const publishOutputs = usePublishGenerationOutputs();
   const buzz = useBuzzBalance();
   const { requestConsent } = useRequestConsent();

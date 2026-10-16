@@ -513,7 +513,7 @@ describe('partial-ranking disclosure', () => {
      * seam between them: `App` could pass `limit: 100` to a `shared` that drops it,
      * or spell the parameter in a way the route rejects, and every assertion up
      * there would still pass. So this one leaves `deps.shared` UNSET, letting the
-     * read run `App` -> `useSharedStorage()` -> `platform/sharedStorage.ts` ->
+     * read run `App` -> `useRecordsStorage()` -> `platform/sharedStorage.ts` ->
      * `GET blocks/storage/records` into the fake server, and asserts the
      * recorded `URLSearchParams`.
      *

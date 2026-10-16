@@ -58,7 +58,7 @@ export { createWorkflowClient, useBuzzWorkflow, WorkflowEstimateError, HOST_SYNT
 export type { UseBuzzWorkflow, WorkflowClient, WorkflowEstimateErrorCode } from './workflows.js';
 
 export { createSharedStorage } from './sharedStorage.js';
-export { useSharedStorage } from './useSharedStorage.js';
+export { useRecordsStorage } from './useRecordsStorage.js';
 export type {
   SharedAppendValue,
   SharedListItem,
@@ -76,7 +76,7 @@ export { useGenerationResources } from './useGenerationResources.js';
 export { fetchBuzzBalance } from './buzz.js';
 export type { BuzzBalance } from './buzz.js';
 
-export { useAppStorage } from './appStorage.js';
+export { useKvStorage } from './appStorage.js';
 
 export {
   createPost,

@@ -108,6 +108,6 @@ export function createAppStorage(
 }
 
 /** The hook shape `App.tsx` binds into `deps.drafts`. Memoised for a stable identity. */
-export function useAppStorage(): DraftStore {
+export function useKvStorage(): DraftStore {
   return useMemo(() => createAppStorage(), []);
 }

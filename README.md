@@ -34,8 +34,8 @@ import `@civitai/sdk` (enforced by `src/platform-seam.test.ts`). It binds the
 transport to plain SDK functions and exposes the app's hook vocabulary under
 the names the components already used: `useBlockContext`, `useBlockToken`,
 `useResourcePicker`, `useImageUpload`, `useGenerationResources`,
-`useBuzzWorkflow`, `useBuzzBalance`, `useBuzzPurchase`, `useSharedStorage`,
-`useAppStorage`, `useCivitaiNavigate`, `useRequestConsent` /
+`useBuzzWorkflow`, `useBuzzBalance`, `useBuzzPurchase`, `useRecordsStorage`,
+`useKvStorage`, `useCivitaiNavigate`, `useRequestConsent` /
 `useRequestSignIn`. Host UI goes through `app.host.*`, data through
 `app.site.*` over `/api/v1/blocks/*`, and both stores through the document store
 (`app.storage.collection(name)`, see "Storage").
