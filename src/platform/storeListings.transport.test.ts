@@ -99,8 +99,28 @@ describe('upsert', () => {
     const res = await store.upsert({ itemKey: 'k1', title: 'Mine, renamed', subPath: 'g/k1', imageId: CARD_IMAGE });
     const [, edit] = callsTo('blocks/sub-listings/upsert');
     expect(edit?.body).toStrictEqual({ itemKey: 'k1', title: 'Mine, renamed', subPath: 'g/k1', imageId: CARD_IMAGE });
-    expect(fake.subListings().get('k1')).toMatchObject({ title: 'Mine, renamed', imageId: CARD_IMAGE });
+    // An approved item keeps serving its live version (the seed's) while the edit is staged.
+    expect(fake.subListings().get('k1')).toMatchObject({ title: 'k1', imageId: null });
     expect(res).toEqual({ id: 'asl_k1', status: 'approved', pendingEdit: true });
+  });
+
+  it('re-publishing an approved item unchanged stages nothing (pendingEdit: false)', async () => {
+    install({ subListings: { seed: [{ itemKey: 'k1', status: 'approved' }] } });
+    const store = createStoreListings();
+    // Differs from the live version: staged.
+    expect(await store.upsert({ itemKey: 'k1', title: 'Renamed', subPath: 'g/k1' })).toEqual({
+      id: 'asl_k1',
+      status: 'approved',
+      pendingEdit: true,
+    });
+    // Identical to the live version (the seed's title and path, no tagline or image): the staged
+    // edit is cleared, as civitai's `writeSubListing` `sameContent` branch does.
+    expect(await store.upsert({ itemKey: 'k1', title: 'k1', subPath: 'g/k1' })).toEqual({
+      id: 'asl_k1',
+      status: 'approved',
+      pendingEdit: false,
+    });
+    expect(fake.subListings().get('k1')).toMatchObject({ title: 'k1' });
   });
 
   it.each([

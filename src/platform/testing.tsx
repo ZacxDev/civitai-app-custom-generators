@@ -684,22 +684,34 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
         if (existing?.status === 'hidden') {
           return json(200, { id: `asl_${b.itemKey}`, status: 'hidden', pendingEdit: false });
         }
-        const approved = existing?.status === 'approved';
-        subListings.set(b.itemKey as string, {
-          status: approved ? 'approved' : 'pending',
+        // The server stores `body.imageId ?? null` (and the same for tagline): an absent key
+        // clears it. Upsert REPLACES the item.
+        const content = {
           title: b.title as string,
           subPath: b.subPath as string,
           tagline: (b.tagline as string | undefined) ?? null,
-          // The server stores `body.imageId ?? null`: an absent key clears it.
           imageId: (b.imageId as number | undefined) ?? null,
+        };
+        if (existing?.status === 'approved') {
+          // As civitai's `writeSubListing`: an approved item keeps serving its live version. An
+          // edit identical to it clears any staged edit (`pendingEdit: false`); anything else is
+          // staged for a moderator (`pendingEdit: true`) and the live columns are NOT touched.
+          const same =
+            existing.title === content.title &&
+            existing.subPath === content.subPath &&
+            existing.tagline === content.tagline &&
+            existing.imageId === content.imageId;
+          existing.pendingEdit = !same;
+          return json(200, { id: `asl_${b.itemKey}`, status: 'approved', pendingEdit: !same });
+        }
+        // New, pending or withdrawn: the live columns are the draft, and it waits for review.
+        subListings.set(b.itemKey as string, {
+          status: 'pending',
+          ...content,
           authorUserId: viewerId,
-          pendingEdit: approved,
+          pendingEdit: false,
         });
-        return json(200, {
-          id: `asl_${b.itemKey}`,
-          status: approved ? 'approved' : 'pending',
-          pendingEdit: approved,
-        });
+        return json(200, { id: `asl_${b.itemKey}`, status: 'pending', pendingEdit: false });
       }
       return json(405, { error: 'Method not allowed' });
     }
