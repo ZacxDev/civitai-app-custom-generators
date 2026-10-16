@@ -1,21 +1,15 @@
-// App Store sub-listings, over the three routes under
-// `/api/v1/blocks/sub-listings/` (civitai/civitai#5511): `upsert`, `mine` and
-// `withdraw`.
+// App Store sub-listings, over two of the routes under
+// `/api/v1/blocks/sub-listings/` (civitai/civitai#5511): `upsert` and `mine`.
+// The third, `withdraw`, is deliberately unused: when an author deletes a
+// production shared document the server withdraws that author's card itself, so
+// calling it from here would only spend one of the author's store writes.
 //
-// 🔴 `withdraw` IS CALLED FROM HERE SINCE THE DOCUMENT-STORE PORT (0.13.0), and
-// the reason it was not before no longer holds. The LEGACY shared-storage
-// withdraw took the author's store card down server-side before it answered, so
-// a second call from the app only spent a store write. A document-store `delete`
-// does no such thing — nothing on that path touches sub-listings — so without
-// this call a withdrawn generator's card would stay in the store, linking to a
-// generator that no longer opens.
-//
-// ⚠️ THE STORE STILL VALIDATES AN UPSERT AGAINST THE LEGACY SHARED STORE. The
-// server checks `itemKey` names a row the viewer wrote in the legacy shared
-// store; a generator published to the document store after go-live has no such
-// row, so its upsert is refused `item_not_found` until the server learns the
-// document store. Generators copied over at go-live keep their legacy row (the
-// copy does not delete it) and keep working. See `lib/storeListing.ts`.
+// 🔴 THIS VERSION REQUIRES civitai/civitai#6120 DEPLOYED FIRST. That server change
+// resolves an upsert's `itemKey` from the document store (an app whose approved
+// manifest declares a shared collection is resolved from the document store
+// ONLY), withdraws the card on an author's delete, and hides it on a moderator
+// hide or delete. Before it, every generator published here would be refused
+// `item_not_found` and a deleted generator's card would outlive it.
 //
 // A parent app may place individual items it contains — here, one published
 // generator — into the `/apps` store as their own cards, badged "in Custom
@@ -73,8 +67,6 @@ export interface MyStoreListing {
 export interface StoreListings {
   upsert(input: StoreListingInput): Promise<StoreListingResult>;
   mine(): Promise<MyStoreListing[]>;
-  /** Take the viewer's own card for `itemKey` out of the store. `withdrawn: false` = there was none. */
-  withdraw(itemKey: string): Promise<{ withdrawn: boolean }>;
 }
 
 /**
@@ -167,13 +159,5 @@ export function createStoreListings(): StoreListings {
       });
     },
 
-    withdraw(itemKey) {
-      return guarded(async () => {
-        const app = await getClient();
-        // The body is exactly `{ itemKey }` — the route's schema is strict.
-        const res = await app.site.post<{ withdrawn?: unknown }>('blocks/sub-listings/withdraw', { itemKey });
-        return { withdrawn: res?.withdrawn === true };
-      });
-    },
   };
 }

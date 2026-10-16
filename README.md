@@ -153,9 +153,11 @@ pins the declaration whole; `src/platform/appStorage.test.ts` and
   Kept runs are read newest-first (`-key`) in two pages; drafts and "Published by
   me" follow the cursor (bounded). A short `rate_limited` (store contention) is
   retried in place at most twice; a spent per-minute window is not waited out.
-- **Creator attribution (`sharedContentKey`)** still resolves the author from the
-  legacy shared store server-side, so it is recorded for copied generators only
-  (track-only, fail-open).
+- 🔴 **Requires civitai/civitai#6120 deployed first.** That server change resolves a
+  sub-listing `itemKey` and the `sharedContentKey` attribution from the document
+  store (an app that declares a shared collection is resolved from it ONLY),
+  withdraws an author's App Store card when they delete the document, and hides
+  the card on a moderator hide or delete.
 
 ## Deeplinks + OG/meta
 
@@ -207,21 +209,13 @@ the manifest; consent-exempt; never minted for dev, tunnel or review tokens).
   `contentRating` (unset inherits the app's own). Every new item and every edit
   to an approved one waits for a moderator; the Builder says so in one line
   under "Published!".
-- **Withdraw** → `POST blocks/sub-listings/withdraw` with `{ itemKey }`, best-effort,
-  after the document delete succeeded. (The legacy shared withdraw took the card
-  down server-side; a document-store delete does not touch sub-listings.)
-- ⚠️ **The store validates `itemKey` against the LEGACY shared store.** A generator
-  published after 0.13.0 exists only in the document store, so its upsert is
-  refused `item_not_found` ("Couldn't add this to the App Store") until the server
-  learns the document store. Generators copied over at go-live keep their legacy
-  row and keep working. The backfill does not remember `item_not_found`, so those
-  generators are listed by a later run once the server can see them.
+- **Withdraw** → no store call. The server withdraws the author's card when they
+  delete the generator's document (civitai/civitai#6120, required by this version).
 - **Backfill** → off the "Published by me" read, the app calls
   `GET blocks/sub-listings/mine` and upserts the viewer's published generators
   that have no card yet: at most 10 per run, at most one run per 6 hours across
   page loads (a ledger under `store-backfill:v1` in the viewer's app storage),
-  and an item the store refused is not retried by the backfill (except
-  `item_not_found`, above). The server counts
+  and an item the store refused is not retried by the backfill. The server counts
   every upsert, refused or not, against 30 writes/hour and 100/day. A viewer with
   no published generators never reaches the store routes.
 - **Best-effort, always.** Store calls run after the shared-storage write has

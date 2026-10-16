@@ -67,7 +67,6 @@ function fakeStore(opts: { mine?: MyStoreListing[]; mineError?: unknown; upsertE
       if (opts.mineError) throw opts.mineError;
       return opts.mine ?? [];
     }),
-    withdraw: vi.fn(async () => ({ withdrawn: true })),
   };
   return { store, upserts };
 }
@@ -400,21 +399,18 @@ describe('reconcileStoreListings', () => {
   });
 
   /**
-   * 🔴 THE DOCUMENT-STORE GAP. The sub-listing server validates `itemKey` against
-   * the LEGACY shared store, so every generator published after the port is
-   * refused `item_not_found`. Remembering that refusal would keep those
-   * generators out of the App Store forever after the server learns the new store;
-   * so it is retried on the next run instead, like a lost race. Red before the
-   * port: `k2` landed in `refused`.
+   * `item_not_found` is a property of the item: the server resolves `itemKey` from
+   * the document store (civitai/civitai#6120), so a miss means the generator is gone,
+   * and a refusal a retry will not change is remembered like any other.
    */
-  it('does not remember an item_not_found refusal, so a later run retries it', async () => {
+  it('remembers an item_not_found refusal, so a later run does not spend a write on it', async () => {
     const { store, upserts } = fakeStore({
       upsertError: (key) => (key === 'k2' ? new StoreListingError(404, 'item_not_found') : null),
     });
     const ledger = memoryLedger({ v: 1, lastRunAt: 0, refused: [] });
     await reconcileStoreListings({ viewerId: ME, published: [row('k1', 'One', ME), row('k2', 'Two', ME)], store, ledger, now: NOW });
     expect(upserts.map((u) => u.itemKey)).toEqual(['k1', 'k2']);
-    expect(ledger.saved?.refused).toEqual([]);
+    expect(ledger.saved?.refused).toEqual(['k2']);
   });
 
   it(`sends at most RECONCILE_MAX_UPSERTS (${RECONCILE_MAX_UPSERTS}) per run, well inside the 30/hour limit`, async () => {

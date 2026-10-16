@@ -1152,25 +1152,16 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     async (item: SharedListItem) => {
       const rollback = patchBoardRows((list) => list.filter((s) => s.key !== item.key));
       setError(null);
-      let deleted = false;
       try {
-        ({ deleted } = await depsRef.current.shared.withdraw(item.key));
+        await depsRef.current.shared.withdraw(item.key);
       } catch (e) {
         rollback(); // undo the optimistic removal on BOTH lists
         setError(errMsg(e));
-        return;
       }
-      // 🔴 THE APP STORE CARD IS TAKEN DOWN FROM HERE NOW. The legacy shared
-      // withdraw did it server-side before answering; a document-store delete
-      // does not touch sub-listings at all, so without this call the card would
-      // outlive the generator it opens. Best-effort and not awaited, like every
-      // store call: the withdraw itself has already succeeded.
-      if (deleted && canListInStoreRef.current) {
-        depsRef.current.store.withdraw(item.key).catch((err: unknown) => {
-          // eslint-disable-next-line no-console
-          console.warn('[custom-generators] App Store withdraw failed', err);
-        });
-      }
+      // No App Store call here: when an author deletes a production shared
+      // document, the server withdraws that author's store card itself
+      // (civitai/civitai#6120, which this version requires), so a call from the app
+      // would only spend one of the author's store writes.
     },
     [patchBoardRows],
   );

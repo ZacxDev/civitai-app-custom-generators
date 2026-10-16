@@ -1,13 +1,9 @@
 // App Store sub-listings, driven through the whole App against the app's own fake
-// platform: publish → upsert, withdraw → store withdraw, and the once-per-session
-// backfill on open. The REAL adapter (`platform/storeListings.ts`) and the real
-// document-store adapters run; only the server is fake.
-//
-// ⚠️ MOST CASES HERE RUN AGAINST A SUB-LISTING SERVER THAT HAS LEARNED THE DOCUMENT
-// STORE (`acceptDocStoreItems: true`), because they are about this app's WIRING.
-// Today's real server validates `itemKey` against the LEGACY shared store only, so
-// a generator published after the port is refused `item_not_found` — pinned on its
-// own in "publish → store upsert, against today's server" below.
+// platform: publish → upsert, withdraw → NO store call (the server withdraws the
+// card), and the once-per-session backfill on open. The REAL adapter
+// (`platform/storeListings.ts`) and the real document-store adapters run; only
+// the server is fake — and it models civitai/civitai#6120, which this version requires:
+// items resolve from the document store, and an author's delete withdraws the card.
 //
 // 🔴 THE LOAD-BEARING PROPERTY: THE STORE IS BEST-EFFORT. A store failure of any
 // kind — 4xx, 5xx, 503 "feature tables missing", a dead network, a request that
@@ -56,7 +52,6 @@ function renderApp({ options = {}, wrapFetch }: Setup = {}): FakeCivitai {
     scopes: WITH_STORE,
     cannedPicks: { Checkpoint: CKPT_INFO },
     ...options,
-    subListings: { acceptDocStoreItems: true, ...options.subListings },
   };
   const fake = createFakeCivitai(opts);
   const deps: Partial<AppDeps> = { resolveResources: async () => [] };
@@ -208,32 +203,10 @@ describe('publish → store upsert', () => {
   });
 });
 
-describe('publish → store upsert, against today\'s server', () => {
-  /**
-   * 🔴 THE KNOWN GAP, PINNED. civitai's sub-listing upsert reads the item from the
-   * LEGACY shared store, and a generator published after the port exists only in
-   * the document store — so the card is refused `item_not_found`. The in-app
-   * publish must stand anyway, and the author is told the card was not added
-   * (in fixed copy). When the server learns the document store, this case flips
-   * and should be deleted with that change.
-   */
-  it('a new generator is refused item_not_found; the in-app publish stands and the author is told', async () => {
-    const fake = renderApp({ options: { subListings: { acceptDocStoreItems: false } } });
-    await buildGenerator('Too New', 'Desc.');
-    await userEvent.click(screen.getByTestId('publish'));
-    await expectInAppPublishStood(fake, 'Too New');
-    await waitFor(() => expect(storeCalls(fake, 'upsert').length).toBe(1));
-    expect(await screen.findByTestId('builder-store-notice')).toHaveTextContent(
-      'Couldn’t add this to the App Store. It’s still published here.',
-    );
-    expect(fake.subListings().size).toBe(0);
-  });
-});
-
-describe('withdraw → store withdraw', () => {
-  // 🔴 SINCE THE DOCUMENT-STORE PORT THE APP TAKES THE CARD DOWN ITSELF. The legacy
-  // shared withdraw did it server-side; a document-store delete touches no
-  // sub-listing, so without this call the card would outlive its generator.
+describe('withdraw → no store call', () => {
+  // 🔴 THE SERVER TAKES THE CARD DOWN (civitai/civitai#6120): an author's delete of a
+  // production shared document withdraws that author's card before it answers, so
+  // the app makes no store call of its own — one would only spend a store write.
   async function withdrawFirstPublished() {
     await userEvent.click(await screen.findByTestId('tab-mine'));
     const card = await screen.findByTestId('published-card');
@@ -241,7 +214,7 @@ describe('withdraw → store withdraw', () => {
     await userEvent.click(await screen.findByTestId('confirm-delete-published'));
   }
 
-  it('a successful in-app withdraw deletes the document AND withdraws the store card', async () => {
+  it('a successful in-app withdraw deletes the document, makes no store call, and the card is withdrawn server-side', async () => {
     const fake = renderApp({
       options: {
         shared: { seed: [{ key: 'kPub', authorUserId: ME, value: genValue('Mine') }] },
@@ -251,23 +224,9 @@ describe('withdraw → store withdraw', () => {
     await withdrawFirstPublished();
     await waitFor(async () => expect(await fake.rows()).toEqual([]));
     expect(fake.calls.filter((c) => isStore(c, 'DELETE', 'records/kPub'))).toHaveLength(1);
-    await waitFor(() => expect(storeCalls(fake, 'withdraw')).toHaveLength(1));
-    expect(storeCalls(fake, 'withdraw')[0]!.body).toStrictEqual({ itemKey: 'kPub' });
-    await waitFor(() => expect(fake.subListings().get('kPub')?.status).toBe('withdrawn'));
-    expect(screen.queryByTestId('browse-error')).toBeNull();
-    expect(screen.queryByTestId('published-card')).toBeNull();
-  });
-
-  it('a store withdraw that fails leaves the in-app withdraw standing', async () => {
-    const fake = renderApp({
-      options: {
-        shared: { seed: [{ key: 'kPub', authorUserId: ME, value: genValue('Mine') }] },
-        subListings: { seed: [{ itemKey: 'kPub', status: 'approved' }], fail: { withdraw: { status: 500 } } },
-      },
-    });
-    await withdrawFirstPublished();
-    await waitFor(() => expect(storeCalls(fake, 'withdraw')).toHaveLength(1));
-    await waitFor(async () => expect(await fake.rows()).toEqual([]));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(storeCalls(fake, 'withdraw')).toEqual([]);
+    expect(fake.subListings().get('kPub')?.status).toBe('withdrawn');
     expect(screen.queryByTestId('browse-error')).toBeNull();
     expect(screen.queryByTestId('published-card')).toBeNull();
   });
@@ -290,16 +249,6 @@ describe('withdraw → store withdraw', () => {
     await withdrawFirstPublished();
     await screen.findByTestId('browse-error');
     expect(storeCalls(fake, 'withdraw')).toEqual([]);
-  });
-
-  it('makes NO store call when the token lacks the store scope', async () => {
-    const fake = renderApp({
-      options: { scopes: MANIFEST_SCOPES, shared: { seed: [{ key: 'kPub', authorUserId: ME, value: genValue('Mine') }] } },
-    });
-    await withdrawFirstPublished();
-    await waitFor(async () => expect(await fake.rows()).toEqual([]));
-    await new Promise((r) => setTimeout(r, 20));
-    expect(storeCalls(fake)).toEqual([]);
   });
 });
 

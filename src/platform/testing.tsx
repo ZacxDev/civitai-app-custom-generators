@@ -208,17 +208,12 @@ export interface FakeCivitaiOptions {
    * observe (text safety, rate limits, moderation). A test that needs one of those
    * scripts it with `fail`.
    *
-   * 🔴 "THE ITEM EXISTING" MEANS IN THE LEGACY SHARED STORE, AS THE REAL SERVER
-   * CHECKS IT. civitai's `upsertSubListing` reads the item's author from the
-   * LEGACY shared store, so a generator published to the document store after
-   * go-live has no row there and is refused `item_not_found`. Seeded rows model
-   * copied generators, whose legacy row survives the copy, so they pass; rows the
-   * app creates do not. `acceptDocStoreItems: true` models a server that has
-   * learned the document store — use it only in a test about the store WIRING,
-   * and say so there.
+   * 🔴 "THE ITEM EXISTING" MEANS IN THE DOCUMENT STORE, as the server resolves it
+   * for an app whose manifest declares a shared collection (civitai/civitai#6120): the
+   * legacy store is never read. Likewise, an author's delete of a `records`
+   * document withdraws that author's card here, as that server change does.
    */
   subListings?: {
-    acceptDocStoreItems?: boolean;
     seed?: { itemKey: string; status: 'pending' | 'approved' | 'hidden' | 'withdrawn'; authorUserId?: number }[];
     fail?: Partial<
       Record<'upsert' | 'withdraw' | 'mine', { status: number; code?: string; html?: boolean }>
@@ -355,13 +350,6 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
       ? { now: () => (seeding ? (seedClock += 61_000) : realNow()) }
       : {}),
   });
-  /**
-   * Keys that exist in the LEGACY shared store, which is what the sub-listing
-   * routes validate against. Seeded rows model copied generators (their legacy row
-   * survives the copy); rows the app creates through the document store are not
-   * here. See {@link FakeCivitaiOptions.subListings}.
-   */
-  const legacyShared = new Map<string, number>();
   const seedAuthor = viewerId ?? 1;
   const seeded = (async () => {
     const asSeed = docStore.as({ viewer: docViewer(seedAuthor), scopes: blockManifest.scopes });
@@ -375,7 +363,6 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
         .as({ viewer: docViewer(author), scopes: blockManifest.scopes })
         .storage.collection<RecordDocument>(RECORDS_COLLECTION)
         .put(key, seed.value as RecordDocument);
-      legacyShared.set(key, author);
       for (const voter of seed.voters ?? []) {
         await docStore
           .as({ viewer: docViewer(voter), scopes: blockManifest.scopes })
@@ -423,12 +410,11 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
   };
 
   /**
-   * Who wrote a shared row, for the sub-listing author check — the LEGACY store's
-   * answer, or (with `acceptDocStoreItems`) the document store's.
+   * Who wrote a shared row, for the sub-listing author check: the viewer, someone
+   * else (-1), or nobody (`null`) — from the DOCUMENT STORE only.
    */
   const itemAuthor = async (key: string): Promise<number | null> => {
-    if (legacyShared.has(key)) return legacyShared.get(key)!;
-    if (!options.subListings?.acceptDocStoreItems || viewerId == null) return null;
+    if (viewerId == null) return null;
     const doc = await docStore
       .as({ viewer: docViewer(viewerId), scopes: blockManifest.scopes })
       .storage.collection(RECORDS_COLLECTION)
@@ -460,6 +446,15 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
         const reply = await docStore
           .as({ viewer: viewerId == null ? null : docViewer(viewerId, options.docStore?.untrustedReason), scopes: tokenScopes() })
           .http<unknown>(method, path, { query, ...(body !== undefined ? { body } : {}) });
+        // The author's delete of a shared document withdraws THEIR store card,
+        // server-side (civitai/civitai#6120).
+        const recordKey = /^blocks\/storage\/records\/([^/]+)$/.exec(path)?.[1];
+        if (method === 'DELETE' && recordKey && (reply as { deleted?: boolean } | null)?.deleted) {
+          const card = subListings.get(decodeURIComponent(recordKey));
+          if (card && card.authorUserId === viewerId && (card.status === 'pending' || card.status === 'approved')) {
+            card.status = 'withdrawn';
+          }
+        }
         return json(200, reply ?? {});
       } catch (err) {
         if (err instanceof ApiError) {
