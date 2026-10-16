@@ -19,8 +19,9 @@
 //                                             gated images, generation resources, buzz
 //   per-viewer KV→ `app.storage`
 //   post         → still the bridge; there is deliberately no REST route
-//   store items  → `app.site.*` over `/api/v1/blocks/sub-listings/*`
-//   own images   → the bridge (`OPEN_IMAGE_PICKER`); the host lists, the app gets the pick
+//   store items  → `app.subListings` (sdk 0.15+) over `/api/v1/blocks/sub-listings/*`
+//   own images   → the bridge (`OPEN_IMAGE_PICKER`, `publicOnly: true`); the host lists,
+//                  the app gets the pick
 
 export { getClient, getPlatformTransport, getSnapshot, __configurePlatform } from './client.js';
 export type { PlatformOverrides } from './client.js';

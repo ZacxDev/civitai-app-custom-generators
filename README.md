@@ -22,9 +22,9 @@ later phase.
 
 ## SDK
 
-Pinned to the published contract: `@civitai/app-sdk@^0.59.0` +
-`@civitai/sdk@^0.10.2` (+ `@civitai/theme@^0.5.2` and
-`@civitai/components@^0.9.3` for the design system; `@civitai/components-react`
+Pinned to the published contract: `@civitai/app-sdk@^0.71.0` +
+`@civitai/sdk@^0.15.0` (+ `@civitai/theme@^0.5.2` and
+`@civitai/components@^0.10.0` for the design system; `@civitai/components-react`
 stays in the tree as the elements package's peer but the app renders the
 documented markup contract — see "Component pack" below).
 
@@ -36,7 +36,8 @@ the names the components already used: `useBlockContext`, `useBlockToken`,
 `useBuzzWorkflow`, `useBuzzBalance`, `useBuzzPurchase`, `useSharedStorage`,
 `useAppStorage`, `useCivitaiNavigate`, `useRequestConsent` /
 `useRequestSignIn`. Host UI goes through `app.host.*`, data through
-`app.site.*` over `/api/v1/blocks/*`, per-viewer KV through `app.storage`.
+`app.site.*` over `/api/v1/blocks/*`, App Store items through
+`app.subListings`, per-viewer KV through `app.storage`.
 UI is composed on the `@civitai/components` markup contract
 (`data-civitai-ui` + `--civitai-*` design tokens) through the adapters in
 `src/ui/` — the app chrome (`theme.ts`) reads those same tokens (no
@@ -156,39 +157,59 @@ A published generator also goes to the civitai App Store as its own card, badged
 deeplink route above. Scope: `apps:store:items:write` (sensitive, so justified in
 the manifest; consent-exempt; never minted for dev, tunnel or review tokens).
 
-- **Publish / edit** → `POST blocks/sub-listings/upsert` with `itemKey` (the
-  shared key), `title` (the name, ≤80), `tagline` (the description, ≤140, left
-  out when empty), `subPath: g/<key>`, and `imageId` only when the author
-  chose a store image (below). No `contentRating` (unset inherits the app's
-  own). Every new item and every edit to an approved one — an image change
-  included — waits for a moderator; the Builder says so in one line under
-  "Published!".
+- **The client (0.14.0).** Every store call goes through `@civitai/sdk`'s
+  `app.subListings` (0.15+) in `src/platform/storeListings.ts`, which maps its
+  failures onto one `StoreListingError`: a refusal (`SubListingError`) keeps its
+  status and typed `code`, a codeless one (a route miss) keeps its status with no
+  code, and a reply the SDK cannot read becomes `malformed_response` (treated as
+  transient). `app.subListings.withdraw` is deliberately unused (see Withdraw).
+- **Publish / edit** → `app.subListings.upsert` (`POST
+  blocks/sub-listings/upsert`) with `itemKey` (the shared key), `title` (the
+  name, ≤80), `tagline` (the description, ≤140, left out when empty), `subPath:
+  g/<key>`, and `imageId` only when the author chose a store image (below). No
+  `contentRating` (unset inherits the app's own). 🔴 `upsert` **replaces** the
+  whole item — a left-out optional is cleared — so every upsert re-sends the
+  author's tagline and image. Every new item and every edit to an approved one —
+  an image change included — waits for a moderator; the Builder says so in one
+  line under "Published!".
 - **Optional store image (0.13.0).** The Builder's "App Store image" section
   opens the host's own image picker (`OPEN_IMAGE_PICKER`, `sources:
-  ['posted']`) over the viewer's library: the host lists only the viewer's own
-  images in a published post, scanned, unflagged and rated, and the app
-  receives only the one picked — no new scope, and the app never reads the
-  library. Only a `posted` pick with an `imageId` is accepted. The id is
+  ['posted'], publicOnly: true`) over the viewer's library: the host lists only
+  the viewer's own images in a published post, scanned, unflagged and rated —
+  and, under `publicOnly` (civitai/civitai#6134, 0.14.0), only from a post that
+  is not Private — and the app receives only the one picked — no new scope, and
+  the app never reads the library. `publicOnly` is sent as the literal boolean
+  (the host refuses any other value); a host older than #6134 ignores it and
+  offers every posted image, as before. Only a `posted` pick with an `imageId` is accepted. The id is
   published on the generator's `data` as `storeImageId` (the picker's url stays
   in the author's draft, for the preview) so every upsert — republish and
   backfill alike — carries it: the server stores `imageId ?? null`, so an
   upsert without it clears the card image. Nothing chosen (or Remove) = no
   `imageId` key, and the card shows the app's cover. The generator's header
   image is never sent (a cosmetic upload, not an image in a published post). A
-  fork drops the source author's store image. The picker's eligibility set is
-  not provably the store's (the store re-checks with an anonymous-visibility
-  read), so a refusal — 400 `image_not_public`, 403 `image_not_yours` — is told
+  fork drops the source author's store image. Even with `publicOnly` the
+  picker's eligibility set is not provably the store's (the store re-checks with
+  an anonymous-visibility read; an older host ignores `publicOnly`; a post can
+  turn Private after the pick), so a refusal — 400 `image_not_public`, 403
+  `image_not_yours` — is told
   to the author in the store line, and the in-app publish stands. The section
   is shown only when the token carries the store scope.
 - **Withdraw** → no store call. civitai's shared-storage withdraw takes the
   author's card down itself, server-side, before it answers.
 - **Backfill** → off the "Published by me" read, the app calls
-  `GET blocks/sub-listings/mine` and upserts the viewer's published generators
-  that have no card yet: at most 10 per run, at most one run per 6 hours across
-  page loads (a ledger under `store-backfill:v1` in the viewer's app storage),
-  and an item the store refused is not retried by the backfill. The server counts
-  every upsert, refused or not, against 30 writes/hour and 100/day. A viewer with
-  no published generators never reaches the store routes.
+  `app.subListings.mine()` (`GET blocks/sub-listings/mine`) and upserts the
+  viewer's published generators that have no card yet — each with its published
+  `storeImageId`, so the backfill cannot clear a card image: at most 10 per run,
+  at most one run per 6 hours across page loads (a ledger under
+  `store-backfill:v1` in the viewer's app storage), and an item the store refused
+  is not retried by the backfill. The server counts every upsert, refused or not,
+  against 30 writes/hour and 100/day. A viewer with no published generators
+  never reaches the store routes. 🔴 A `mine` reply with no `items` array, or
+  with even ONE row the SDK cannot read, rejects the whole call (the SDK's
+  contract, kept on purpose since 0.14.0): it is classified transient and the
+  backfill stops before any upsert. Skipping the bad row instead — what the app
+  did before — reads that row's key as "not listed" and spends an author's
+  store write re-upserting a card that already exists.
 - **Best-effort, always.** Store calls run after the shared-storage write has
   succeeded and are not awaited, so no store failure (503 while the feature's
   tables are missing, 403 when the app is not enabled, 429, 5xx, a dead network)
