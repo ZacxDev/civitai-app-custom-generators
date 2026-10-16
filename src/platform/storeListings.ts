@@ -15,8 +15,8 @@
 //
 // 🔴 THE UPSERT BODY IS `.strict()` SERVER-SIDE. Only `itemKey, title, tagline?,
 // imageId?, subPath, contentRating?` are accepted; an unknown key is a 400 for
-// every author. So the body is built key by key below and an absent tagline is
-// left OUT, not sent as `undefined` or `''`.
+// every author. So the body is built key by key below and an absent tagline or
+// imageId is left OUT, not sent as `undefined`, `''` or `null`.
 //
 // Error contract (civitai `subListingErrorResponse`): a non-2xx carries
 // `{ error, code }`. The `code` is what this app branches on; `error` is a
@@ -40,6 +40,13 @@ export interface StoreListingInput {
   tagline?: string;
   /** Under the app's run route: `g/<key>`. */
   subPath: string;
+  /**
+   * The card image: an `Image` the viewer posted, public and reviewed (else the
+   * server answers 400 `image_not_public` / 403 `image_not_yours`). Omitted from
+   * the wire when absent — and the server reads an absent `imageId` as "no
+   * image", clearing any the card had.
+   */
+  imageId?: number;
 }
 
 export interface StoreListingResult {
@@ -108,12 +115,13 @@ export function createStoreListings(): StoreListings {
     upsert(input) {
       return guarded(async () => {
         const app = await getClient();
-        const body: Record<string, string> = {
+        const body: Record<string, string | number> = {
           itemKey: input.itemKey,
           title: input.title,
           subPath: input.subPath,
         };
         if (input.tagline) body.tagline = input.tagline;
+        if (input.imageId !== undefined) body.imageId = input.imageId;
         const res = await app.site.post<{ id?: unknown; status?: unknown; pendingEdit?: unknown }>(
           'blocks/sub-listings/upsert',
           body,

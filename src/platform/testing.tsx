@@ -32,6 +32,7 @@ import type { BlockTransport } from '@civitai/sdk';
 import type {
   BlockCreatePostResult,
   BlockGatedImage,
+  BlockPickedImageInfo,
   BlockResourceInfo,
   BlockResourcePickerType,
   BlockGenerationSourceImageInfo,
@@ -103,6 +104,17 @@ export interface FakeCivitaiOptions {
   shared?: { seed?: MockSharedSeed[] };
   cannedPicks?: Partial<Record<BlockResourcePickerType, BlockResourceInfo | null>>;
   cannedImageUpload?: { imageId: number; url: string } | null;
+  /**
+   * The viewer's library behind `OPEN_IMAGE_PICKER`. Like the host, the fake
+   * keeps only the images matching the request's `sources` and answers with the
+   * first one, or with no `selected` key (`{}`, a dismissal) when none match or
+   * this is unset. 🔴 It does NOT model the host's eligibility rules (published post,
+   * scanned, rated) — a test that needs an ineligible image to be offered says
+   * so by putting one here.
+   */
+  cannedImagePicks?: BlockPickedImageInfo[];
+  /** Refuse `OPEN_IMAGE_PICKER` with this host error instead. */
+  imagePickerError?: string;
   cannedGenerationSourceUpload?: BlockGenerationSourceImageInfo | null;
   /** Bare strings are the bridge's spelling; the object form carries a reason. */
   cannedImageScan?:
@@ -179,6 +191,13 @@ export interface FakeCivitaiOptions {
    */
   subListings?: {
     seed?: { itemKey: string; status: 'pending' | 'approved' | 'hidden' | 'withdrawn'; authorUserId?: number }[];
+    /**
+     * The images an anonymous viewer may see, with their uploader. An upsert's
+     * `imageId` outside this list is the server's 400 `image_not_public`; one
+     * uploaded by someone else is 403 `image_not_yours` (the server checks in
+     * that order).
+     */
+    publicImages?: { imageId: number; userId: number }[];
     fail?: Partial<
       Record<'upsert' | 'withdraw' | 'mine', { status: number; code?: string; html?: boolean }>
     >;
@@ -200,7 +219,10 @@ export interface FakeCivitai {
   /** Every REST call the app made, in order. */
   calls: RecordedCall[];
   /** The fake server's App Store sub-listing rows, keyed by item key. */
-  subListings: () => Map<string, { status: string; title: string; subPath: string; tagline: string | null }>;
+  subListings: () => Map<
+    string,
+    { status: string; title: string; subPath: string; tagline: string | null; imageId: number | null }
+  >;
 }
 
 const DEFAULT_SCOPES = [
@@ -289,7 +311,14 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
   const storage = new Map<string, unknown>(Object.entries(options.storage?.seed ?? {}));
   const subListings = new Map<
     string,
-    { status: string; title: string; subPath: string; tagline: string | null; authorUserId: number }
+    {
+      status: string;
+      title: string;
+      subPath: string;
+      tagline: string | null;
+      imageId: number | null;
+      authorUserId: number;
+    }
   >();
   for (const s of options.subListings?.seed ?? []) {
     subListings.set(s.itemKey, {
@@ -297,6 +326,7 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
       title: s.itemKey,
       subPath: `g/${s.itemKey}`,
       tagline: null,
+      imageId: null,
       authorUserId: s.authorUserId ?? viewerId ?? 1,
     });
   }
@@ -619,6 +649,8 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
           b.title.length < 1 ||
           b.title.length > 80 ||
           (b.tagline != null && (typeof b.tagline !== 'string' || b.tagline.length > 140)) ||
+          (b.imageId != null &&
+            (typeof b.imageId !== 'number' || !Number.isInteger(b.imageId) || b.imageId <= 0)) ||
           typeof b.subPath !== 'string' ||
           !/^[A-Za-z0-9_-]{1,64}(\/[A-Za-z0-9_-]{1,64}){0,3}$/.test(b.subPath);
         if (bad) return json(400, { error: 'Invalid request body', code: 'invalid_body' });
@@ -626,6 +658,18 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
         if (!item) return json(404, { error: 'Item not found', code: 'item_not_found' });
         if (item.authorUserId !== viewerId) {
           return json(403, { error: 'Only the item author can publish it', code: 'not_your_item' });
+        }
+        if (b.imageId != null) {
+          const img = (options.subListings?.publicImages ?? []).find((i) => i.imageId === b.imageId);
+          if (!img) {
+            return json(400, {
+              error: 'The image must be public: in a published post and reviewed',
+              code: 'image_not_public',
+            });
+          }
+          if (img.userId !== viewerId) {
+            return json(403, { error: 'The image must be one you uploaded', code: 'image_not_yours' });
+          }
         }
         const existing = subListings.get(b.itemKey as string);
         if (existing?.status === 'hidden') {
@@ -637,6 +681,8 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
           title: b.title as string,
           subPath: b.subPath as string,
           tagline: (b.tagline as string | undefined) ?? null,
+          // The server stores `body.imageId ?? null`: an absent key clears it.
+          imageId: (b.imageId as number | undefined) ?? null,
           authorUserId: viewerId,
         });
         return json(200, {
@@ -715,6 +761,15 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
     return { selected: { status: 'pending', imageId: up.imageId, url: up.url } };
   });
 
+  fake.handle('OPEN_IMAGE_PICKER', (params) => {
+    if (options.imagePickerError !== undefined) throw new Error(options.imagePickerError);
+    const sources = (params as { sources?: string[] })?.sources ?? ['posted', 'generated'];
+    const pick = (options.cannedImagePicks ?? []).find((p) => sources.includes(p.source));
+    // The real host answers a dismissal with no `selected` key at all
+    // (civitai `buildImagePickerReply`), never `selected: null`.
+    return pick ? { selected: pick } : {};
+  });
+
   fake.handle('PUBLISH_GENERATION_OUTPUTS', (params) => {
     if (options.publishError) {
       throw new Error(typeof options.publishError === 'string' ? options.publishError : 'publish failed');
@@ -778,9 +833,9 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
     calls,
     subListings: () =>
       new Map(
-        [...subListings.entries()].map(([k, { status, title, subPath, tagline }]) => [
+        [...subListings.entries()].map(([k, { status, title, subPath, tagline, imageId }]) => [
           k,
-          { status, title, subPath, tagline },
+          { status, title, subPath, tagline, imageId },
         ]),
       ),
   };

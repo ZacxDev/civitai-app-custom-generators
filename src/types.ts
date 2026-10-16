@@ -109,6 +109,24 @@ export interface GeneratorConfig {
    * when unset.
    */
   promptPlaceholder?: string;
+  /**
+   * The image the author chose for this generator's App Store card — one of
+   * their OWN images in a published post, picked through the host's image
+   * picker (`OPEN_IMAGE_PICKER`, `sources: ['posted']`). Absent = the card
+   * shows the parent app's cover.
+   *
+   * Only `imageId` is published (as `data.storeImageId`) and sent to the store.
+   * `url` is the picker's rendition, kept in the author's own draft for the
+   * Builder preview and never published.
+   */
+  storeImage?: StoreImageRef;
+}
+
+/** An App Store card image: an `Image` row the author posted. */
+export interface StoreImageRef {
+  imageId: number;
+  /** The picker's rendition url — author-side preview only. */
+  url?: string;
 }
 
 /** The opaque structured payload we stash in shared-storage `data`. */
@@ -128,6 +146,8 @@ export interface GeneratorData {
    */
   backgroundImageRef?: HeaderImageRef;
   promptPlaceholder?: string;
+  /** The App Store card image id; see {@link GeneratorConfig.storeImage}. */
+  storeImageId?: number;
 }
 
 /** One entry in the runner's output queue. */

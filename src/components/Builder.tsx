@@ -5,12 +5,13 @@
 // the actual Runner layout so the author sees what runners will get.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { BlockGenerationSourceImageInfo, BlockPendingImageInfo, BlockResourceInfo, BlockResourcePickerType, BlockWorkflowSnapshot } from '@civitai/app-sdk/blocks';
+import type { BlockGenerationSourceImageInfo, BlockPendingImageInfo, BlockPickedImageInfo, BlockResourceInfo, BlockResourcePickerType, BlockWorkflowSnapshot } from '@civitai/app-sdk/blocks';
 
 import { Alert, Badge, Button, Card, Group, Loader, Stack, TextInput, Textarea } from '../ui/index.js';
 
 import type { BackgroundScanResult, GeneratorConfig, HeaderImageRef } from '../types.js';
 import { moveButton, newButton, updateButton, validateGenerator } from '../lib/generator.js';
+import { storeImageFromPick } from '../lib/storeListing.js';
 import type { Palette } from '../theme.js';
 import { useIsMobile } from '../useMediaQuery.js';
 import { ButtonEditor } from './ButtonEditor.js';
@@ -37,6 +38,13 @@ export interface BuilderProps {
    * resolved (the store call is not awaited), and never blocks or replaces it.
    */
   storeNotice?: string | null;
+  /**
+   * Open the host picker over the viewer's own POSTED images, for the optional
+   * App Store card image. Absent = no store card can be made in this session
+   * (no store scope), so the section is not shown; a previously chosen image
+   * stays on the config either way.
+   */
+  pickStoreImage?: () => Promise<BlockPickedImageInfo | null>;
   onBack: () => void;
 }
 
@@ -78,9 +86,10 @@ const previewSnapshot = async (): Promise<BlockWorkflowSnapshot> => ({ workflowI
 const previewNoUpload = async (): Promise<BlockGenerationSourceImageInfo | null> => null;
 const noop = () => {};
 
-export function Builder({ initial, c, pickResource, uploadImage, scanBackground, scanTimeoutMs = 30_000, onSaveDraft, onPublish, storeNotice = null, onBack }: BuilderProps) {
+export function Builder({ initial, c, pickResource, uploadImage, scanBackground, scanTimeoutMs = 30_000, onSaveDraft, onPublish, storeNotice = null, pickStoreImage, onBack }: BuilderProps) {
   const [config, setConfig] = useState<GeneratorConfig>(initial);
-  const [busy, setBusy] = useState<null | 'save' | 'publish' | 'bg'>(null);
+  const [busy, setBusy] = useState<null | 'save' | 'publish' | 'bg' | 'storeImage'>(null);
+  const [storeImageError, setStoreImageError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [scan, setScan] = useState<BgScanState>({ phase: 'idle' });
@@ -153,6 +162,34 @@ export function Builder({ initial, c, pickResource, uploadImage, scanBackground,
     scanSeq.current += 1; // cancel any in-flight scan
     setScan({ phase: 'idle' });
     setConfig((c0) => ({ ...c0, headerImageRef: undefined }));
+  }
+
+  async function chooseStoreImage() {
+    if (!pickStoreImage) return;
+    setBusy('storeImage');
+    setStoreImageError(null);
+    let pick: BlockPickedImageInfo | null;
+    try {
+      pick = await pickStoreImage();
+    } catch {
+      // The host's refusal text is not this app's copy; say what happened instead.
+      if (mountedRef.current) setStoreImageError('Couldn’t open your images just now. Try again.');
+      return;
+    } finally {
+      if (mountedRef.current) setBusy(null);
+    }
+    if (!mountedRef.current || !pick) return; // dismissed: keep whatever was chosen
+    const ref = storeImageFromPick(pick);
+    if (!ref) {
+      setStoreImageError('Pick an image from one of your published posts.');
+      return;
+    }
+    setConfig((c0) => ({ ...c0, storeImage: ref }));
+  }
+
+  function removeStoreImage() {
+    setStoreImageError(null);
+    setConfig((c0) => ({ ...c0, storeImage: undefined }));
   }
 
   async function doSave() {
@@ -296,6 +333,54 @@ export function Builder({ initial, c, pickResource, uploadImage, scanBackground,
           />
         )}
       </Card>
+
+      {/* optional App Store card image — one of the author's own posted images */}
+      {pickStoreImage && (
+        <Card withBorder padding="md" data-testid="store-image-card">
+          <Group justify="space-between">
+            <div style={{ fontSize: 13 }}>
+              <div style={{ fontWeight: 600 }}>App Store image (optional)</div>
+              <div style={{ color: c.muted }}>
+                Pick one of your own images from a published post for this generator’s App Store card. Leave it empty and the card uses the Custom Generators cover. A change waits for a moderator like any other edit.
+              </div>
+            </div>
+            <Group gap={8}>
+              {config.storeImage && (
+                <Button variant="subtle" size="sm" color="error" data-testid="remove-store-image" onClick={removeStoreImage}>
+                  Remove
+                </Button>
+              )}
+              <Button
+                variant="light"
+                size="sm"
+                data-testid="pick-store-image"
+                loading={busy === 'storeImage'}
+                onClick={chooseStoreImage}
+              >
+                {config.storeImage ? 'Change' : 'Choose image'}
+              </Button>
+            </Group>
+          </Group>
+          {storeImageError && (
+            <Alert color="warning" data-testid="store-image-error" style={{ marginTop: 10 }}>
+              {storeImageError}
+            </Alert>
+          )}
+          {config.storeImage &&
+            (config.storeImage.url ? (
+              <SafeImage
+                data-testid="store-image-preview"
+                src={config.storeImage.url}
+                alt="App Store card image"
+                style={{ marginTop: 10, width: 160, aspectRatio: '1 / 1', objectFit: 'cover', borderRadius: 8 }}
+              />
+            ) : (
+              <div data-testid="store-image-chosen" style={{ marginTop: 10, fontSize: 13, color: c.muted }}>
+                An image from your posts is chosen for the App Store card.
+              </div>
+            ))}
+        </Card>
+      )}
 
       {/* buttons */}
       <Stack gap={12}>
