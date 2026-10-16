@@ -202,12 +202,12 @@ export function fakeShared(
    */
   const listCalls: Array<Record<string, unknown>> = [];
   const appended: SharedAppendValue[] = [];
-  const updated: Array<{ key: string; value: SharedAppendValue }> = [];
+  const updated: Array<{ key: string; value: SharedAppendValue; opts?: { ifVersion?: number } }> = [];
   /** Keys passed to `withdraw`, in call order — for asserting the delete wiring. */
   const withdrawn: string[] = [];
   /** The injectable `updateSharedGenerator` seam — mutates the SAME row in place. */
-  const update = async (key: string, value: SharedAppendValue): Promise<void> => {
-    updated.push({ key, value });
+  const update = async (key: string, value: SharedAppendValue, opts?: { ifVersion?: number }): Promise<void> => {
+    updated.push({ key, value, ...(opts ? { opts } : {}) });
     const idx = items.findIndex((i) => i.key === key);
     if (idx >= 0) items[idx] = { ...items[idx], value, updatedAt: new Date() };
   };

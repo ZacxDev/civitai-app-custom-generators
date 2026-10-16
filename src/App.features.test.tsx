@@ -278,6 +278,39 @@ describe('App — card covers (owner-set header, else first published output)', 
     expect(requestGrants).not.toHaveBeenCalled();
   });
 
+  /**
+   * 🔴 A NEWER EDIT SURVIVES THE AUTO COVER. The board was loaded (cached row
+   * titled "Mine"); the generator is then edited elsewhere ("Edited elsewhere",
+   * version 2). The cover write must be built from a FRESH read — the edited
+   * title, body and data, with only the cover added — and sent at that read's
+   * version, not built from this tab's stale copy.
+   */
+  it('the auto cover is built from a fresh read: a newer edit survives, with the cover added', async () => {
+    const seed = { ...publishedSeed('shared:mine', 'Mine', VIEWER_ID), version: 1 };
+    const { shared } = setup([seed], { getImages: gated, keepOutputs: async () => [558] });
+    await userEvent.click(await within(await screen.findByTestId('published-card')).findByTestId('published-open'));
+    await screen.findByTestId('runner');
+    // The edit made elsewhere, after this tab cached the row.
+    const edited = {
+      title: 'Edited elsewhere',
+      body: 'a newer body',
+      data: { ...(seed.value.data as Record<string, unknown>), v: 1, marker: 'newer' },
+    };
+    shared.items[0] = { ...shared.items[0]!, value: edited, version: 2 };
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a lighthouse');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+    await screen.findByTestId('queue-results');
+    await userEvent.click(screen.getByTestId('result-keep'));
+    await screen.findByTestId('result-kept');
+    await waitFor(() => expect(shared.updated.length).toBe(1));
+    expect(shared.updated[0]).toEqual({
+      key: 'shared:mine',
+      value: { ...edited, data: { ...edited.data, coverImageId: 558 } },
+      opts: { ifVersion: 2 },
+    });
+  });
+
   it("a visitor's keep never writes a cover onto someone else's generator", async () => {
     const { shared } = setup([publishedSeed('shared:theirs', 'Theirs', 7)], {
       getImages: gated,

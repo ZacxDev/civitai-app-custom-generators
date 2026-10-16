@@ -195,7 +195,7 @@ export interface FakeCivitaiOptions {
   /** Observe every outbound bridge message (requests AND notifications). */
   onOutbound?: (message: { type: string; payload: unknown }) => void;
   /**
-   * The App Store sub-listing routes (`blocks/sub-listings/{upsert,withdraw,mine}`).
+   * The App Store sub-listing routes this app calls (`blocks/sub-listings/{upsert,mine}`).
    *
    * `seed` rows belong to the viewer unless `authorUserId` says otherwise. `fail`
    * answers one route with a fixed status instead: a JSON `{ error, code }` body
@@ -216,7 +216,7 @@ export interface FakeCivitaiOptions {
   subListings?: {
     seed?: { itemKey: string; status: 'pending' | 'approved' | 'hidden' | 'withdrawn'; authorUserId?: number }[];
     fail?: Partial<
-      Record<'upsert' | 'withdraw' | 'mine', { status: number; code?: string; html?: boolean }>
+      Record<'upsert' | 'mine', { status: number; code?: string; html?: boolean }>
     >;
   };
 }
@@ -575,7 +575,7 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
 
     // ---- App Store sub-listings (civitai `src/pages/api/v1/blocks/sub-listings/*`)
     if (path.startsWith('blocks/sub-listings/')) {
-      const op = path.slice('blocks/sub-listings/'.length) as 'upsert' | 'withdraw' | 'mine';
+      const op = path.slice('blocks/sub-listings/'.length) as 'upsert' | 'mine';
       const fail = options.subListings?.fail?.[op];
       if (fail) {
         if (fail.html) return notFound(path);
@@ -597,17 +597,6 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
             updatedAt: '2026-01-02T00:00:00.000Z',
           }));
         return json(200, { items });
-      }
-      if (op === 'withdraw' && method === 'POST') {
-        const keys = Object.keys(body ?? {});
-        if (keys.length !== 1 || typeof body?.itemKey !== 'string') {
-          return json(400, { error: 'Invalid request body', code: 'invalid_body' });
-        }
-        const r = subListings.get(body.itemKey);
-        const withdrawn =
-          !!r && r.authorUserId === viewerId && (r.status === 'pending' || r.status === 'approved');
-        if (withdrawn) r!.status = 'withdrawn';
-        return json(200, { ok: true, withdrawn });
       }
       if (op === 'upsert' && method === 'POST') {
         const allowed = new Set(['itemKey', 'title', 'tagline', 'imageId', 'subPath', 'contentRating']);

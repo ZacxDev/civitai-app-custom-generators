@@ -79,6 +79,7 @@ export function toSharedListItem(doc: StorageDocument<RecordDocument>, viewerId:
     viewerVoted: doc.viewer?.marks.includes(VOTE_MARK) ?? false,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
+    version: doc.version,
   };
 }
 
@@ -178,9 +179,15 @@ export function createSharedStorage(options: SharedStorageOptions = {}): SharedS
       }
     },
 
-    async update(key, value) {
+    async update(key, value, opts = {}) {
       try {
         const coll = await records();
+        if (opts.ifVersion !== undefined) {
+          // The caller read the row and built `value` from THAT read: write only
+          // if nothing moved since (a missing row is refused too, never created).
+          await coll.put(key, value as RecordDocument, { ifVersion: opts.ifVersion });
+          return;
+        }
         // 🔴 `put` CREATES A MISSING KEY, and the legacy `update` answered 404 for
         // one. Reading first and writing AT that version keeps an edit from
         // resurrecting a row its author withdrew in another tab: a row gone in

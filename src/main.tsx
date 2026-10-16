@@ -42,8 +42,9 @@ injectMotionStyles();
 // `pnpm run dev:harness` sets VITE_DEV_HARNESS=true to mount `<Harness>`
 // (`src/Harness.tsx`), which wraps this app's OWN fake platform from
 // `src/platform/testing.tsx`: a fake `fetch` answering the block REST surface
-// (`blocks/shared-storage/*`, `blocks/app-storage/*`, `blocks/gated-images`,
-// `blocks/generation-resources`, `blocks/buzz`, `blocks/workflows/*`) plus a
+// (`blocks/storage/*` — the document store, via `@civitai/sdk/testing`'s
+// `createFakeStorage` — `blocks/gated-images`, `blocks/generation-resources`,
+// `blocks/buzz`, `blocks/workflows/*`, `blocks/sub-listings/{upsert,mine}`) plus a
 // scripted transport for the host-UI ops that are still messages (token,
 // resource picker, image upload, publish, Buzz purchase, create-post). No
 // published mock host is involved — `@civitai/sdk/testing` ships `createFakeTransport` and

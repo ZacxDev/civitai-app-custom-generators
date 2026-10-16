@@ -42,6 +42,12 @@ export interface SharedListItem {
    * for an anonymous viewer.
    */
   viewerVoted: boolean;
+  /**
+   * The document's `version` when the row came from the store (absent on rows
+   * built by hand). Pass it back as `update`'s `ifVersion` to write only if the
+   * row has not changed since THIS read.
+   */
+  version?: number;
 }
 
 export interface SharedListResult {
@@ -68,8 +74,12 @@ export interface SharedStorage {
   report(key: string): Promise<void>;
   /** Publish a new row under a server-minted key. Refusals reject as `SharedWriteRefusal`. */
   append(value: SharedAppendValue): Promise<{ key: string }>;
-  /** Replace the viewer's own existing row. Refusals reject as `SharedWriteRefusal`. */
-  update(key: string, value: SharedAppendValue): Promise<void>;
+  /**
+   * Replace the viewer's own existing row. Refusals reject as `SharedWriteRefusal`.
+   * With `ifVersion`, the write lands only if the row is still at that version
+   * (the caller read it); without, the adapter reads the current version itself.
+   */
+  update(key: string, value: SharedAppendValue, opts?: { ifVersion?: number }): Promise<void>;
   /** Set the viewer's `vote` mark; resolves the new tally. */
   vote(key: string): Promise<number>;
   /** Clear the viewer's `vote` mark; resolves the new tally. */

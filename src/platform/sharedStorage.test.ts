@@ -149,6 +149,54 @@ describe('records: create / update / withdraw under write: "own"', () => {
     expect(await as(BOB).get(key)).toBeNull();
   });
 
+  /**
+   * 🔴 THE RACE THE `ifVersion` GUARDS. The row is withdrawn (in another tab)
+   * AFTER the edit's read and BEFORE its write. The contract fake refuses a
+   * conditional write to a missing document (`ifVersion` ≠ 0) with
+   * `version_conflict`, as the server does; an unconditional `put` would create
+   * the row again.
+   */
+  it('a row withdrawn between the edit’s read and its write is refused version_conflict, not re-created', async () => {
+    const fake = createFakeStorage({ manifest, viewer: ALICE });
+    const owner = fake.as({ viewer: ALICE }).storage;
+    const { key } = await createSharedStorage({ docs: () => owner, viewerId: () => 99 }).append(LEGACY);
+    const racing = {
+      info: owner.info.bind(owner),
+      collection: (name: string) => {
+        const inner = owner.collection<RecordDocument>(name);
+        return {
+          ...inner,
+          getMany: inner.getMany.bind(inner),
+          put: inner.put.bind(inner),
+          create: inner.create.bind(inner),
+          delete: inner.delete.bind(inner),
+          list: inner.list.bind(inner),
+          increment: inner.increment.bind(inner),
+          mark: inner.mark.bind(inner),
+          unmark: inner.unmark.bind(inner),
+          async get(k: string) {
+            const doc = await inner.get(k);
+            await owner.collection(name).delete(k); // the other tab's withdraw lands now
+            return doc;
+          },
+        };
+      },
+    } as unknown as DocumentStorage;
+    const shared = createSharedStorage({ docs: () => racing, viewerId: () => 99 });
+    expect(await codeOf(shared.update(key, { ...LEGACY, title: 'Renamed' }))).toBe('version_conflict');
+    expect(await owner.collection(RECORDS_COLLECTION).get(key)).toBeNull();
+  });
+
+  it('update with a caller-supplied ifVersion writes only at that version', async () => {
+    const { shared } = setup();
+    const { key } = await shared.append(LEGACY);
+    const read = await shared.get(key);
+    expect(read?.version).toBe(1);
+    await shared.update(key, { ...LEGACY, title: 'Edited elsewhere' });
+    expect(await codeOf(shared.update(key, LEGACY, { ifVersion: read!.version }))).toBe('version_conflict');
+    expect((await shared.get(key))?.value.title).toBe('Edited elsewhere');
+  });
+
   it('update of someone else’s row is refused not_author, in viewer copy', async () => {
     const { shared, as } = setup();
     await as(BOB).put('01JBOB0000000000000000000000', LEGACY as RecordDocument);

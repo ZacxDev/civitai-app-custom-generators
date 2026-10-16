@@ -165,7 +165,7 @@ export interface AppDeps {
    * In-place UPDATE of an already-published shared generator (same key, no new
    * row) — `shared.update` by default; a separate seam so tests can observe it.
    */
-  updateSharedGenerator: (key: string, value: SharedAppendValue) => Promise<void>;
+  updateSharedGenerator: (key: string, value: SharedAppendValue, opts?: { ifVersion?: number }) => Promise<void>;
   /**
    * The App Store sub-listing routes (`platform/storeListings.ts`). Every call is
    * BEST-EFFORT and fires only after the shared-board write it mirrors has
@@ -709,20 +709,30 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       // is a BACKGROUND side effect of a keep — never a reason to open a consent
       // dialog. Without the scope it is skipped, not attempted and refused.
       if (!hasPublishScope(tokenScopesRef.current)) return;
-      const row = sharedRef.current.find((s) => s.key === key);
+      // The cached row is only a cheap pre-check (no read for someone else's or
+      // an already-covered generator)…
+      const cached = sharedRef.current.find((s) => s.key === key);
+      if (!cached || cached.authorUserId !== viewer.id) return;
+      if (headerImageRefOf(cached.value) || coverImageIdOf(cached.value) !== undefined) return;
+      // 🔴 …the WRITE is built from a FRESH read and sent at THAT read's version.
+      // Building it from the cached row would write this tab's old title, body
+      // and data over a newer edit made elsewhere. Only the cover field changes,
+      // and a row edited again in between makes the write refuse
+      // (`version_conflict`) rather than overwrite.
+      const row = await depsRef.current.shared.get(key);
       if (!row || row.authorUserId !== viewer.id) return;
       if (headerImageRefOf(row.value) || coverImageIdOf(row.value) !== undefined) return;
-      const cfg = parsePublishedGenerator(row.value);
-      if (!cfg) return;
-      const next: GeneratorConfig = { ...cfg, coverImageId: firstImageId };
-      await depsRef.current.updateSharedGenerator(key, buildPublishPayload(next));
-      setShared((prev) =>
-        prev.map((s) =>
-          s.key === key
-            ? { ...s, value: { ...s.value, data: { ...(s.value.data as Record<string, unknown>), coverImageId: firstImageId } } }
-            : s,
-        ),
+      if (!parsePublishedGenerator(row.value)) return;
+      const value: SharedAppendValue = {
+        ...row.value,
+        data: { ...(row.value.data as Record<string, unknown>), coverImageId: firstImageId },
+      };
+      await depsRef.current.updateSharedGenerator(
+        key,
+        value,
+        row.version !== undefined ? { ifVersion: row.version } : undefined,
       );
+      setShared((prev) => prev.map((s) => (s.key === key ? { ...s, value } : s)));
     } catch {
       /* best-effort — the keep itself already succeeded */
     }
