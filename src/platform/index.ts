@@ -15,9 +15,10 @@
 //                                             publish, purchase, navigate, resize
 //   consent      → `app.requestGrants`
 //   viewer/token → the transport snapshot
-//   data         → `app.site.*` over `/api/v1/blocks/*`  shared storage, workflows,
+//   data         → `app.site.*` over `/api/v1/blocks/*`  workflows,
 //                                             gated images, generation resources, buzz
-//   per-viewer KV→ `app.storage`
+//   storage      → `app.storage.collection(…)` — the document store's private
+//                  `kv` and shared `records` collections (`./docStore.ts`)
 //   post         → still the bridge; there is deliberately no REST route
 //   store items  → `app.site.*` over `/api/v1/blocks/sub-listings/*`
 
@@ -57,7 +58,7 @@ export { createWorkflowClient, useBuzzWorkflow, WorkflowEstimateError, HOST_SYNT
 export type { UseBuzzWorkflow, WorkflowClient, WorkflowEstimateErrorCode } from './workflows.js';
 
 export { createSharedStorage } from './sharedStorage.js';
-export { useSharedStorage } from './useSharedStorage.js';
+export { useRecordsStorage } from './useRecordsStorage.js';
 export type {
   SharedAppendValue,
   SharedListItem,
@@ -75,7 +76,7 @@ export { useGenerationResources } from './useGenerationResources.js';
 export { fetchBuzzBalance } from './buzz.js';
 export type { BuzzBalance } from './buzz.js';
 
-export { useAppStorage } from './appStorage.js';
+export { useKvStorage } from './appStorage.js';
 
 export {
   createPost,

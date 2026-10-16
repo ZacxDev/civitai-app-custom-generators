@@ -398,6 +398,21 @@ describe('reconcileStoreListings', () => {
     expect(ledger.saved?.refused).toEqual([]);
   });
 
+  /**
+   * `item_not_found` is a property of the item: the server resolves `itemKey` from
+   * the document store (civitai/civitai#6120), so a miss means the generator is gone,
+   * and a refusal a retry will not change is remembered like any other.
+   */
+  it('remembers an item_not_found refusal, so a later run does not spend a write on it', async () => {
+    const { store, upserts } = fakeStore({
+      upsertError: (key) => (key === 'k2' ? new StoreListingError(404, 'item_not_found') : null),
+    });
+    const ledger = memoryLedger({ v: 1, lastRunAt: 0, refused: [] });
+    await reconcileStoreListings({ viewerId: ME, published: [row('k1', 'One', ME), row('k2', 'Two', ME)], store, ledger, now: NOW });
+    expect(upserts.map((u) => u.itemKey)).toEqual(['k1', 'k2']);
+    expect(ledger.saved?.refused).toEqual(['k2']);
+  });
+
   it(`sends at most RECONCILE_MAX_UPSERTS (${RECONCILE_MAX_UPSERTS}) per run, well inside the 30/hour limit`, async () => {
     const { store, upserts } = fakeStore();
     const many = Array.from({ length: 25 }, (_, i) => row(`k${i}`, `G${i}`, ME));

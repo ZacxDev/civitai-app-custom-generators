@@ -354,7 +354,12 @@ export interface BuildBodyOptions {
    * moderated `display` upload because it's public content shown to others.)
    */
   sourceImage?: BlockSourceImage;
-  /** The published generator's shared_kv key → creator attribution (G5). */
+  /**
+   * The published generator's shared key → creator attribution (G5).
+   *
+   * The server resolves the author from the document store for this app (it
+   * declares a shared collection), which needs civitai/civitai#6120 deployed.
+   */
   sharedContentKey?: string;
   /** Runner "advanced" overrides merged over the author's params (e.g. quantity/seed/steps). */
   paramOverrides?: Partial<GenButtonParams>;

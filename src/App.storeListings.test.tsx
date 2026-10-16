@@ -1,7 +1,9 @@
 // App Store sub-listings, driven through the whole App against the app's own fake
-// platform: publish → upsert, withdraw → NO store call, and the once-per-session
-// backfill on open. The REAL adapter (`platform/storeListings.ts`) and the real
-// shared-storage adapter run; only the server is fake.
+// platform: publish → upsert, withdraw → NO store call (the server withdraws the
+// card), and the once-per-session backfill on open. The REAL adapter
+// (`platform/storeListings.ts`) and the real document-store adapters run; only
+// the server is fake — and it models civitai/civitai#6120, which this version requires:
+// items resolve from the document store, and an author's delete withdraws the card.
 //
 // 🔴 THE LOAD-BEARING PROPERTY: THE STORE IS BEST-EFFORT. A store failure of any
 // kind — 4xx, 5xx, 503 "feature tables missing", a dead network, a request that
@@ -16,7 +18,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 
-import { Harness, createFakeCivitai, type FakeCivitai, type FakeCivitaiOptions } from './platform/testing.js';
+import { DEFAULT_SCOPES, Harness, createFakeCivitai, type FakeCivitai, type FakeCivitaiOptions, type RecordedCall } from './platform/testing.js';
 import { App, type AppDeps } from './App.js';
 import { CKPT_INFO } from './test-helpers.js';
 import { buildPublishPayload, defaultParams } from './lib/generator.js';
@@ -25,15 +27,7 @@ import { APPS_STORE_ITEMS_WRITE } from './scopes.js';
 const ME = 99;
 const SOMEONE_ELSE = 7;
 
-const MANIFEST_SCOPES = [
-  'ai:write:budgeted',
-  'buzz:read:self',
-  'apps:storage:read',
-  'apps:storage:write',
-  'apps:storage:shared:read',
-  'apps:storage:shared:write',
-  'posts:write:self',
-];
+const MANIFEST_SCOPES = DEFAULT_SCOPES;
 const WITH_STORE = [...MANIFEST_SCOPES, APPS_STORE_ITEMS_WRITE];
 
 function genValue(title: string, description = `${title} description`) {
@@ -62,12 +56,18 @@ function renderApp({ options = {}, wrapFetch }: Setup = {}): FakeCivitai {
   const fake = createFakeCivitai(opts);
   const deps: Partial<AppDeps> = { resolveResources: async () => [] };
   render(
-    <Harness {...opts} fetch={wrapFetch ? wrapFetch(fake.fetch) : fake.fetch} showLog={false}>
+    <Harness {...opts} fake={fake} fetch={wrapFetch ? wrapFetch(fake.fetch) : fake.fetch} showLog={false}>
       <App deps={deps} />
     </Harness>,
   );
   return fake;
 }
+
+/** A document-store request, matched on method and DECODED path (`kv/store-backfill:v1`). */
+function isStore(c: RecordedCall, method: string, path: string): boolean {
+  return c.method === method && decodeURIComponent(c.path) === `blocks/storage/${path}`;
+}
+const boardReads = (fake: FakeCivitai) => fake.calls.filter((c) => isStore(c, 'GET', 'records')).length;
 
 function storeCalls(fake: FakeCivitai, op?: 'upsert' | 'withdraw' | 'mine') {
   return fake.calls.filter((c) =>
@@ -92,7 +92,7 @@ async function buildGenerator(name: string, description: string) {
 async function expectInAppPublishStood(fake: FakeCivitai, title: string) {
   expect(await screen.findByTestId('builder-notice')).toHaveTextContent('Published!');
   expect(screen.queryByTestId('builder-error')).toBeNull();
-  expect(fake.rows().some((r) => r.value.title === title)).toBe(true);
+  expect((await fake.rows()).some((r) => r.value.title === title)).toBe(true);
 }
 
 describe('publish → store upsert', () => {
@@ -103,7 +103,7 @@ describe('publish → store upsert', () => {
     await expectInAppPublishStood(fake, 'Neon Portraits');
 
     await waitFor(() => expect(storeCalls(fake, 'upsert').length).toBe(1));
-    const key = fake.rows().find((r) => r.value.title === 'Neon Portraits')!.key;
+    const key = (await fake.rows()).find((r) => r.value.title === 'Neon Portraits')!.key;
     expect(storeCalls(fake, 'upsert')[0]!.body).toStrictEqual({
       itemKey: key,
       title: 'Neon Portraits',
@@ -127,7 +127,7 @@ describe('publish → store upsert', () => {
     await waitFor(() => expect(storeCalls(fake, 'upsert').length).toBe(2));
     expect(storeCalls(fake, 'upsert')[1]!.body).toMatchObject({ itemKey: key, title: 'Second Name', subPath: `g/${key}` });
     // Still one shared row: the edit updated in place.
-    expect(fake.rows().length).toBe(1);
+    expect((await fake.rows()).length).toBe(1);
   });
 
   it.each([
@@ -204,9 +204,9 @@ describe('publish → store upsert', () => {
 });
 
 describe('withdraw → no store call', () => {
-  // civitai's shared-storage withdraw takes the author's store card down itself
-  // (it awaits that mirror before answering), so the app makes no store call of
-  // its own: a second one would only spend one of the author's 30/h store writes.
+  // 🔴 THE SERVER TAKES THE CARD DOWN (civitai/civitai#6120): an author's delete of a
+  // production shared document withdraws that author's card before it answers, so
+  // the app makes no store call of its own — one would only spend a store write.
   async function withdrawFirstPublished() {
     await userEvent.click(await screen.findByTestId('tab-mine'));
     const card = await screen.findByTestId('published-card');
@@ -214,7 +214,7 @@ describe('withdraw → no store call', () => {
     await userEvent.click(await screen.findByTestId('confirm-delete-published'));
   }
 
-  it('a successful in-app withdraw makes no store call and stands', async () => {
+  it('a successful in-app withdraw deletes the document, makes no store call, and the card is withdrawn server-side', async () => {
     const fake = renderApp({
       options: {
         shared: { seed: [{ key: 'kPub', authorUserId: ME, value: genValue('Mine') }] },
@@ -222,10 +222,11 @@ describe('withdraw → no store call', () => {
       },
     });
     await withdrawFirstPublished();
-    await waitFor(() => expect(fake.rows()).toEqual([]));
-    expect(fake.calls.filter((c) => c.path === 'blocks/shared-storage/withdraw')).toHaveLength(1);
+    await waitFor(async () => expect(await fake.rows()).toEqual([]));
+    expect(fake.calls.filter((c) => isStore(c, 'DELETE', 'records/kPub'))).toHaveLength(1);
     await new Promise((r) => setTimeout(r, 20));
     expect(storeCalls(fake, 'withdraw')).toEqual([]);
+    expect(fake.subListings().get('kPub')?.status).toBe('withdrawn');
     expect(screen.queryByTestId('browse-error')).toBeNull();
     expect(screen.queryByTestId('published-card')).toBeNull();
   });
@@ -236,8 +237,11 @@ describe('withdraw → no store call', () => {
       wrapFetch: (inner) =>
         (async (input: RequestInfo | URL, init?: RequestInit) => {
           const url = typeof input === 'string' ? input : (input as Request).url;
-          if (url.includes('shared-storage/withdraw')) {
-            return new Response(JSON.stringify({ error: 'nope' }), { status: 500, headers: { 'content-type': 'application/json' } });
+          if (url.includes('storage/records/kPub') && (init?.method ?? 'GET').toUpperCase() === 'DELETE') {
+            return new Response(JSON.stringify({ code: 'internal_error', message: 'nope', error: 'nope' }), {
+              status: 500,
+              headers: { 'content-type': 'application/json' },
+            });
           }
           return inner(input, init);
         }) as typeof fetch,
@@ -268,12 +272,10 @@ describe('reconcile on open', () => {
     expect(storeCalls(fake, 'upsert')[0]!.body).toMatchObject({ subPath: expect.stringMatching(/^g\/k[13]$/) });
 
     // A reload of the board (Builder → Back re-runs the load effect) must not re-run it.
-    const listsBefore = fake.calls.filter((c) => c.path === 'blocks/shared-storage/list').length;
+    const listsBefore = boardReads(fake);
     await userEvent.click(screen.getByTestId('create-generator'));
     await userEvent.click(await screen.findByTestId('builder-back'));
-    await waitFor(() =>
-      expect(fake.calls.filter((c) => c.path === 'blocks/shared-storage/list').length).toBeGreaterThan(listsBefore),
-    );
+    await waitFor(() => expect(boardReads(fake)).toBeGreaterThan(listsBefore));
     await new Promise((r) => setTimeout(r, 20));
     expect(storeCalls(fake, 'mine').length).toBe(1);
     expect(storeCalls(fake, 'upsert').length).toBe(2);
@@ -284,7 +286,7 @@ describe('reconcile on open', () => {
       options: { shared: { seed: [{ key: 'k4', authorUserId: SOMEONE_ELSE, value: genValue('Theirs') }] } },
     });
     await screen.findByTestId('discover-list');
-    await waitFor(() => expect(fake.calls.filter((c) => c.path === 'blocks/shared-storage/list').length).toBe(2));
+    await waitFor(() => expect(boardReads(fake)).toBe(2));
     await new Promise((r) => setTimeout(r, 20));
     expect(storeCalls(fake)).toEqual([]);
   });
@@ -299,7 +301,7 @@ describe('reconcile on open', () => {
   it('never calls the store when the token lacks the store scope', async () => {
     const fake = renderApp({ options: { scopes: MANIFEST_SCOPES, shared: { seed: MY_THREE } } });
     await screen.findByTestId('discover-list');
-    await waitFor(() => expect(fake.calls.filter((c) => c.path === 'blocks/shared-storage/list').length).toBe(2));
+    await waitFor(() => expect(boardReads(fake)).toBe(2));
     await new Promise((r) => setTimeout(r, 20));
     expect(storeCalls(fake)).toEqual([]);
   });
@@ -312,7 +314,7 @@ describe('reconcile on open', () => {
       },
     });
     await screen.findByTestId('discover-list');
-    await waitFor(() => expect(fake.calls.some((c) => c.path === 'blocks/app-storage/get')).toBe(true));
+    await waitFor(() => expect(fake.calls.some((c) => isStore(c, 'GET', 'kv/store-backfill:v1'))).toBe(true));
     await new Promise((r) => setTimeout(r, 30));
     expect(storeCalls(fake)).toEqual([]);
   });
@@ -320,13 +322,11 @@ describe('reconcile on open', () => {
   it('records the run in the viewer’s storage so the next page load skips it', async () => {
     const fake = renderApp({ options: { shared: { seed: MY_THREE } } });
     await waitFor(() => expect(storeCalls(fake, 'upsert').length).toBe(3));
-    await waitFor(() =>
-      expect(
-        fake.calls.some(
-          (c) => c.path === 'blocks/app-storage/set' && (c.body as { key?: string }).key === 'store-backfill:v1',
-        ),
-      ).toBe(true),
-    );
+    await waitFor(() => expect(fake.calls.some((c) => isStore(c, 'PUT', 'kv/store-backfill:v1'))).toBe(true));
+    // 🔴 THE STORED SHAPE IS THE COPY'S SHAPE: `{ value: <ledger> }` under the
+    // legacy key — what the go-live copy writes for an existing viewer.
+    const doc = await fake.docStore.as({ viewer: { username: `user${ME}`, id: ME } }).storage.collection('kv').get('store-backfill:v1');
+    expect(doc?.data).toEqual({ value: { v: 1, lastRunAt: expect.any(Number), refused: [] } });
   });
 
   it('a 503 from `mine` stops the backfill and leaves Browse untouched', async () => {

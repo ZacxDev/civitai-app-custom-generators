@@ -1,8 +1,15 @@
 // App Store sub-listings, over two of the routes under
 // `/api/v1/blocks/sub-listings/` (civitai/civitai#5511): `upsert` and `mine`.
-// The third, `withdraw`, is deliberately unused: civitai's shared-storage
-// withdraw already takes the author's store card down server-side, so calling
-// it from here would only spend one of the author's store writes.
+// The third, `withdraw`, is deliberately unused: when an author deletes a
+// production shared document the server withdraws that author's card itself, so
+// calling it from here would only spend one of the author's store writes.
+//
+// 🔴 THIS VERSION REQUIRES civitai/civitai#6120 DEPLOYED FIRST. That server change
+// resolves an upsert's `itemKey` from the document store (an app whose approved
+// manifest declares a shared collection is resolved from the document store
+// ONLY), withdraws the card on an author's delete, and hides it on a moderator
+// hide or delete. Before it, every generator published here would be refused
+// `item_not_found` and a deleted generator's card would outlive it.
 //
 // A parent app may place individual items it contains — here, one published
 // generator — into the `/apps` store as their own cards, badged "in Custom
@@ -10,7 +17,7 @@
 // the server; this app only supplies the `subPath` (`g/<key>`, the 0.9.2 host
 // route that opens the generator).
 //
-// Scope: `apps:store:items:write` on both, plus a signed-in subject. The
+// Scope: `apps:store:items:write` on all three, plus a signed-in subject. The
 // parent is the calling app's own listing, taken from the token — never the body.
 //
 // 🔴 THE UPSERT BODY IS `.strict()` SERVER-SIDE. Only `itemKey, title, tagline?,
@@ -151,5 +158,6 @@ export function createStoreListings(): StoreListings {
         return out;
       });
     },
+
   };
 }

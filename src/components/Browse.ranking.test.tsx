@@ -474,15 +474,10 @@ describe('partial-ranking disclosure', () => {
     });
 
     /**
-     * 🔴 THE HORIZON IS PINNED AS THE LITERAL 100, AND THERE IS NO SEAM TO LOWER
-     * IT. That number is civitai's EXPORTED `SHARED_LIST_LIMIT_MAX` — the largest
-     * `limit` the list route honours, on both the REST surface this app talks to
-     * and the tRPC one. The row cap it has to clear is `SHARED_KV_PER_USER_ROW_CAP`
-     * (50), which is a PRIVATE const this app cannot import and must not pin, so
-     * the claim worth asserting is not "we ask for the cap" but "we ask for the
-     * most the route will give us". Asking for LESS is the only error: it is what
-     * makes a viewer's own rows unreachable, which is the defect this whole file
-     * is about.
+     * 🔴 THE PAGE SIZE IS PINNED AS THE LITERAL 100 — the document store's list
+     * ceiling (a larger `limit` is refused). Asking for LESS costs extra pages of
+     * the viewer's read budget for nothing; the paging case below is what keeps
+     * the viewer's own rows reachable past one page.
      *
      * Written as a literal rather than imported from `App.tsx`, deliberately: an
      * assertion against the constant it tests passes however that constant moves.
@@ -499,19 +494,15 @@ describe('partial-ranking disclosure', () => {
       expect('mine' in discoverCall).toBe(false);
       expect(discoverCall.limit).toBe(3); // discoverPageLimit (2) + 1
       expect('mine' in mineCall).toBe(true);
-      // A real boolean — the route's schema is a `'true' | 'false'` literal union
-      // and `?mine=` is a 400. The serialisation itself is pinned in
-      // `platform/sharedStorage.list.test.ts`.
+      // The adapter turns it into the store's `author: 'me'`; that mapping is
+      // pinned in `platform/sharedStorage.test.ts`.
       expect(mineCall.mine).toBe(true);
       // 🔴 100, NOT 101 — no `+1`, unlike the Discover read two lines up, and the
       // two literals above are what pin the difference. Discover renders a page of
       // a board it expects to outgrow and over-fetches one row as EVIDENCE of
-      // that; this one asks for more rows than a viewer can hold and so has
-      // nothing to disclose. A `+1` here would be REJECTED by the route, not
-      // clamped back to 100 — `limit` is validated with a zod `.max()` and the
-      // REST adapter answers a failed parse with `400 Invalid query`, so the
-      // over-fetch would not merely fail to carry evidence, it would fail the
-      // read. See `SHARED_LIST_LIMIT_MAX` in `App.tsx` for the derivation.
+      // that; this one follows the cursor instead (`MINE_LIST_MAX_PAGES`). A
+      // `limit` above 100 is REFUSED by the document store, not clamped. See
+      // `SHARED_LIST_LIMIT_MAX` in `App.tsx`.
       expect(mineCall.limit).toBe(100);
     });
 
@@ -522,8 +513,8 @@ describe('partial-ranking disclosure', () => {
      * seam between them: `App` could pass `limit: 100` to a `shared` that drops it,
      * or spell the parameter in a way the route rejects, and every assertion up
      * there would still pass. So this one leaves `deps.shared` UNSET, letting the
-     * read run `App` -> `useSharedStorage()` -> `platform/sharedStorage.ts` ->
-     * `GET blocks/shared-storage/list` into the fake server, and asserts the
+     * read run `App` -> `useRecordsStorage()` -> `platform/sharedStorage.ts` ->
+     * `GET blocks/storage/records` into the fake server, and asserts the
      * recorded `URLSearchParams`.
      *
      * 🔴 THE 100 IS A LITERAL, NOT AN IMPORT. `expect(q.get('limit')).toBe(String(
@@ -535,7 +526,7 @@ describe('partial-ranking disclosure', () => {
      * ⚠️ The server is `platform/testing.tsx`'s fake, so this is a claim about the
      * string this app SENDS. Nothing here has run against civitai.
      */
-    it('🔴 on the wire, the my-published read is `limit=100&mine=true`', async () => {
+    it('🔴 on the wire, the my-published read is `author=me&limit=100&sort=-key`', async () => {
       const fake = createFakeCivitai({
         viewer: { id: VIEWER_ID, username: 'me' },
         shared: {
@@ -558,26 +549,55 @@ describe('partial-ranking disclosure', () => {
 
       // 🔴 RE-FILTERED INSIDE `waitFor`. `fake.calls` grows; a `.filter()` result
       // taken before the wait is a dead snapshot that can never satisfy it.
-      const listCalls = () => fake.calls.filter((c) => c.path === 'blocks/shared-storage/list');
+      const listCalls = () => fake.calls.filter((c) => c.method === 'GET' && c.path === 'blocks/storage/records');
       await waitFor(() => expect(listCalls().length).toBeGreaterThanOrEqual(2));
-      const mineCalls = listCalls().filter((c) => c.query.has('mine'));
-      // Exactly one of the two reads carries the flag — the other is Discover, and
-      // a `mine` key leaking onto THAT one would make the board read a self-feed.
+      const mineCalls = listCalls().filter((c) => c.query.has('author'));
+      // Exactly one of the two reads carries the filter — the other is Discover, and
+      // an `author` key leaking onto THAT one would make the board read a self-feed.
       expect(mineCalls).toHaveLength(1);
-      expect(mineCalls[0].query.toString()).toBe('limit=100&mine=true');
+      expect([...mineCalls[0].query.entries()].sort()).toEqual([
+        ['author', 'me'],
+        ['limit', '100'],
+        ['sort', '-key'],
+      ]);
       // CONTROL: the recorder DOES see the other read, so the 1 above is
       // attributable to the flag and not to a filter that matches almost nothing.
       expect(listCalls().length - mineCalls.length).toBe(1);
     });
 
     /**
-     * 🔴 AN ANONYMOUS VIEWER: THE REQUEST IS NOT MADE AT ALL. The server answers
-     * an anonymous `mine=true` with an EMPTY PAGE — not an error, and not the
-     * whole board — because the author predicate is UNKNOWN for a NULL subject.
-     * That is the right answer, but it is indistinguishable from "the store is
-     * empty", so the app does not ask: it has nothing to learn from a reply it
-     * could not interpret. Pinned as a CALL COUNT plus key absence, because an
-     * empty mine panel looks identical either way.
+     * 🔴 THE `mine` READ FOLLOWS THE CURSOR. The legacy store capped an author at
+     * 50 rows, so one page of 100 was provably everything; the document store has
+     * no per-author cap, so a prolific author can pass 100 and a one-page read
+     * would silently drop their oldest from their own panel. 101 rows put exactly
+     * one on a second page; 100 rows are the control (one page, no second read).
+     */
+    it('pages the viewer’s own rows past 100, and stops when the store has no more', async () => {
+      const mineRows = (n: number) =>
+        Array.from({ length: n }, (_, i) => item(`m${String(i).padStart(3, '0')}`, `Mine ${i}`, 0, VIEWER_ID));
+      const shared = setup(false, mineRows(101), { discoverPageLimit: 2 });
+      await screen.findByTestId('discover-list');
+      await waitFor(() => expect(shared.listCalls.filter((c) => c.mine === true)).toHaveLength(2));
+      const [first, second] = shared.listCalls.filter((c) => c.mine === true);
+      expect('cursor' in first!).toBe(false);
+      expect(second).toMatchObject({ mine: true, limit: 100, cursor: expect.any(String) });
+    });
+
+    it('a viewer with exactly 100 rows of their own costs one `mine` read (control)', async () => {
+      const rows = Array.from({ length: 100 }, (_, i) => item(`m${String(i).padStart(3, '0')}`, `Mine ${i}`, 0, VIEWER_ID));
+      const shared = setup(false, rows, { discoverPageLimit: 2 });
+      await screen.findByTestId('discover-list');
+      await waitFor(() => expect(shared.listCalls.filter((c) => c.mine === true)).toHaveLength(1));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(shared.listCalls.filter((c) => c.mine === true)).toHaveLength(1);
+    });
+
+    /**
+     * 🔴 AN ANONYMOUS VIEWER: THE REQUEST IS NOT MADE AT ALL. The document store
+     * refuses an anonymous `author: 'me'` list (`sign_in_required`), and there is
+     * nothing a signed-out visitor has published, so the app does not ask.
+     * Pinned as a CALL COUNT plus key absence, because an empty mine panel looks
+     * identical either way.
      */
     it('🔴 fires NO `mine` request for a signed-out visitor', async () => {
       const shared = setupAnon(false, PAST_THE_PAGE);

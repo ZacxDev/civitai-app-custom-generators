@@ -4,9 +4,9 @@
 // INJECTED — `setup()` passes `deps.shared = fakeShared(...)`, an in-memory object
 // with no notion of a viewer — so no request reaches the `<Harness>`'s fake server
 // and NOTHING in this file exercises an authorization decision at all. (The fake
-// server does refuse an anonymous shared write — `platform/testing.tsx`'s
-// `requireViewer`, on `blocks/shared-storage/report` among others; these tests
-// simply never reach it.) So the signed-out test
+// server does refuse an anonymous `report` mark — the SDK's `createFakeStorage`
+// behind `platform/testing.tsx` answers `sign_in_required`; these tests simply
+// never reach it.) So the signed-out test
 // below asserts that no report AFFORDANCE is offered, which is a UI claim. It does
 // NOT assert that an anonymous report is refused — no layer under test here makes
 // that decision, and the real server's behaviour is not observable from this file.
