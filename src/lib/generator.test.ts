@@ -4,6 +4,7 @@ import type { BlockResourceInfo } from '@civitai/app-sdk/blocks';
 import {
   buildPublishPayload,
   buildSubmitBody,
+  cloneConfigForFork,
   canRunButton,
   checkpointFromPick,
   clampWeight,
@@ -197,6 +198,39 @@ describe('mergeParams', () => {
   it('returns base when overrides are undefined', () => {
     const base = { steps: 25 };
     expect(mergeParams(base, undefined)).toBe(base);
+  });
+});
+
+describe('store image on the published row', () => {
+  const base: GeneratorConfig = {
+    name: 'Store Pic',
+    description: 'd',
+    buttons: [buttonWith({ label: 'Go', promptTemplate: 'a {prompt}' })],
+  };
+
+  it('publishes only the id — the picker url stays in the author draft', () => {
+    const payload = buildPublishPayload({ ...base, storeImage: { imageId: 5150, url: 'https://x/pick.jpg' } });
+    const data = payload.data as Record<string, unknown>;
+    expect(data.storeImageId).toBe(5150);
+    expect(JSON.stringify(payload)).not.toContain('pick.jpg');
+    expect(parsePublishedGenerator(payload)!.storeImage).toStrictEqual({ imageId: 5150 });
+  });
+
+  it('no store image → no storeImageId, and none parsed back', () => {
+    const payload = buildPublishPayload(base);
+    expect((payload.data as Record<string, unknown>).storeImageId).toBeUndefined();
+    expect(parsePublishedGenerator(payload)!.storeImage).toBeUndefined();
+  });
+
+  it.each([0, -3, 2.5, '77', null])('a forged storeImageId %s is dropped on read', (bad) => {
+    const payload = buildPublishPayload(base);
+    (payload.data as Record<string, unknown>).storeImageId = bad;
+    expect(parsePublishedGenerator(payload)!.storeImage).toBeUndefined();
+  });
+
+  it('a fork drops the source author’s store image (theirs, not the forker’s)', () => {
+    const fork = cloneConfigForFork({ ...base, storeImage: { imageId: 5150, url: 'https://x/pick.jpg' } });
+    expect(fork.storeImage).toBeUndefined();
   });
 });
 

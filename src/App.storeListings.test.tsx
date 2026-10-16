@@ -15,6 +15,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
+import type { BlockPickedImageInfo } from '@civitai/app-sdk/blocks';
 
 import { Harness, createFakeCivitai, type FakeCivitai, type FakeCivitaiOptions } from './platform/testing.js';
 import { App, type AppDeps } from './App.js';
@@ -338,5 +339,153 @@ describe('reconcile on open', () => {
     expect(storeCalls(fake, 'upsert')).toEqual([]);
     expect(screen.queryByTestId('browse-error')).toBeNull();
     expect(screen.getByTestId('discover-list').textContent).toContain('One');
+  });
+});
+
+describe('optional App Store card image', () => {
+  // An id no other constant in this suite equals (see the RULES on fixture
+  // distinctness): a mutant that sends a hardcoded or the header's id cannot pass.
+  const MY_POSTED = 31_337;
+  const posted = (imageId: number | undefined, url = `https://image.civitai.com/x/${imageId}.jpeg`): BlockPickedImageInfo => ({
+    source: 'posted',
+    url,
+    width: 1024,
+    height: 1024,
+    nsfwLevel: 1,
+    ...(imageId !== undefined ? { imageId } : {}),
+  });
+  const generated: BlockPickedImageInfo = {
+    source: 'generated',
+    url: 'https://orchestration.civitai.com/out/1.png',
+    width: 1024,
+    height: 1024,
+    nsfwLevel: 1,
+  };
+
+  async function chooseStoreImage() {
+    await userEvent.click(await screen.findByTestId('pick-store-image'));
+  }
+
+  it('asks the host picker for POSTED images only, previews the pick, and sends its imageId', async () => {
+    const outbound: { type: string; payload: unknown }[] = [];
+    const fake = renderApp({
+      options: {
+        // The generated image comes FIRST: a picker opened without the `posted`
+        // filter would hand it back, and it has no id the store could take.
+        cannedImagePicks: [generated, posted(MY_POSTED)],
+        subListings: { publicImages: [{ imageId: MY_POSTED, userId: ME }] },
+        onOutbound: (m) => outbound.push(m),
+      },
+    });
+    await buildGenerator('Pictured', 'With a store image.');
+    await chooseStoreImage();
+    expect(await screen.findByTestId('store-image-preview')).toHaveAttribute(
+      'src',
+      `https://image.civitai.com/x/${MY_POSTED}.jpeg`,
+    );
+    const pickerCalls = outbound.filter((m) => m.type === 'OPEN_IMAGE_PICKER');
+    expect(pickerCalls).toHaveLength(1);
+    expect(pickerCalls[0]!.payload).toMatchObject({ sources: ['posted'] });
+    expect((pickerCalls[0]!.payload as Record<string, unknown>).multiple).toBeUndefined();
+
+    await userEvent.click(screen.getByTestId('publish'));
+    await expectInAppPublishStood(fake, 'Pictured');
+    await waitFor(() => expect(storeCalls(fake, 'upsert').length).toBe(1));
+    const key = fake.rows().find((r) => r.value.title === 'Pictured')!.key;
+    expect(storeCalls(fake, 'upsert')[0]!.body).toStrictEqual({
+      itemKey: key,
+      title: 'Pictured',
+      tagline: 'With a store image.',
+      subPath: `g/${key}`,
+      imageId: MY_POSTED,
+    });
+    expect(fake.subListings().get(key)!.imageId).toBe(MY_POSTED);
+    expect(await screen.findByTestId('builder-store-notice')).toHaveTextContent(/moderator/i);
+  });
+
+  it('sends NO imageId key when no image is chosen (the card keeps the parent cover)', async () => {
+    const fake = renderApp({ options: { cannedImagePicks: [posted(MY_POSTED)] } });
+    await buildGenerator('Plain', 'No store image.');
+    expect(screen.getByTestId('store-image-card')).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('publish'));
+    await waitFor(() => expect(storeCalls(fake, 'upsert').length).toBe(1));
+    expect(Object.keys(storeCalls(fake, 'upsert')[0]!.body as object)).not.toContain('imageId');
+  });
+
+  it('removing the image and republishing sends no imageId, which clears the card image', async () => {
+    const fake = renderApp({
+      options: {
+        cannedImagePicks: [posted(MY_POSTED)],
+        subListings: { publicImages: [{ imageId: MY_POSTED, userId: ME }] },
+      },
+    });
+    await buildGenerator('Toggled', 'Desc.');
+    await chooseStoreImage();
+    await screen.findByTestId('store-image-preview');
+    await userEvent.click(screen.getByTestId('publish'));
+    await waitFor(() => expect(storeCalls(fake, 'upsert').length).toBe(1));
+    const key = (storeCalls(fake, 'upsert')[0]!.body as { itemKey: string }).itemKey;
+    expect(fake.subListings().get(key)!.imageId).toBe(MY_POSTED);
+
+    await userEvent.click(screen.getByTestId('remove-store-image'));
+    expect(screen.queryByTestId('store-image-preview')).toBeNull();
+    await userEvent.click(screen.getByTestId('publish'));
+    await waitFor(() => expect(storeCalls(fake, 'upsert').length).toBe(2));
+    expect(Object.keys(storeCalls(fake, 'upsert')[1]!.body as object)).not.toContain('imageId');
+    expect(fake.subListings().get(key)!.imageId).toBeNull();
+  });
+
+  it('a pick with no image id (not a posted image) is refused inline and never attached', async () => {
+    const fake = renderApp({ options: { cannedImagePicks: [posted(undefined)] } });
+    await buildGenerator('No Id', 'Desc.');
+    await chooseStoreImage();
+    expect(await screen.findByTestId('store-image-error')).toHaveTextContent(/published posts/);
+    expect(screen.queryByTestId('store-image-preview')).toBeNull();
+    await userEvent.click(screen.getByTestId('publish'));
+    await waitFor(() => expect(storeCalls(fake, 'upsert').length).toBe(1));
+    expect(Object.keys(storeCalls(fake, 'upsert')[0]!.body as object)).not.toContain('imageId');
+  });
+
+  it('a host refusal of the picker shows app copy, not the host’s string', async () => {
+    renderApp({ options: { imagePickerError: 'unsupported on this host' } });
+    await buildGenerator('Refused', 'Desc.');
+    await chooseStoreImage();
+    const err = await screen.findByTestId('store-image-error');
+    expect(err).toHaveTextContent(/Couldn’t open your images/);
+    expect(err).not.toHaveTextContent(/unsupported/);
+  });
+
+  it('a dismissed picker changes nothing', async () => {
+    renderApp({ options: { cannedImagePicks: [] } });
+    await buildGenerator('Dismissed', 'Desc.');
+    await chooseStoreImage();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId('store-image-preview')).toBeNull();
+    expect(screen.queryByTestId('store-image-error')).toBeNull();
+  });
+
+  it.each([
+    ['image_not_public', [], /finished review/],
+    ['image_not_yours', [{ imageId: MY_POSTED, userId: SOMEONE_ELSE }], /posted yourself/],
+  ] as const)('the store refusing the image (%s) is told to the author, and the in-app publish stands', async (_code, publicImages, copy) => {
+    const fake = renderApp({
+      options: { cannedImagePicks: [posted(MY_POSTED)], subListings: { publicImages: [...publicImages] } },
+    });
+    await buildGenerator('Refused Pic', 'Desc.');
+    await chooseStoreImage();
+    await screen.findByTestId('store-image-preview');
+    await userEvent.click(screen.getByTestId('publish'));
+    await expectInAppPublishStood(fake, 'Refused Pic');
+    const notice = await screen.findByTestId('builder-store-notice');
+    expect(notice).toHaveTextContent(copy);
+    expect(notice).toHaveTextContent(/still published here/);
+    expect(screen.queryByTestId('builder-error')).toBeNull();
+  });
+
+  it('offers no picker when the token lacks the store scope', async () => {
+    renderApp({ options: { scopes: MANIFEST_SCOPES, cannedImagePicks: [posted(MY_POSTED)] } });
+    await buildGenerator('No Scope Pic', 'Desc.');
+    expect(screen.queryByTestId('store-image-card')).toBeNull();
+    expect(screen.queryByTestId('pick-store-image')).toBeNull();
   });
 });

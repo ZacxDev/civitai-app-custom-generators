@@ -20,6 +20,7 @@
 //   per-viewer KV→ `app.storage`
 //   post         → still the bridge; there is deliberately no REST route
 //   store items  → `app.site.*` over `/api/v1/blocks/sub-listings/*`
+//   own images   → the bridge (`OPEN_IMAGE_PICKER`); the host lists, the app gets the pick
 
 export { getClient, getPlatformTransport, getSnapshot, __configurePlatform } from './client.js';
 export type { PlatformOverrides } from './client.js';
@@ -88,6 +89,7 @@ export { useCreatePostFromApp } from './useCreatePostFromApp.js';
 export type { UseCreatePostFromApp } from './useCreatePostFromApp.js';
 
 export { createStoreListings, StoreListingError } from './storeListings.js';
+export { pickPostedImage, IMAGE_PICKER_TIMEOUT_MS } from './imagePicker.js';
 export type {
   MyStoreListing,
   StoreListingInput,

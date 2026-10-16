@@ -158,11 +158,28 @@ the manifest; consent-exempt; never minted for dev, tunnel or review tokens).
 
 - **Publish / edit** → `POST blocks/sub-listings/upsert` with `itemKey` (the
   shared key), `title` (the name, ≤80), `tagline` (the description, ≤140, left
-  out when empty) and `subPath: g/<key>`. No `imageId` (a generator cover is not
-  an image in a published post, which the server requires) and no
-  `contentRating` (unset inherits the app's own). Every new item and every edit
-  to an approved one waits for a moderator; the Builder says so in one line
-  under "Published!".
+  out when empty), `subPath: g/<key>`, and `imageId` only when the author
+  chose a store image (below). No `contentRating` (unset inherits the app's
+  own). Every new item and every edit to an approved one — an image change
+  included — waits for a moderator; the Builder says so in one line under
+  "Published!".
+- **Optional store image (0.13.0).** The Builder's "App Store image" section
+  opens the host's own image picker (`OPEN_IMAGE_PICKER`, `sources:
+  ['posted']`) over the viewer's library: the host lists only the viewer's own
+  images in a published post, scanned, unflagged and rated, and the app
+  receives only the one picked — no new scope, and the app never reads the
+  library. Only a `posted` pick with an `imageId` is accepted. The id is
+  published on the generator's `data` as `storeImageId` (the picker's url stays
+  in the author's draft, for the preview) so every upsert — republish and
+  backfill alike — carries it: the server stores `imageId ?? null`, so an
+  upsert without it clears the card image. Nothing chosen (or Remove) = no
+  `imageId` key, and the card shows the app's cover. The generator's header
+  image is never sent (a cosmetic upload, not an image in a published post). A
+  fork drops the source author's store image. The picker's eligibility set is
+  not provably the store's (the store re-checks with an anonymous-visibility
+  read), so a refusal — 400 `image_not_public`, 403 `image_not_yours` — is told
+  to the author in the store line, and the in-app publish stands. The section
+  is shown only when the token carries the store scope.
 - **Withdraw** → no store call. civitai's shared-storage withdraw takes the
   author's card down itself, server-side, before it answers.
 - **Backfill** → off the "Published by me" read, the app calls
