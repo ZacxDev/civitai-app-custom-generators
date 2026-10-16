@@ -66,9 +66,9 @@ import {
   isRoutableKey,
   parseDeeplinkKey,
   parseRouteKey,
-  routeForKey,
   stripDeeplinkParam,
 } from './lib/deeplink.js';
+import { parseAppRoute, routeForPage, type AppRoute, type BrowseSection } from './lib/routes.js';
 import blockManifest from '../block.manifest.json';
 import { setGeneratorMeta } from './lib/meta.js';
 import { backfillLedgerIn, reconcileStoreListings, storeListingFor, storeNoticeFor } from './lib/storeListing.js';
@@ -307,11 +307,15 @@ interface EditTarget {
   id: string;
   config: GeneratorConfig;
   publishedKey?: string;
+  /** A brand-new builder session (no draft behind it yet): its page is `build`, not `build/<id>`. */
+  fresh?: boolean;
 }
 
 interface RunTarget {
   config: GeneratorConfig;
   sharedContentKey?: string;
+  /** The viewer's own draft this run was opened from, when it was — its page. */
+  draftId?: string;
   /** Host-resolved MODERATED cover url (from `headerImageRef.imageId`), or null. */
   headerUrl?: string | null;
 }
@@ -421,6 +425,8 @@ export function App({ deps: depsOverride }: AppProps = {}) {
 
   // ---- view state ----
   const [view, setView] = useState<View>('browse');
+  /** The Browse section — a host PAGE (`''` / `mine` / `gallery`), routed. */
+  const [section, setSection] = useState<BrowseSection>('discover');
   const [editing, setEditing] = useState<EditTarget | null>(null);
   const [running, setRunning] = useState<RunTarget | null>(null);
 
@@ -825,7 +831,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
 
   // ---- navigation ----
   const openBuilderNew = useCallback(() => {
-    setEditing({ id: newId('gen'), config: newGenerator() });
+    setEditing({ id: newId('gen'), config: newGenerator(), fresh: true });
     setView('builder');
   }, []);
 
@@ -835,7 +841,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   }, []);
 
   const openConfig = useCallback(
-    async (config: GeneratorConfig, sharedContentKey?: string) => {
+    async (config: GeneratorConfig, sharedContentKey?: string, draftId?: string) => {
       let resolved = config;
       setRehydrateNotice(null);
       try {
@@ -872,7 +878,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       } catch {
         /* meta is cosmetic — never let it block opening the runner. */
       }
-      setRunning({ config: resolved, sharedContentKey, headerUrl });
+      setRunning({ config: resolved, sharedContentKey, draftId, headerUrl });
       setView('runner');
     },
     [],
@@ -892,7 +898,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
 
   const openDraft = useCallback(
     (draft: StoredDraft) => {
-      void openConfig(draft.config, draft.publishedKey);
+      void openConfig(draft.config, draft.publishedKey, draft.id);
     },
     [openConfig],
   );
@@ -1202,13 +1208,79 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   const handledSubPath = useRef<string | null>(null);
   const sharedRef = useRef(shared);
   sharedRef.current = shared;
+  const myDraftsRef = useRef(myDrafts);
+  myDraftsRef.current = myDrafts;
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const runningRef = useRef(running);
+  runningRef.current = running;
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
+
+  /**
+   * Show the page a host route names (src/lib/routes.ts). Every branch is
+   * idempotent against the state already on screen — the host echoes this
+   * app's own `navigate()` back as `ROUTE_CHANGED`, and an echo must never
+   * re-open, re-create, or reset what the viewer is looking at.
+   */
+  const applyRoute = useCallback(
+    (route: AppRoute) => {
+      switch (route.kind) {
+        case 'browse': {
+          if (viewRef.current !== 'browse' || runningRef.current || editingRef.current) backToBrowse();
+          setSection(route.section);
+          return;
+        }
+        case 'runner': {
+          const openKey = viewRef.current === 'runner' ? runningRef.current?.sharedContentKey : undefined;
+          if (route.key === openKey) return;
+          const item = sharedRef.current.find((s) => s.key === route.key);
+          if (!item) return;
+          const config = parsePublishedGenerator(item.value);
+          if (!config) return;
+          void openConfig(config, item.key);
+          return;
+        }
+        case 'draft-runner': {
+          if (viewRef.current === 'runner' && runningRef.current?.draftId === route.draftId) return;
+          const draft = myDraftsRef.current.find((d) => d.id === route.draftId);
+          if (!draft) return; // stale link or a signed-out viewer — stay put
+          void openConfig(draft.config, draft.publishedKey, draft.id);
+          return;
+        }
+        case 'builder': {
+          if (viewRef.current === 'builder') {
+            // The echo of entering the Builder (`build`, or the open draft's
+            // own page) must not reset an in-progress generator.
+            if (route.draftId === null || editingRef.current?.id === route.draftId) return;
+          }
+          if (route.draftId === null) {
+            openBuilderNew();
+            return;
+          }
+          const draft = myDraftsRef.current.find((d) => d.id === route.draftId);
+          if (!draft) return;
+          openBuilderEdit(draft);
+          return;
+        }
+      }
+    },
+    [backToBrowse, openConfig, openBuilderEdit, openBuilderNew],
+  );
+
   useEffect(() => {
     if (deeplinkHandled.current || !ready || loading) return;
     deeplinkHandled.current = true;
     handledSubPath.current = hostRoute.subPath;
     const routeKey = parseRouteKey(hostRoute.subPath);
     const key = routeKey ?? depsRef.current.getDeeplinkKey();
-    if (!key) return;
+    if (!key) {
+      // No generator to deep-open: the page the app was opened AT still
+      // applies (a section, the Builder, an own-draft Runner).
+      const initial = parseAppRoute(hostRoute.subPath);
+      if (initial && initial.kind !== 'runner') applyRoute(initial);
+      return;
+    }
     const item = shared.find((s) => s.key === key);
     if (!item) return; // key not on the loaded page — stay on Browse
     const config = parsePublishedGenerator(item.value);
@@ -1225,62 +1297,53 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     // `hostRoute.subPath` is read at the moment the list lands and deliberately
     // not a dependency: a route change AFTER this point is the effect below's.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, loading, shared, openConfig]);
+  }, [ready, loading, shared, openConfig, applyRoute]);
 
   // Follow a host route change AFTER the first load: `ROUTE_CHANGED` from the
   // viewer's back/forward, or the echo of this app's own navigate below.
-  //   - `g/<key>` opens that generator, unless it is already the one open (the
-  //     echo case, which must be a no-op or the two effects would ping-pong).
-  //   - `''` (the app root) closes a keyed Runner back to Browse — browser Back
-  //     out of a generator. It leaves the Builder and an unkeyed draft Runner
-  //     alone: neither is routed, so the root says nothing about them.
-  //   - anything else is not a route this app has, and does nothing.
-  const viewRef = useRef(view);
-  viewRef.current = view;
-  const runningRef = useRef(running);
-  runningRef.current = running;
+  // Every page in the map (src/lib/routes.ts) applies — a section, the
+  // Builder, a Runner — so the native back button walks the app's own
+  // history. A route this app does not own parses to `null` and is ignored.
   useEffect(() => {
     const sub = hostRoute.subPath;
     if (!deeplinkHandled.current || sub === null || sub === handledSubPath.current) return;
     handledSubPath.current = sub;
-    const openKey = viewRef.current === 'runner' ? runningRef.current?.sharedContentKey : undefined;
-    const key = parseRouteKey(sub);
-    if (key) {
-      if (key === openKey) return;
-      const item = sharedRef.current.find((s) => s.key === key);
-      if (!item) return;
-      const config = parsePublishedGenerator(item.value);
-      if (!config) return;
-      void openConfig(config, item.key);
-      return;
-    }
-    if (sub === '' && openKey) backToBrowse();
-  }, [hostRoute.subPath, openConfig, backToBrowse]);
+    const route = parseAppRoute(sub);
+    if (!route) return;
+    applyRoute(route);
+  }, [hostRoute.subPath, applyRoute]);
 
-  // Mirror the open generator into the host route, so the address bar reads
-  // `/apps/run/<slug>/g/<key>` while it is open and the app root otherwise.
-  // App-scoped `NAVIGATE` is a shallow host push: the page stays mounted and
-  // the change comes back as `ROUTE_CHANGED`, which the effect above ignores
-  // because the route then matches what is already on screen.
+  // Mirror the on-screen page into the host route, so the address bar reads
+  // `/apps/run/<slug>/mine`, `…/build/<id>`, `…/g/<key>` — and back/forward
+  // has somewhere true to go. App-scoped `NAVIGATE` is a shallow host push:
+  // the page stays mounted and the change comes back as `ROUTE_CHANGED`,
+  // which applyRoute treats as the no-op echo it is.
   //
-  // Keyed on `desiredRoute` only, so it fires on an app-side TRANSITION, never
-  // on a host-side route change (that would undo the viewer's Back). It waits
-  // for the first load, so the route a page was opened at is not overwritten
-  // before it has been read. No host (`subPath === null`) means nothing to sync.
-  const openRouteKey =
-    view === 'runner' && running?.sharedContentKey && isRoutableKey(running.sharedContentKey)
-      ? running.sharedContentKey
-      : null;
-  const desiredRoute = openRouteKey ? routeForKey(openRouteKey) : '';
+  // Keyed on `desiredRoute` only, so it fires on an app-side TRANSITION,
+  // never on a host-side route change (that would undo the viewer's Back).
+  // It waits for the first load, so the route a page was opened at is not
+  // overwritten before it has been read. No host (`subPath === null`) means
+  // nothing to sync.
+  const currentPage: AppRoute | null =
+    view === 'runner'
+      ? running?.sharedContentKey && isRoutableKey(running.sharedContentKey)
+        ? { kind: 'runner', key: running.sharedContentKey }
+        : running?.draftId
+          ? { kind: 'draft-runner', draftId: running.draftId }
+          : null
+      : view === 'builder'
+        ? { kind: 'builder', draftId: editing?.fresh ? null : (editing?.id ?? null) }
+        : { kind: 'browse', section };
+  const desiredRoute = currentPage ? routeForPage(currentPage) : null;
   const hostSubPathRef = useRef(hostRoute.subPath);
   hostSubPathRef.current = hostRoute.subPath;
   useEffect(() => {
-    if (!deeplinkHandled.current) return;
+    if (!deeplinkHandled.current || desiredRoute === null) return;
     const current = hostSubPathRef.current;
     if (current === null || current === desiredRoute) return;
     // A route this app does not own (`generate`, a typo) is left as-is by
     // a return to Browse; only a route this app wrote is reset to the root.
-    if (desiredRoute === '' && parseRouteKey(current) === null) return;
+    if (desiredRoute === '' && parseAppRoute(current) === null) return;
     depsRef.current.navigate(desiredRoute);
   }, [desiredRoute]);
 
@@ -1319,6 +1382,8 @@ export function App({ deps: depsOverride }: AppProps = {}) {
           <Browse
             discoverTruncated={discoverTruncated}
             c={c}
+            section={section}
+            onSectionChange={setSection}
             loading={loading}
             error={error}
             discover={shared}

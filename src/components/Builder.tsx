@@ -385,6 +385,7 @@ export function Builder({ initial, c, pickResource, uploadImage, scanBackground,
             data-testid="publish"
             loading={busy === 'publish'}
             disabled={validationErrors.length > 0}
+            variant={validationErrors.length > 0 ? 'light' : 'filled'}
             onClick={doPublish}
           >
             Publish

@@ -66,6 +66,15 @@ export interface BrowseProps {
   c: Palette;
   loading: boolean;
   error: string | null;
+  /**
+   * The visible section, controlled by the caller when the section is a
+   * host PAGE (App.tsx routes `''` / `mine` / `gallery`). Absent = Browse
+   * owns it (tests, embeds). `onSectionChange` is how a section switch
+   * asks the router to push the new page; the section itself only changes
+   * when the prop does, so the address bar and the panel cannot drift.
+   */
+  section?: Tab;
+  onSectionChange?: (section: Tab) => void;
   discover: SharedListItem[];
   /**
    * The `discover` rows are ONE PAGE of a longer board. When true, "Popular" is
@@ -247,7 +256,12 @@ interface VoteState {
 
 export function Browse(props: BrowseProps) {
   const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, keptTruncated = false, keptIncomplete = false, keptError = null, getImages, onOpenGeneratorKey, posting, onRequestSignIn, copyToClipboard, onRetry } = props;
-  const [tab, setTab] = useState<Tab>('discover');
+  const [tabState, setTabState] = useState<Tab>('discover');
+  const tab = props.section ?? tabState;
+  const setTab = (next: Tab) => {
+    if (props.onSectionChange) props.onSectionChange(next);
+    else setTabState(next);
+  };
   // The section switcher is a sticky side nav on wide frames and a top strip
   // on narrow ones (below the civitai `sm` tier — see useMediaQuery).
   const isMobile = useIsMobile();
@@ -405,7 +419,7 @@ export function Browse(props: BrowseProps) {
       >
         <Group gap={12} align="center" wrap={false} style={{ minWidth: 0 }}>
           <span aria-hidden="true" style={brandMarkStyle}>
-            <WandIcon />
+            <BrandMarkIcon />
           </span>
           <Stack gap={2} style={{ minWidth: 0 }}>
             <h1 style={{ margin: 0, fontSize: 19, letterSpacing: '-0.01em', lineHeight: 1.2 }}>
@@ -919,8 +933,9 @@ export function Browse(props: BrowseProps) {
   );
 }
 
-/** A tinted rounded tile that holds the brand mark (matches the manifest's
- * `wand` page icon), styled entirely off `--civitai-*` tokens. */
+/** A tinted rounded tile that holds the brand mark, styled entirely off
+ * `--civitai-*` tokens. (The manifest's `page.icon` stays `wand` — that
+ * enum is the host's, not the brand's.) */
 const brandMarkStyle: CSSProperties = {
   display: 'grid',
   placeItems: 'center',
@@ -928,23 +943,25 @@ const brandMarkStyle: CSSProperties = {
   height: 38,
   flexShrink: 0,
   borderRadius: radius.md,
-  color: token.primary,
-  background: token.primaryLight,
+  color: 'var(--civitai-color-primary-fg)',
+  background: 'var(--cg-hot, var(--civitai-color-primary))',
   border: `1px solid ${token.border}`,
 };
 
-/** Inline `wand` glyph (currentColor), no external icon dependency. */
-function WandIcon(): React.JSX.Element {
+/**
+ * The brand mark — the dome-on-cylinder BUTTON from `brand/icon.svg`
+ * ("Build the button. Share the button."), drawn inline in the app's own
+ * tones: bezel ring, plate gap, raised cap as three concentric circles.
+ * Same geometry as the store icon, so recognition carries across the
+ * store → app boundary; the store plate keeps its violet, the in-app
+ * mark wears Forge primary.
+ */
+function BrandMarkIcon(): React.JSX.Element {
   return (
-    <svg width={20} height={20} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M15 6l3 3M5 19L16.5 7.5a1.8 1.8 0 0 0 0-2.5l-.5-.5a1.8 1.8 0 0 0-2.5 0L2 16l3 3z"
-        stroke="currentColor"
-        strokeWidth={2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path d="M18 3l.6 1.4L20 5l-1.4.6L18 7l-.6-1.4L16 5l1.4-.6zM6 3l.4 1L7.5 4.5 6.5 5 6 6l-.5-1L4.5 4.5 5.5 4z" fill="currentColor" />
+    <svg width={22} height={22} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx={12} cy={12} r={9.5} stroke="currentColor" strokeWidth={2} opacity={0.45} />
+      <circle cx={12} cy={12} r={6.2} fill="currentColor" />
+      <circle cx={12} cy={12} r={2.7} fill="var(--civitai-color-body)" opacity={0.9} />
     </svg>
   );
 }

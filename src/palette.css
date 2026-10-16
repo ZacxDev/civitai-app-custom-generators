@@ -22,6 +22,23 @@
    `src/bootTokens.test.ts` keeps the two in step. */
 
 [data-theme][data-palette='forge'] {
+  /* Shape claim: chunky, pressable, workshop — every radius.md/lg multiple
+     in theme.ts follows this one token. */
+  --civitai-radius: 0.5rem;
+  /* The gray ramp re-derived as warm neutrals on the Forge hue, at the
+     stock lightness steps, so components that reach past the semantic
+     tokens (scrollbars, skeletons, disabled states) stay in Forge instead
+     of dropping into stock blue-gray. Same ramp in both themes, as stock. */
+  --civitai-color-gray-0: #faf7f2;
+  --civitai-color-gray-1: #f3eee6;
+  --civitai-color-gray-2: #e9e1d3;
+  --civitai-color-gray-3: #d9cdb8;
+  --civitai-color-gray-4: #c4b49a;
+  --civitai-color-gray-5: #a89378;
+  --civitai-color-gray-6: #8a765e;
+  --civitai-color-gray-7: #57493a;
+  --civitai-color-gray-8: #3a2f24;
+  --civitai-color-gray-9: #241c14;
   --civitai-color-text: #f5efe6;
   --civitai-color-text-dimmed: #b8a88f;
   --civitai-color-body: #171310;
@@ -35,9 +52,26 @@
   --civitai-color-track: #2a211a;
   --civitai-color-segmented-bg: #2a211a;
   --civitai-color-media-placeholder: #2a211a;
+  /* App-private Forge tokens (--cg-*): never repurpose upstream names.
+     --cg-hot is the amber→ember gradient reserved for the brand tile and
+     the one filled primary moment per screen; --cg-scrim warms the
+     modal/lightbox scrim so media stages on charcoal, not neutral black. */
+  --cg-hot: linear-gradient(135deg, #ffb020, #f59e0b 55%, #d97706);
+  --cg-scrim: rgba(23, 16, 10, 0.72);
 }
 
 [data-theme='light'][data-palette='forge'] {
+  --civitai-radius: 0.5rem;
+  --civitai-color-gray-0: #faf7f2;
+  --civitai-color-gray-1: #f3eee6;
+  --civitai-color-gray-2: #e9e1d3;
+  --civitai-color-gray-3: #d9cdb8;
+  --civitai-color-gray-4: #c4b49a;
+  --civitai-color-gray-5: #a89378;
+  --civitai-color-gray-6: #8a765e;
+  --civitai-color-gray-7: #57493a;
+  --civitai-color-gray-8: #3a2f24;
+  --civitai-color-gray-9: #241c14;
   --civitai-color-text: #2a2018;
   --civitai-color-text-dimmed: #7a6a55;
   --civitai-color-body: #faf5ec;
@@ -51,5 +85,7 @@
   --civitai-color-track: #f3ead9;
   --civitai-color-segmented-bg: #f3ead9;
   --civitai-color-media-placeholder: #f3ead9;
+  --cg-hot: linear-gradient(135deg, #f59e0b, #d97706 55%, #b45309);
+  --cg-scrim: rgba(42, 32, 24, 0.5);
 }
 
