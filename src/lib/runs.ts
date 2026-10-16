@@ -73,8 +73,12 @@ export const KEPT_PAGE_LIMIT = 100;
  */
 export const KEPT_LIST_LIMIT = 200;
 
-/** Hard bound on list calls per gallery read, whatever the store answers. */
-export const KEPT_LIST_MAX_PAGES = Math.ceil(KEPT_LIST_LIMIT / KEPT_PAGE_LIMIT) + 1;
+/**
+ * Hard bound on list calls per gallery read, whatever the store answers. Two
+ * full pages reach the horizon; the headroom lets a store that short-fills its
+ * pages still reach it, while an empty page carrying a cursor cannot spin.
+ */
+export const KEPT_LIST_MAX_PAGES = 8;
 
 export function keptKey(id: string): string {
   return KEPT_PREFIX + id;

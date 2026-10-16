@@ -106,6 +106,9 @@ function asPublishRefusal(err: unknown): never {
   if (err instanceof StorageError) {
     throw new SharedWriteRefusal(publishRefusalMessage(err), err.code, { cause: err });
   }
+  // Logged, so a genuine bug behind the generic copy stays attributable.
+  // eslint-disable-next-line no-console
+  console.warn('[custom-generators] shared write failed', err);
   throw new SharedWriteRefusal(publishRefusalMessage({ code: 'unknown' }), 'unknown', { cause: err });
 }
 

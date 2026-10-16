@@ -214,8 +214,10 @@ describe('the gallery reads the viewer NEWEST runs, and reports what it left out
     };
     const page = await listKeptRuns(stuck);
     expect(calls).toBe(KEPT_LIST_MAX_PAGES);
-    expect(calls).toBe(3);
+    expect(calls).toBe(8);
     expect(page.runs).toEqual([]);
+    // The cap ended the read with a cursor in hand: say rows were left out.
+    expect(page.truncated).toBe(true);
   });
 
   /**

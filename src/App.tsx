@@ -250,7 +250,8 @@ export const DISCOVER_LIST_LIMIT = 50;
  *
  * 🔴 A LARGER VALUE IS REFUSED, NOT CLAMPED — the store answers `invalid_request`,
  * measured against the SDK's contract fake. `platform/sharedStorage.ts` clamps to
- * the same number before sending, so raising this past 100 is silently clamped.
+ * the same number before sending: the STORE refuses a larger value, and the
+ * ADAPTER clamps to 100 so it is never sent — raising this past 100 changes nothing.
  * `components/Browse.ranking.test.tsx` pins it as a literal `100` on the opts
  * handed to `deps.shared` and on the wire.
  */
