@@ -918,7 +918,7 @@ export function Runner(props: RunnerProps) {
                       )}
                       <Group gap={8} align="center">
                         <span
-                          style={{ ...metaText, fontVariantNumeric: 'tabular-nums' }}
+                          style={{ ...metaText, fontVariantNumeric: 'tabular-nums', fontFamily: 'var(--civitai-font-mono)' }}
                           data-testid="preset-cost"
                         >
                           ≈ {preset.approxCostBuzz} ⚡
@@ -1009,7 +1009,7 @@ export function Runner(props: RunnerProps) {
                   return (
                     <Stack gap={8}>
                       <Group justify="space-between">
-                        <span style={{ fontSize: 14, fontVariantNumeric: 'tabular-nums' }} data-testid="queue-cost">
+                        <span style={{ fontSize: 14, fontVariantNumeric: 'tabular-nums', fontFamily: 'var(--civitai-font-mono)' }} data-testid="queue-cost">
                           ≈ {it.estimatedCost ?? '—'} ⚡
                         </span>
                         <Group gap={6}>

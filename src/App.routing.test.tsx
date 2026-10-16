@@ -18,7 +18,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { Harness, pushFromHost, setHostSnapshot } from './platform/testing.js';
 
 import { App, type AppDeps } from './App.js';
-import { defaultParams } from './lib/generator.js';
+import { defaultParams, newGenerator } from './lib/generator.js';
+import { saveDraft } from './lib/drafts.js';
 import { fakeShared, immediateSleep, memoryDraftStore, mockWorkflow } from './test-helpers.js';
 import type { SharedListItem } from './platform/index.js';
 
@@ -189,6 +190,86 @@ describe('host route — the app writes it back', () => {
     const { navigate } = setup({ subPath: `g/${KEY_A}` });
     await runnerTitle();
     expect(navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe('host route — pages (sections, builder, draft runner)', () => {
+  async function setupWithDraft(subPath?: string) {
+    const store = memoryDraftStore();
+    const config = newGenerator();
+    config.name = 'Drafty';
+    await saveDraft(store, { id: 'gen_draft1', config, updatedAt: Date.now() });
+    const shared = fakeShared([seed(KEY_A, 'Alpha')]);
+    const wf = mockWorkflow({ cost: 12, images: [] });
+    const navigate = vi.fn();
+    const deps: Partial<AppDeps> = {
+      resolveResources: async () => [],
+      shared: shared.shared,
+      updateSharedGenerator: shared.update,
+      drafts: store,
+      estimate: wf.estimate,
+      submit: wf.submit,
+      poll: wf.poll,
+      pollIntervalMs: 0,
+      sleep: immediateSleep,
+      navigate,
+      copyToClipboard: vi.fn(async () => {}),
+      getHref: () => 'https://custom-generators.civit.ai/',
+      getDeeplinkKey: () => null,
+    };
+    render(
+      <Harness viewer={{ id: 99, username: 'me' }} theme="dark" subPath={subPath}>
+        <App deps={deps} />
+      </Harness>,
+    );
+    return { navigate };
+  }
+
+  it('a page opened AT mine lands on My generators', async () => {
+    await setupWithDraft('mine');
+    await waitFor(() => expect(screen.getByTestId('tab-mine')).toHaveAttribute('aria-selected', 'true'));
+  });
+
+  it('switching sections pushes the section page, and ROUTE_CHANGED back returns', async () => {
+    const { navigate } = await setupWithDraft();
+    await screen.findAllByTestId('published-card');
+    await userEvent.click(screen.getByTestId('tab-mine'));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('mine'));
+    await waitFor(() => expect(screen.getByTestId('tab-mine')).toHaveAttribute('aria-selected', 'true'));
+    // The host echoes the shallow push, then native Back pops to the root.
+    act(() => pushFromHost('ROUTE_CHANGED', { subPath: 'mine' }));
+    act(() => pushFromHost('ROUTE_CHANGED', { subPath: '' }));
+    await waitFor(() => expect(screen.getByTestId('tab-discover')).toHaveAttribute('aria-selected', 'true'));
+  });
+
+  it('Create pushes the builder page; ROUTE_CHANGED to the root leaves the builder', async () => {
+    const { navigate } = await setupWithDraft();
+    await screen.findAllByTestId('published-card');
+    await userEvent.click(screen.getByTestId('create-generator'));
+    await screen.findByTestId('builder');
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('build'));
+    act(() => pushFromHost('ROUTE_CHANGED', { subPath: 'build' }));
+    act(() => pushFromHost('ROUTE_CHANGED', { subPath: '' }));
+    await screen.findByTestId('browse');
+    expect(screen.queryByTestId('builder')).not.toBeInTheDocument();
+  });
+
+  it('a page opened AT build/<draftId> opens that draft in the builder', async () => {
+    await setupWithDraft('build/gen_draft1');
+    await screen.findByTestId('builder');
+    expect(screen.getByTestId('gen-name')).toHaveValue('Drafty');
+  });
+
+  it('a page opened AT d/<draftId> opens that draft in the runner', async () => {
+    await setupWithDraft('d/gen_draft1');
+    await screen.findByTestId('runner');
+    expect(screen.getByTestId('runner-title')).toHaveTextContent('Drafty');
+  });
+
+  it('an unknown draft page opens nothing', async () => {
+    await setupWithDraft('build/gen_nope');
+    await screen.findByTestId('browse');
+    expect(screen.queryByTestId('builder')).not.toBeInTheDocument();
   });
 });
 

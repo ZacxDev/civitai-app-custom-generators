@@ -27,7 +27,7 @@ const LOCAL_UI_CSS = `
 [data-civitai-ui='modal-overlay'] {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--cg-scrim, rgba(0, 0, 0, 0.55));
   display: flex;
   align-items: flex-start;
   justify-content: center;
