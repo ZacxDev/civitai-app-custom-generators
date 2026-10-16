@@ -765,7 +765,9 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
     if (options.imagePickerError !== undefined) throw new Error(options.imagePickerError);
     const sources = (params as { sources?: string[] })?.sources ?? ['posted', 'generated'];
     const pick = (options.cannedImagePicks ?? []).find((p) => sources.includes(p.source));
-    return { selected: pick ?? null };
+    // The real host answers a dismissal with no `selected` key at all
+    // (civitai `buildImagePickerReply`), never `selected: null`.
+    return pick ? { selected: pick } : {};
   });
 
   fake.handle('PUBLISH_GENERATION_OUTPUTS', (params) => {
