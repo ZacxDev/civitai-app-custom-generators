@@ -55,8 +55,10 @@ import type { BackgroundScanResult, GeneratorConfig } from './types.js';
 import { newGenerator, newId } from './lib/generator.js';
 import {
   buildPublishPayload,
+  cardCoverImageIdOf,
   cloneConfigForFork,
   collectVersionIds,
+  coverImageIdOf,
   headerImageRefOf,
   parsePublishedGenerator,
   rehydrateConfig,
@@ -708,7 +710,34 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   const handleKeepRun = useCallback(async (run: KeptRun) => {
     await saveKeptRun(depsRef.current.drafts, run);
     setKeptRuns((prev) => [run, ...prev.filter((r) => r.id !== run.id)]);
-  }, []);
+    // ── AUTO CARD COVER ─────────────────────────────────────────────────────
+    // A kept run's images are PUBLISHED Civitai Image rows. When the OWNER of
+    // a published generator keeps its first output and has set neither a
+    // header image nor a cover, that first output becomes the generator's
+    // card cover by default (owner-set header always wins — this only fills
+    // an empty slot, once). Best-effort: a failure here never fails the keep.
+    try {
+      const key = run.generatorKey;
+      const firstImageId = run.imageIds[0];
+      if (!key || typeof firstImageId !== 'number' || !viewer) return;
+      const row = sharedRef.current.find((s) => s.key === key);
+      if (!row || row.authorUserId !== viewer.id) return;
+      if (headerImageRefOf(row.value) || coverImageIdOf(row.value) !== undefined) return;
+      const cfg = parsePublishedGenerator(row.value);
+      if (!cfg) return;
+      const next: GeneratorConfig = { ...cfg, coverImageId: firstImageId };
+      await depsRef.current.updateSharedGenerator(key, buildPublishPayload(next));
+      setShared((prev) =>
+        prev.map((s) =>
+          s.key === key
+            ? { ...s, value: { ...s.value, data: { ...(s.value.data as Record<string, unknown>), coverImageId: firstImageId } } }
+            : s,
+        ),
+      );
+    } catch {
+      /* best-effort — the keep itself already succeeded */
+    }
+  }, [viewer]);
 
   /**
    * Images just joined a POST, so they have left this app's gallery for good —
@@ -777,7 +806,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   useEffect(() => {
     const wanted = new Set<number>();
     for (const item of shared) {
-      const id = headerImageRefOf(item.value)?.imageId;
+      const id = cardCoverImageIdOf(item.value);
       if (typeof id === 'number') wanted.add(id);
     }
     const missing = [...wanted].filter((id) => !(id in coverUrls));
@@ -823,7 +852,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   // Card cover lookup passed to Browse: the resolved moderated url, or null.
   const coverUrlFor = useCallback(
     (item: SharedListItem): string | null => {
-      const id = headerImageRefOf(item.value)?.imageId;
+      const id = cardCoverImageIdOf(item.value);
       return typeof id === 'number' ? coverUrls[id] ?? null : null;
     },
     [coverUrls],

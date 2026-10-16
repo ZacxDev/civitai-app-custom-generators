@@ -506,6 +506,10 @@ export function buildPublishPayload(config: GeneratorConfig): SharedStorageValue
     v: 1,
     buttons: config.buttons.map(sanitizeButton),
     headerImageRef: config.headerImageRef,
+    coverImageId:
+      typeof config.coverImageId === 'number' && Number.isFinite(config.coverImageId)
+        ? config.coverImageId
+        : undefined,
     promptPlaceholder: config.promptPlaceholder?.trim() || undefined,
   };
   return { title, body, data };
@@ -567,6 +571,10 @@ export function parsePublishedGenerator(value: SharedStorageValue): GeneratorCon
     // `backgroundImageRef` (rows published before the header-image rename) so an
     // already-published generator never loses its cover image on load.
     headerImageRef: data.headerImageRef ?? data.backgroundImageRef,
+    coverImageId:
+      typeof data.coverImageId === 'number' && Number.isFinite(data.coverImageId)
+        ? data.coverImageId
+        : undefined,
     promptPlaceholder: typeof data.promptPlaceholder === 'string' ? data.promptPlaceholder : undefined,
   };
 }
@@ -580,6 +588,22 @@ export function parsePublishedGenerator(value: SharedStorageValue): GeneratorCon
 export function headerImageRefOf(value: SharedStorageValue): HeaderImageRef | undefined {
   const data = value.data as GeneratorData | undefined;
   return data?.headerImageRef ?? data?.backgroundImageRef;
+}
+
+/** The auto-default card-cover image id stored on a published record, if any. */
+export function coverImageIdOf(value: SharedStorageValue): number | undefined {
+  const data = value.data as GeneratorData | undefined;
+  return typeof data?.coverImageId === 'number' && Number.isFinite(data.coverImageId)
+    ? data.coverImageId
+    : undefined;
+}
+
+/**
+ * The image id a LIST CARD shows for this record: the owner-set header image
+ * wins; otherwise the auto-default cover (the owner's first published output).
+ */
+export function cardCoverImageIdOf(value: SharedStorageValue): number | undefined {
+  return headerImageRefOf(value)?.imageId ?? coverImageIdOf(value);
 }
 
 function firstParagraph(body: string | undefined): string {

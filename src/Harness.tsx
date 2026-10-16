@@ -31,6 +31,10 @@ export function Harness({ children }: { children: ReactNode }) {
       buzz={{ balance: 5000 }}
       buzzBalance={{ blue: 1200, green: 0, yellow: 5000 }}
       generation={{ costPerGen: 12, latencyMs: 400, images: ['https://image.civitai.com/demo/out.jpeg'] }}
+      gatedImages={[
+        { imageId: 555001, status: 'visible', url: 'https://picsum.photos/seed/cg-header/800/450', width: 800, height: 450 },
+        { imageId: 555002, status: 'visible', url: 'https://picsum.photos/seed/cg-cover/800/450', width: 800, height: 450 },
+      ]}
       shared={{ seed: DEMO_SHARED_SEED }}
     >
       {children}

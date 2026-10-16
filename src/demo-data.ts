@@ -33,6 +33,7 @@ export const DEMO_GENERATOR: GeneratorConfig = {
     }),
   ],
   headerImageRef: { imageId: 555001, url: 'https://image.civitai.com/demo/header.jpeg' },
+  coverImageId: 555002,
 };
 
 export const DEMO_SHARED_SEED: MockSharedSeed[] = [

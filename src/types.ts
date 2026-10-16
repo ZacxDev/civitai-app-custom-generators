@@ -96,6 +96,13 @@ export interface GeneratorConfig {
   buttons: GenButton[];
   headerImageRef?: HeaderImageRef;
   /**
+   * Card-cover image id (a durable Civitai Image row). Set AUTOMATICALLY to
+   * the owner's first kept output of this generator when they have not chosen
+   * a header image — list cards show it when no header image is set. Owner-set
+   * header always wins; this is the default, never an override.
+   */
+  coverImageId?: number;
+  /**
    * Placeholder text for the Runner's shared prompt box (a gentle nudge to the
    * runner about what to type). Cosmetic + user-authored, so it's moderated
    * alongside the rest of the visible text. Falls back to a sensible default
@@ -111,6 +118,8 @@ export interface GeneratorData {
   workflowVersion?: string;
   buttons: GenButton[];
   headerImageRef?: HeaderImageRef;
+  /** Auto-default card cover (first published output); see GeneratorConfig. */
+  coverImageId?: number;
   /**
    * @deprecated Legacy field — generators published before the "header image"
    * rename stored the cover under `backgroundImageRef`. The READ path
