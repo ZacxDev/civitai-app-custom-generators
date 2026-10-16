@@ -4,7 +4,6 @@ import type { DraftStore } from './drafts.js';
 import {
   GATED_READ_MAX_IDS,
   KEPT_LIST_LIMIT,
-  KEPT_LIST_MAX_PAGES,
   KEPT_PAGE_LIMIT,
   KEPT_PREFIX,
   chunkImageIds,
@@ -75,16 +74,15 @@ describe('kept-run storage', () => {
 });
 
 /**
- * 🔴 THE HORIZON IS THE OLDEST RUNS NOW, AND THAT IS THE WHOLE POINT. This read
- * used to take ONE page. The host lists `ORDER BY key` ascending and
- * `newId('kept')` leads with a base-36 `Date.now()` stamp, so key order IS
- * chronological order — meaning the single page was the viewer's **oldest** N,
- * and the keep they had just made was the first thing missing from the gallery
- * that exists to show it. The PR that shipped that also asserted "no forward-only
- * paging recovers them"; forward paging is exactly what recovers them.
+ * 🔴 THE HORIZON IS THE OLDEST RUNS, AND THE READ STARTS AT THE NEWEST. Every kept
+ * id leads with a base-36 `Date.now()` stamp, so key order is chronological, and
+ * the document store lists by `-key` — the read begins at the viewer's most recent
+ * keep and stops at `KEPT_LIST_LIMIT`, whatever the store holds.
  *
- * So: walk the KEYS forward to the end (cheap — `list` returns no values), hydrate
- * the TAIL, and report whether anything was left outside it.
+ * ⚠️ What it replaced: the legacy KV listed ascending only, so the read walked
+ * every key forward (8 pages of 200 + a 1-row probe) and kept the tail; a store
+ * past that walk's bound showed a tail that was NOT the newest, which the gallery
+ * then had to disclose as `incomplete`.
  */
 describe('the gallery reads the viewer NEWEST runs, and reports what it left out', () => {
   /** `n` runs whose KEYS ascend with time, exactly as `newId('kept')` mints them. */
@@ -98,12 +96,27 @@ describe('the gallery reads the viewer NEWEST runs, and reports what it left out
 
   const id = (i: number) => `k${String(i).padStart(5, '0')}`;
 
+  /** Records every `list` call's opts and counts `get`s. */
+  function spy(store: DraftStore) {
+    const calls = { list: [] as Array<Parameters<DraftStore['list']>[0]>, get: 0 };
+    const wrapped: DraftStore = {
+      ...store,
+      async get(key) {
+        calls.get += 1;
+        return store.get(key);
+      },
+      async list(opts) {
+        calls.list.push(opts);
+        return store.list(opts);
+      },
+    };
+    return { wrapped, calls };
+  }
+
   /**
    * 🔴 THE REGRESSION. Past the horizon it is the OLDEST runs that go, and the
    * newest — the one the viewer just kept — is present. A fixture at
-   * `KEPT_LIST_LIMIT + 1` puts exactly one run outside the window, so an
-   * implementation that takes the head instead of the tail differs on it by
-   * exactly the two ids asserted here.
+   * `KEPT_LIST_LIMIT + 1` puts exactly one run outside the window.
    */
   it('keeps the newest runs and drops the oldest past the horizon', async () => {
     const store = memoryDraftStore();
@@ -112,32 +125,22 @@ describe('the gallery reads the viewer NEWEST runs, and reports what it left out
     const ids = runs.map((r) => r.id);
 
     expect(runs).toHaveLength(KEPT_LIST_LIMIT);
-    // The most recent keep is there…
-    expect(ids).toContain(id(KEPT_LIST_LIMIT));
     expect(ids[0]).toBe(id(KEPT_LIST_LIMIT));
-    // …and the very first one is what fell outside.
     expect(ids).not.toContain(id(0));
     expect(truncated).toBe(true);
   });
 
-  /**
-   * 🔴 The walk crosses page boundaries, which is the mechanism the old read did
-   * not have. `KEPT_PAGE_LIMIT` is the host's per-call maximum, so reaching a run
-   * at index 200+ requires a second `list` with the first page's cursor.
-   */
-  it('crosses page boundaries to reach a run the first page cannot hold', async () => {
+  it('crosses a page boundary to fill the horizon', async () => {
     const store = memoryDraftStore();
     await seed(store, KEPT_PAGE_LIMIT + 5);
     const ids = (await listKeptRuns(store)).runs.map((r) => r.id);
     expect(ids).toContain(id(KEPT_PAGE_LIMIT + 4));
-    expect(ids).toContain(id(KEPT_PAGE_LIMIT));
+    expect(ids).toContain(id(0));
   });
 
   /**
-   * 🔴 `truncated` is now a DEFINITE claim, where the one-page version could only
-   * hedge: a store holding exactly `KEPT_LIST_LIMIT` runs used to trip the flag
-   * because its single page FILLED, so the UI had to say "may not be here" about
-   * a set that was complete. Enumerating the keys removes the ambiguity.
+   * `truncated` is a DEFINITE claim: the store's cursor is exact, so a store
+   * holding exactly the horizon is complete and one more row is not.
    */
   it('reports nothing left out when the store holds exactly the horizon', async () => {
     const store = memoryDraftStore();
@@ -146,187 +149,70 @@ describe('the gallery reads the viewer NEWEST runs, and reports what it left out
     expect(page.runs).toHaveLength(KEPT_LIST_LIMIT);
     expect(page.truncated).toBe(false);
 
-    // NEGATIVE CONTROL at the other side of the boundary: one row more and the
-    // flag must go the other way.
+    // NEGATIVE CONTROL at the other side of the boundary.
     const over = memoryDraftStore();
     await seed(over, KEPT_LIST_LIMIT + 1);
     expect((await listKeptRuns(over)).truncated).toBe(true);
   });
 
   /**
-   * 🔴 THE WALK IS BOUNDED. A store that keeps offering a cursor must not turn a
-   * gallery open into an unbounded request loop — so the walk stops at
-   * `KEPT_LIST_MAX_PAGES` and REPORTS that it did rather than presenting what it
-   * has as the whole set.
-   *
-   * The ceiling asserted here is `KEPT_LIST_MAX_PAGES + 1`, not
-   * `KEPT_LIST_MAX_PAGES`: a walk that uses every enumerating page then spends
-   * ONE `KEPT_LIST_PROBE_LIMIT`-row `list` to tell "the store ended exactly on
-   * the boundary" from "there is more behind it" — the state a filled last page
-   * cannot distinguish on the cursor alone. The number is still fixed and still
-   * independent of how much this store claims to hold, which is the property
-   * this test exists to pin.
+   * 🔴 FAR PAST WHERE THE OLD FORWARD WALK GAVE UP (8 × 200 = 1,600 keys), the
+   * newest keep is still the first thing shown, and nothing is "incomplete". The
+   * old read showed the tail of the first 1,600 keys here — none of the viewer's
+   * 100 most recent keeps.
    */
-  it('stops at the page bound and still reports the truncation', async () => {
-    const inner = memoryDraftStore();
+  it('shows the newest keep however large the store is', async () => {
+    const store = memoryDraftStore();
+    const n = 1_700;
+    await seed(store, n);
+    const page = await listKeptRuns(store);
+    expect(page.runs[0]?.id).toBe(id(n - 1));
+    expect(page.incomplete).toBe(false);
+    expect(page.truncated).toBe(true);
+  });
+
+  /**
+   * 🔴 THE READ IS BOUNDED BY THE HORIZON, NOT BY THE STORE: a store that never
+   * stops offering a cursor costs exactly `KEPT_LIST_LIMIT / KEPT_PAGE_LIMIT`
+   * lists. The fixture is genuinely endless — every page fills and has a successor.
+   */
+  it('stops once it holds the horizon, however endless the store', async () => {
     let calls = 0;
-    // 🔴 GENUINELY ENDLESS, not merely cursor-happy. An earlier version of this
-    // fixture wrapped a ONE-ROW store and forced a cursor onto every reply — a
-    // store that CLAIMS to continue and does not. The exhaustion probe reads
-    // that correctly as exhausted, which is the right answer and the wrong
-    // fixture for this test: what is under test here is the bound, so every
-    // page must actually FILL and actually have a successor.
     const endless: DraftStore = {
-      ...inner,
+      ...memoryDraftStore(),
       async list(opts) {
         calls += 1;
         const limit = opts?.limit ?? KEPT_PAGE_LIMIT;
         return {
-          keys: Array.from({ length: limit }, (_, i) => ({ key: `kept:p${calls}_${i}` })),
-          nextCursor: 'a2VwdDp6eno=',
+          keys: Array.from({ length: limit }, (_, i) => ({
+            key: `kept:p${calls}_${i}`,
+            value: run({ id: `p${calls}_${i}`, keptAt: -(calls * 1000 + i) }),
+          })),
+          nextCursor: 'bW9yZQ==',
         };
       },
     };
-
     const page = await listKeptRuns(endless);
-
-    // 🔴 THE ONE PROBE-SENSITIVE ASSERTION IN THIS TEST, and the file should say
-    // which it is. `calls` pins the BOUND (8 enumerating pages + 1 exhaustion
-    // probe: delete the probe and this reads 8). `truncated` pins nothing about
-    // the probe — `1,600 enumerated keys > a 200-row horizon` carries it on its
-    // own, whatever `more` comes back as. `incomplete` is the only one that
-    // moves with the probe's answer, so it is the assertion that makes this a
-    // test about the bound rather than about the horizon.
-    expect(calls).toBe(KEPT_LIST_MAX_PAGES + 1);
-    expect(page.incomplete).toBe(true);
-    expect(page.truncated).toBe(true);
-
-    // 🔴 PINNED BECAUSE IT IS SURPRISING, not because the feature needs it: this
-    // fixture is KEYS-ONLY. `endless.list` synthesises `kept:pN_i` keys that
-    // `inner` was never asked to hold, so every `get` behind them resolves
-    // `null` and the hydrated set is empty. An earlier version of this test
-    // seeded one real run into `inner` and asserted nothing about it — the
-    // replacement fixture had made that line dead (deleting it changed no
-    // result), and a reader would reasonably have assumed the grid held a row.
-    // The bound is a property of the KEY walk, which is why the test still says
-    // what it claims to say with nothing hydrated.
-    expect(page.runs).toHaveLength(0);
-  });
-
-  /**
-   * 🔴 THE CUT-SHORT WALK IS NOT THE NEWEST, AND THE PAGE NOW SAYS SO. The test
-   * above seeds ONE run, so its tail is trivially correct and it can only prove
-   * the walk stops — it cannot see what the stopped walk CONTAINS. This one puts
-   * real rows past the bound.
-   *
-   * `KEPT_LIST_MAX_PAGES * KEPT_PAGE_LIMIT` keys are enumerable; seeding 100 more
-   * than that leaves the viewer's 100 most recent keeps outside the walk
-   * entirely. The tail of that prefix is therefore the newest of the OLDER part
-   * of the store — genuinely not the viewer's most recent — and `incomplete` is
-   * the fact that says so. The overshoot is deliberate: at exactly the bound the
-   * walk completes and the distinction is unreachable.
-   */
-  it('reports a cut-short walk as incomplete, because its tail is not the newest', async () => {
-    const enumerable = KEPT_LIST_MAX_PAGES * KEPT_PAGE_LIMIT;
-    const beyond = 100;
-    const store = memoryDraftStore();
-    await seed(store, enumerable + beyond);
-
-    const page = await listKeptRuns(store);
-
-    // The walk was cut short: both facts are true and they are DIFFERENT facts.
-    expect(page.incomplete).toBe(true);
-    expect(page.truncated).toBe(true);
-
-    const ids = page.runs.map((r) => r.id);
-    // What it holds is the tail of the ENUMERATED prefix…
-    expect(ids[0]).toBe(id(enumerable - 1));
-    // …and the viewer's most recent keeps were never enumerated at all. This is
-    // the honest, uncomfortable half — asserted rather than papered over.
-    expect(ids).not.toContain(id(enumerable + beyond - 1));
-  });
-
-  /**
-   * NEGATIVE CONTROL for the flag: a walk that reaches the end of the store is
-   * complete even when it left older runs outside the hydration horizon. Without
-   * this, `incomplete: true` would be indistinguishable from `incomplete:
-   * truncated`.
-   */
-  it('does not call a completed walk incomplete, even when it truncated', async () => {
-    const store = memoryDraftStore();
-    await seed(store, KEPT_LIST_LIMIT + 1);
-    const page = await listKeptRuns(store);
+    expect(calls).toBe(Math.ceil(KEPT_LIST_LIMIT / KEPT_PAGE_LIMIT));
+    expect(page.runs).toHaveLength(KEPT_LIST_LIMIT);
     expect(page.truncated).toBe(true);
     expect(page.incomplete).toBe(false);
   });
 
   /**
-   * 🔴 EXACTLY AT THE BOUND THE WALK IS COMPLETE, AND SAYING OTHERWISE PUTS A
-   * FALSE SENTENCE ON SCREEN. The host emits `nextCursor` if and only if the
-   * page FILLED (`rows.length === input.limit`, civitai `apps.router`
-   * `storage.list`), so a store holding exactly
-   * `KEPT_LIST_MAX_PAGES * KEPT_PAGE_LIMIT` keys fills the last enumerable page
-   * and hands back a cursor for a store that has nothing further. A walk that
-   * reads "cursor ⇒ more" therefore reported `incomplete` over a set it had
-   * enumerated in full — and `INCOMPLETE_NOTICE` opens *"You've kept more than
-   * this app can list"*, which is flatly false there, with the newest keep
-   * sitting in the grid underneath it.
-   *
-   * The two assertions are one claim: the flag is false AND the newest keep is
-   * present. Asserting only the flag would pass for an implementation that
-   * enumerated the wrong set.
-   *
-   * ⚠️ The test above deliberately overshoots the bound by 100 and notes that
-   * "at exactly the bound the walk completes"; it explains that fixture's shape
-   * and does NOT cover this state. This is the boundary itself.
+   * The store's own list contract — the opts the walk sends. 🔴 A `limit` above
+   * 100 is REFUSED by the document store (the legacy KV allowed 200), and values
+   * come off the pages, so no `get` is spent per run.
    */
-  it('does not call the walk incomplete when the store ends exactly at the bound', async () => {
-    const exact = KEPT_LIST_MAX_PAGES * KEPT_PAGE_LIMIT;
+  it('asks newest-first, at most the store page ceiling, and never gets per key', async () => {
     const store = memoryDraftStore();
-    await seed(store, exact);
-
-    const page = await listKeptRuns(store);
-
-    expect(page.incomplete).toBe(false);
-    // The genuinely newest keep IS present — the walk reached the end.
-    expect(page.runs[0]?.id).toBe(id(exact - 1));
-    // Older keeps still fell outside the hydration horizon, which is the OTHER
-    // fact and stays true.
-    expect(page.truncated).toBe(true);
-  });
-
-  /**
-   * NEGATIVE CONTROL at the other side of that boundary: one key PAST the bound
-   * and the walk genuinely cannot see the newest, so the flag must go the other
-   * way. Without this arm the fix above is indistinguishable from hardcoding
-   * `incomplete: false`.
-   */
-  it('still reports incomplete one key past the bound', async () => {
-    const store = memoryDraftStore();
-    const beyond = KEPT_LIST_MAX_PAGES * KEPT_PAGE_LIMIT + 1;
-    await seed(store, beyond);
-
-    const page = await listKeptRuns(store);
-
-    expect(page.incomplete).toBe(true);
-    expect(page.runs.map((r) => r.id)).not.toContain(id(beyond - 1));
-  });
-
-  /** The store's own list contract — the thing the walk's exit condition reads. */
-  it('asks the host for its maximum page size, never more', async () => {
-    const store = memoryDraftStore();
-    const limits: Array<number | undefined> = [];
-    const spy: DraftStore = {
-      ...store,
-      async list(opts) {
-        limits.push(opts?.limit);
-        return store.list(opts);
-      },
-    };
     await seed(store, 3);
-    await listKeptRuns(spy);
-    expect(limits).toEqual([KEPT_PAGE_LIMIT]);
-    expect(KEPT_PAGE_LIMIT).toBe(200);
+    const { wrapped, calls } = spy(store);
+    const page = await listKeptRuns(wrapped);
+    expect(page.runs.map((r) => r.id)).toEqual([id(2), id(1), id(0)]);
+    expect(calls.list).toEqual([{ prefix: KEPT_PREFIX, limit: 100, cursor: undefined, newestFirst: true }]);
+    expect(calls.get).toBe(0);
+    expect(KEPT_PAGE_LIMIT).toBe(100);
   });
 });
 

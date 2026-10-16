@@ -114,8 +114,13 @@ describe('the platform seam', () => {
     expect(importers.length).toBeGreaterThan(0);
     expect(importers.filter((f) => !f.startsWith('platform/'))).toEqual([]);
     expect(importers).toEqual([
+      'platform/appStorage.test.ts',
+      'platform/appStorage.ts',
       'platform/client.ts',
+      'platform/docStore.ts',
       'platform/hooks.ts',
+      'platform/sharedStorage.test.ts',
+      'platform/sharedStorage.ts',
       'platform/storeListings.ts',
       'platform/testing.tsx',
       'platform/workflows.ts',

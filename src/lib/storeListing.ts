@@ -345,8 +345,18 @@ export async function reconcileStoreListings(args: {
       // Remember only refusals a retry will not change. A lost write race (409) is
       // worth retrying, and `invalid_body` is this app's own bug, which a later
       // build can fix — remembering it would outlive the fix.
+      //
+      // 🔴 `item_not_found` IS NOT REMEMBERED EITHER, since the document-store port
+      // (0.13.0). The store validates `itemKey` against the LEGACY shared store, so
+      // every generator published to the document store is refused that way until
+      // the server learns the new store — a platform gap, not a property of the
+      // item. Remembering it would keep those generators out of the store forever
+      // after that fix ships; not remembering costs at most `maxUpserts` refused
+      // writes per BACKFILL_INTERVAL_MS meanwhile.
       const code = err instanceof StoreListingError ? err.code : null;
-      const retryable = err instanceof StoreListingError && (err.status === 409 || code === 'invalid_body');
+      const retryable =
+        err instanceof StoreListingError &&
+        (err.status === 409 || code === 'invalid_body' || code === 'item_not_found');
       if (!retryable) refused.add(input.itemKey);
     }
   }

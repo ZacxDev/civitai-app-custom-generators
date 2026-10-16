@@ -1,4 +1,4 @@
-// Block-scope constants used by the app. All eight are declared in the manifest.
+// Block-scope constants used by the app. All six are declared in the manifest.
 //
 // `ai:write:budgeted` is CONSENT-GATED: the host mints the first token WITHOUT
 // it and only adds it after the viewer grants consent (REQUEST_CONSENT →
@@ -9,10 +9,19 @@ import { BLOCK_SCOPES } from '@civitai/app-sdk/blocks';
 
 export const AI_WRITE_BUDGETED = 'ai:write:budgeted';
 export const BUZZ_READ_SELF = 'buzz:read:self';
-export const APPS_STORAGE_READ = 'apps:storage:read';
-export const APPS_STORAGE_WRITE = 'apps:storage:write';
-export const APPS_STORAGE_SHARED_READ = 'apps:storage:shared:read';
-export const APPS_STORAGE_SHARED_WRITE = 'apps:storage:shared:write';
+/**
+ * The App Blocks document store: every read, the viewer's private `kv`
+ * collection, deleting their own documents, votes and reports. CONSENT-EXEMPT —
+ * the host mints it on the first token.
+ */
+export const APPS_STORAGE = BLOCK_SCOPES.APPS_STORAGE;
+/**
+ * Creating and editing documents in the shared `records` collection — publishing
+ * a generator, or editing a published one. 🔴 CONSENT-GATED like
+ * `ai:write:budgeted`: the first token does NOT carry it, so every path that
+ * publishes checks {@link hasPublishScope} and asks for it first.
+ */
+export const APPS_STORAGE_PUBLISH = BLOCK_SCOPES.APPS_STORAGE_PUBLISH;
 /**
  * Publish a REAL, feed-visible Post on the VIEWER'S profile from images this app
  * already published for them (`useCreatePostFromApp()`).
@@ -48,4 +57,9 @@ export function hasGenerateScope(tokenScopes: readonly string[] | undefined): bo
 /** Does the current token carry the App Store sub-listing scope? */
 export function hasStoreScope(tokenScopes: readonly string[] | undefined): boolean {
   return (tokenScopes ?? []).includes(APPS_STORE_ITEMS_WRITE);
+}
+
+/** Does the current token carry the shared-publish scope (consent-gated)? */
+export function hasPublishScope(tokenScopes: readonly string[] | undefined): boolean {
+  return (tokenScopes ?? []).includes(APPS_STORAGE_PUBLISH);
 }

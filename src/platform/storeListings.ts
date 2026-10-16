@@ -1,8 +1,21 @@
-// App Store sub-listings, over two of the routes under
-// `/api/v1/blocks/sub-listings/` (civitai/civitai#5511): `upsert` and `mine`.
-// The third, `withdraw`, is deliberately unused: civitai's shared-storage
-// withdraw already takes the author's store card down server-side, so calling
-// it from here would only spend one of the author's store writes.
+// App Store sub-listings, over the three routes under
+// `/api/v1/blocks/sub-listings/` (civitai/civitai#5511): `upsert`, `mine` and
+// `withdraw`.
+//
+// 🔴 `withdraw` IS CALLED FROM HERE SINCE THE DOCUMENT-STORE PORT (0.13.0), and
+// the reason it was not before no longer holds. The LEGACY shared-storage
+// withdraw took the author's store card down server-side before it answered, so
+// a second call from the app only spent a store write. A document-store `delete`
+// does no such thing — nothing on that path touches sub-listings — so without
+// this call a withdrawn generator's card would stay in the store, linking to a
+// generator that no longer opens.
+//
+// ⚠️ THE STORE STILL VALIDATES AN UPSERT AGAINST THE LEGACY SHARED STORE. The
+// server checks `itemKey` names a row the viewer wrote in the legacy shared
+// store; a generator published to the document store after go-live has no such
+// row, so its upsert is refused `item_not_found` until the server learns the
+// document store. Generators copied over at go-live keep their legacy row (the
+// copy does not delete it) and keep working. See `lib/storeListing.ts`.
 //
 // A parent app may place individual items it contains — here, one published
 // generator — into the `/apps` store as their own cards, badged "in Custom
@@ -10,7 +23,7 @@
 // the server; this app only supplies the `subPath` (`g/<key>`, the 0.9.2 host
 // route that opens the generator).
 //
-// Scope: `apps:store:items:write` on both, plus a signed-in subject. The
+// Scope: `apps:store:items:write` on all three, plus a signed-in subject. The
 // parent is the calling app's own listing, taken from the token — never the body.
 //
 // 🔴 THE UPSERT BODY IS `.strict()` SERVER-SIDE. Only `itemKey, title, tagline?,
@@ -60,6 +73,8 @@ export interface MyStoreListing {
 export interface StoreListings {
   upsert(input: StoreListingInput): Promise<StoreListingResult>;
   mine(): Promise<MyStoreListing[]>;
+  /** Take the viewer's own card for `itemKey` out of the store. `withdrawn: false` = there was none. */
+  withdraw(itemKey: string): Promise<{ withdrawn: boolean }>;
 }
 
 /**
@@ -149,6 +164,15 @@ export function createStoreListings(): StoreListings {
           });
         }
         return out;
+      });
+    },
+
+    withdraw(itemKey) {
+      return guarded(async () => {
+        const app = await getClient();
+        // The body is exactly `{ itemKey }` — the route's schema is strict.
+        const res = await app.site.post<{ withdrawn?: unknown }>('blocks/sub-listings/withdraw', { itemKey });
+        return { withdrawn: res?.withdrawn === true };
       });
     },
   };

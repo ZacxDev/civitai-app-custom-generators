@@ -36,6 +36,7 @@ import {
   useAppStorage,
   useHostRoute,
   createStoreListings,
+  requestGrants as platformRequestGrants,
 } from './platform/index.js';
 import type {
   SharedAppendValue,
@@ -47,7 +48,14 @@ import type {
 
 import { Loader } from './ui/index.js';
 
-import { AI_WRITE_BUDGETED, hasGenerateScope, hasStoreScope } from './scopes.js';
+import { AI_WRITE_BUDGETED, APPS_STORAGE_PUBLISH, hasGenerateScope, hasPublishScope, hasStoreScope } from './scopes.js';
+import {
+  isStorageRefusal,
+  PUBLISH_CONSENT_MESSAGE,
+  PUBLISH_SIGN_IN_MESSAGE,
+  SharedWriteRefusal,
+  storageFailureMessage,
+} from './lib/storageErrors.js';
 import { palette, pageStyle, contentStyle, metaText } from './theme.js';
 
 import { paintTheme } from './bootTheme.js';
@@ -155,9 +163,7 @@ export interface AppDeps {
   shared: UseSharedStorage;
   /**
    * In-place UPDATE of an already-published shared generator (same key, no new
-   * row). Kept as an injectable seam so the edit-in-place publish logic is fully
-   * built + tested now; the real host wiring (`useSharedStorage().update`) lands
-   * with @civitai/blocks-react 0.24 — see the App-level TODO.
+   * row) — `shared.update` by default; a separate seam so tests can observe it.
    */
   updateSharedGenerator: (key: string, value: SharedAppendValue) => Promise<void>;
   /**
@@ -168,6 +174,13 @@ export interface AppDeps {
   store: StoreListings;
   drafts: DraftStore;
   requestConsent: (opts: { scopes: string[] }) => void;
+  /**
+   * Ask for consent-gated scopes and WAIT for the answer: `true` once the token
+   * carries every one. 🔴 BOUNDED — the platform binding passes an `AbortSignal`
+   * timeout, so a dismissed dialog resolves `false` instead of parking the caller
+   * forever (`platform/hooks.ts`).
+   */
+  requestGrants: (scopes: string[]) => Promise<boolean>;
   requestSignIn: () => void;
   /** Open the host Buzz-purchase modal (insufficient-Buzz recovery). */
   openPurchaseModal: (suggestedAmount?: number) => Promise<PurchaseResult>;
@@ -220,83 +233,59 @@ export interface AppDeps {
  * is whole. 51 → 50 rendered, disclosed, and there really is a row it did not
  * show.
  *
- * ⚠️ WHY NOT THE {@link listKeptRuns} PROBE, WHICH IS THE SAME FIX ONE FILE
- * OVER. That path enumerates KEYS across up to 8 pages, so there is no single
- * read to widen and it settles the ambiguity with one extra 1-row `list` —
- * costing a round trip only for a viewer holding more than 1,600 keys. This path
- * is ONE read, and its page fills on any board with 50+ published generators,
- * i.e. the ordinary state of a healthy board on every Browse open and every
- * retry. A probe here would be a per-open round trip where over-fetching is a
- * per-open extra ROW. The over-fetch is also ATOMIC — one statement, one
- * snapshot — where a probe answers about a later instant. Same standard (make
- * the claim true, do not hedge it), cheaper instrument.
+ * ⚠️ SINCE THE DOCUMENT-STORE PORT (0.13.0) THE CURSOR IS EXACT — the store
+ * reads one row past the page and sends `nextCursor` only when it exists — so the
+ * defect above cannot recur through it. The `+1` is kept anyway: it costs one row,
+ * and it keeps this claim independent of whichever store answers.
  *
- * Bounded by the platform: the list route validates `limit` as
- * `.int().min(1).max(SHARED_LIST_LIMIT_MAX)` (100), so 51 passes through
- * unchanged and 99 is the largest value this constant can take before the `+1`
- * exceeds the route's maximum. ⚠️ What happens AT that boundary is a 400, not a
- * clamp — see {@link SHARED_LIST_LIMIT_MAX}, which carries the derivation.
- * Raising this to 100 or beyond therefore does NOT silently restore the
- * truncation defect, as an earlier version of this paragraph claimed: it fails
- * the Discover read outright, and `error` + Retry is what the viewer sees.
+ * Bounded by the store: a list `limit` above {@link SHARED_LIST_LIMIT_MAX} (100)
+ * is refused, and the adapter clamps to it, so 99 is the largest value this
+ * constant can take before the `+1` is silently clamped back to 100 — which WOULD
+ * restore the defect. Do not raise it past 99.
  */
 export const DISCOVER_LIST_LIMIT = 50;
 
 /**
- * The LARGEST `limit` the shared-storage list route will honour — the EXPORTED
- * `SHARED_LIST_LIMIT_MAX` in civitai
- * `src/server/routers/apps-shared.router.ts`, re-derived at `7ce2adf8`.
+ * The LARGEST `limit` one document-store list may ask for (`limits.listLimitMax`).
  *
- * 🔴 A MIRRORED SERVER CONSTANT WITH NO CLAMP ANYWHERE BEHIND IT, SO BOTH
- * DIRECTIONS OF DRIFT ARE WRONG — differently, which is why neither of them is
- * the safe one. Both surfaces validate `limit` as
- * `.int().min(1).max(SHARED_LIST_LIMIT_MAX)` — the REST adapter this app talks
- * to (civitai `src/pages/api/v1/blocks/shared-storage/list.ts`) and the tRPC
- * input. A zod `.max()` REJECTS; it does not clamp. The REST route answers a
- * failed `safeParse` with `400 Invalid query`. Nothing on this app's own path
- * clamps either: `platform/sharedStorage.ts` spreads `limit` into the query
- * string verbatim. So, concretely:
- *
- *   - a copy here ABOVE the server's number 400s the read that uses it. Today
- *     that is the `mine: true` read, whose rejection is confined to the
- *     "Published by me" panel (see the Browse load effect) — and that panel
- *     renders an empty state which does not distinguish "no rows" from "the
- *     read failed", so the 400 is loud on the wire and silent on screen.
- *   - a copy BELOW the server's number under-fetches with nothing on screen
- *     saying so: the viewer's own rows past the lowered limit go missing, which
- *     is the exact defect this constant exists to prevent.
- *
- * 🔴 WHAT IS GUARDED AND WHAT IS NOT. App-side drift is caught in BOTH
- * directions — `components/Browse.ranking.test.tsx` pins the number as a literal
- * `100` on two surfaces (the opts object handed to `deps.shared`, and the query
- * string on the wire), and moving this constant either way fails both. A
- * SERVER-side move is not observable from this repo at all: the fake list route
- * in `src/platform/testing.tsx` reads `limit` with no maximum check, so no test
- * here can go red when civitai's own number changes. There is no mechanism that
- * will tell you this has gone stale — re-derive it from the export named above.
- *
- * ⚠️ WHY THIS DOCBLOCK ONCE SAID THE ROUTE CLAMPED, recorded so the wrong model
- * does not get re-derived: clamping is what the HOST BRIDGE did. `taste.json`'s
- * record of the Discover decision names `PageBlockHost.tsx` and `IframeHost.tsx`
- * clamping to `[1, 100]` ahead of the router, and that was true of the transport
- * this app used at the time. #28 ported it off that bridge onto `@civitai/sdk`'s
- * direct REST calls; the comment outlived the transport.
- *
- * 🔴 ASKING FOR THE MAX IS WHAT MAKES "Published by me" COMPLETE RATHER THAN
- * MERELY DEEPER, WITHOUT THIS APP KNOWING THE PER-AUTHOR CAP. The server refuses
- * a write once an author holds `SHARED_KV_PER_USER_ROW_CAP` rows — a PRIVATE
- * const, 50 at `7ce2adf8`, which this app cannot import and must not pin. At a
- * limit of this size, that cap would have to DOUBLE before a viewer could hold
- * more rows than one page returns; and it cannot be raised past this number
- * without the list route being widened in the same change, since a per-author cap
- * above the list max would make an author's own rows unreachable in one page for
- * every consumer of the route. So truncation of the viewer's own list is not
- * reachable by a cap change alone, and the app carries no apparatus for it.
- *
- * The server returns at most the cap's worth of rows either way, so asking for
- * this rather than 50 changes no wire payload today.
+ * 🔴 A LARGER VALUE IS REFUSED, NOT CLAMPED — the store answers `invalid_request`,
+ * measured against the SDK's contract fake. `platform/sharedStorage.ts` clamps to
+ * the same number before sending, so drift here under-asks rather than failing.
+ * `components/Browse.ranking.test.tsx` pins it as a literal `100` on the opts
+ * handed to `deps.shared` and on the wire.
  */
 export const SHARED_LIST_LIMIT_MAX = 100;
+
+/**
+ * Pages of {@link SHARED_LIST_LIMIT_MAX} the "Published by me" read follows, at
+ * most.
+ *
+ * 🔴 WHY THIS READ NOW PAGES. The legacy shared store refused a write once an
+ * author held 50 rows, so one page of 100 was provably the whole of a viewer's
+ * own list. The document store has no per-author row cap — only the per-viewer
+ * quota (1,000 documents by default, private ones included) and the shared write
+ * budget (50 a day) — so a prolific author CAN pass 100 published generators,
+ * and one page would then silently drop their oldest from their own panel. Ten
+ * pages cover that whole default quota.
+ */
+export const MINE_LIST_MAX_PAGES = 10;
+
+/** Every row the viewer published, following the cursor up to {@link MINE_LIST_MAX_PAGES}. */
+async function listAllMine(shared: UseSharedStorage): Promise<SharedListResult> {
+  const items: SharedListItem[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < MINE_LIST_MAX_PAGES; page++) {
+    const res = await shared.list({
+      mine: true,
+      limit: SHARED_LIST_LIMIT_MAX,
+      ...(cursor !== undefined ? { cursor } : {}),
+    });
+    items.push(...res.items);
+    if (res.nextCursor === undefined) break;
+    cursor = res.nextCursor;
+  }
+  return { items };
+}
 
 export interface AppProps {
   /** Override any hook-backed dependency (component + e2e test seam). */
@@ -375,11 +364,12 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       // In-place UPDATE of the viewer's own published generator (same key, no new
       // row) — the fix for "editing creates a new one". `update` takes the same
       // `{ title, body?, data? }` shape `buildPublishPayload` produces for append,
-      // is author-scoped, and reuses the `apps:storage:shared:write` scope.
+      // and the store lets only the row's author make it (`write: "own"`).
       updateSharedGenerator: sharedHook.update,
       store: createStoreListings(),
-      drafts: appStorage as unknown as DraftStore,
+      drafts: appStorage,
       requestConsent,
+      requestGrants: platformRequestGrants,
       requestSignIn,
       openPurchaseModal,
       refreshBalance: buzz.refetch,
@@ -401,6 +391,9 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   depsRef.current = deps;
 
   const canGenerate = hasGenerateScope(token.scopes);
+  /** The live token scopes, for callbacks that must not re-subscribe on every refresh. */
+  const tokenScopesRef = useRef(token.scopes);
+  tokenScopesRef.current = token.scopes;
 
   /**
    * May this session make App Store calls at all? A signed-in viewer AND the
@@ -548,19 +541,14 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         // fallback would produce) is a 400, not a default.
         //
         // 🔴 NO `+1` HERE, UNLIKE THE DISCOVER READ ABOVE, AND NO SLICE BELOW.
-        // This asks for the route's own maximum (SHARED_LIST_LIMIT_MAX), which the
-        // per-author row cap sits far below and cannot pass without the route
-        // being widened too — so every row the viewer can hold fits in one page
-        // and there is nothing to disclose. The Discover horizon is crossed by any
-        // healthy board; this one is not reachable at all.
+        // This follows the cursor (`listAllMine`, up to MINE_LIST_MAX_PAGES) —
+        // enough pages to cover the store's whole default per-viewer quota — so
+        // there is no horizon to disclose.
         //
         // 🔴 SKIPPED ENTIRELY FOR AN ANONYMOUS VIEWER, like the drafts read beside
-        // it. An anonymous subject resolves to NULL server-side, so `mine=true`
-        // returns an EMPTY PAGE rather than an error or the whole board — the
-        // right answer, but one that is indistinguishable from "the store is
-        // empty". Not making the request keeps that ambiguity out of the app: the
-        // panel's empty state for a signed-out visitor is about having no account,
-        // which it already says.
+        // it. The document store refuses an `author: 'me'` list for a signed-out
+        // viewer (`sign_in_required`), and the panel's empty state for a
+        // signed-out visitor is about having no account, which it already says.
         //
         // 🔴 `allSettled`, NOT `all`, AND ONLY THE `mine` READ IS ALLOWED TO FAIL
         // ALONE. Under `Promise.all` a single rejected promise skipped every
@@ -584,7 +572,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         const [sharedSettled, mineSettled, draftsSettled] = await Promise.allSettled([
           depsRef.current.shared.list({ limit: pageLimit + 1 }),
           viewer
-            ? depsRef.current.shared.list({ mine: true, limit: SHARED_LIST_LIMIT_MAX })
+            ? listAllMine(depsRef.current.shared)
             : Promise.resolve<SharedListResult>({ items: [] }),
           viewer ? listDrafts(depsRef.current.drafts) : Promise.resolve<StoredDraft[]>([]),
         ]);
@@ -720,6 +708,10 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       const key = run.generatorKey;
       const firstImageId = run.imageIds[0];
       if (!key || typeof firstImageId !== 'number' || !viewer) return;
+      // 🔴 AN EDIT TO A SHARED ROW NEEDS THE CONSENT-GATED PUBLISH SCOPE, and this
+      // is a BACKGROUND side effect of a keep — never a reason to open a consent
+      // dialog. Without the scope it is skipped, not attempted and refused.
+      if (!hasPublishScope(tokenScopesRef.current)) return;
       const row = sharedRef.current.find((s) => s.key === key);
       if (!row || row.authorUserId !== viewer.id) return;
       if (headerImageRefOf(row.value) || coverImageIdOf(row.value) !== undefined) return;
@@ -993,7 +985,11 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       // The store line describes the last PUBLISH; a draft save is not one.
       storeNoticeSeq.current += 1;
       setStoreNotice(null);
-      await persistDraft(config);
+      try {
+        await persistDraft(config);
+      } catch (e) {
+        throw toViewerError(e);
+      }
       reload();
     },
     [persistDraft, reload],
@@ -1027,30 +1023,69 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     );
   }, []);
 
+  /**
+   * Make sure the token carries `apps:storage:publish` before a SHARED write —
+   * asking for it if not — and reject with viewer copy when it cannot be had.
+   *
+   * 🔴 EVERY SHARED CREATE AND EDIT GOES THROUGH THIS FIRST. The publish scope is
+   * consent-gated: the host's first token never carries it, so a write sent
+   * without it is refused `consent_required` by the store. Asking BEFORE the
+   * write turns the viewer's first Publish into one dialog and one success,
+   * rather than a failure followed by a dialog and a second press.
+   *
+   * 🔴 THE WAIT IS BOUNDED. `requestGrants` carries an `AbortSignal` timeout, so a
+   * dismissed dialog resolves `false` (→ the consent copy) instead of leaving the
+   * Builder's Publish button busy forever.
+   */
+  const ensurePublishGrant = useCallback(async (): Promise<void> => {
+    if (hasPublishScope(tokenScopesRef.current)) return;
+    if (!viewer) {
+      depsRef.current.requestSignIn();
+      throw new SharedWriteRefusal(PUBLISH_SIGN_IN_MESSAGE, 'sign_in_required');
+    }
+    let granted = false;
+    try {
+      granted = await depsRef.current.requestGrants([APPS_STORAGE_PUBLISH]);
+    } catch {
+      granted = false;
+    }
+    if (!granted) throw new SharedWriteRefusal(PUBLISH_CONSENT_MESSAGE, 'consent_required');
+  }, [viewer]);
+
   const handlePublish = useCallback(
     async (config: GeneratorConfig) => {
-      // Draft first (so it lands in "My generators" even if the publish fails) —
-      // upserts the SAME draft id, carrying any existing publishedKey.
-      const draft = await persistDraft(config);
-      const payload = buildPublishPayload(config);
-      let key: string;
-      if (draft.publishedKey) {
-        // Already published → UPDATE the same shared row in place. This is the
-        // fix for "editing creates a new one": never append a duplicate.
-        await depsRef.current.updateSharedGenerator(draft.publishedKey, payload);
-        key = draft.publishedKey;
-      } else {
-        // First publish → append, then remember the minted key on the draft so a
-        // future edit updates in place instead of duplicating.
-        ({ key } = await depsRef.current.shared.append(payload));
-        await persistDraft(config, key);
+      try {
+        // Draft first (so it lands in "My generators" even if the publish fails) —
+        // upserts the SAME draft id, carrying any existing publishedKey.
+        const draft = await persistDraft(config);
+        await ensurePublishGrant();
+        const payload = buildPublishPayload(config);
+        let key: string;
+        if (draft.publishedKey) {
+          // Already published → UPDATE the same shared row in place. This is the
+          // fix for "editing creates a new one": never append a duplicate.
+          await depsRef.current.updateSharedGenerator(draft.publishedKey, payload);
+          key = draft.publishedKey;
+        } else {
+          // First publish → append, then remember the minted key on the draft so a
+          // future edit updates in place instead of duplicating.
+          ({ key } = await depsRef.current.shared.append(payload));
+          await persistDraft(config, key);
+        }
+        // Only after the shared write landed: the server refuses a store item that
+        // does not exist.
+        listInStore(key, config);
+        reload();
+      } catch (e) {
+        // ⚠️ A store `consent_required` while the token still LISTS the scope (a
+        // consent revoked since the token was minted) is not re-asked here: the
+        // SDK's `requestGrants` sends nothing when the token already holds the
+        // scope, so a retry would be inert. The viewer reads the consent copy, and
+        // the next token refresh drops the scope, which makes the next press ask.
+        throw toViewerError(e);
       }
-      // Only after the shared write landed: the server refuses a store item that
-      // does not exist in shared storage.
-      listInStore(key, config);
-      reload();
     },
-    [persistDraft, reload, listInStore],
+    [persistDraft, reload, listInStore, ensurePublishGrant],
   );
 
   const handleDeleteDraft = useCallback(
@@ -1119,15 +1154,25 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     async (item: SharedListItem) => {
       const rollback = patchBoardRows((list) => list.filter((s) => s.key !== item.key));
       setError(null);
+      let deleted = false;
       try {
-        await depsRef.current.shared.withdraw(item.key);
+        ({ deleted } = await depsRef.current.shared.withdraw(item.key));
       } catch (e) {
         rollback(); // undo the optimistic removal on BOTH lists
         setError(errMsg(e));
+        return;
       }
-      // No App Store call here: the server's shared withdraw itself takes the
-      // author's store card down (it awaits that before answering), so a second
-      // call from the app would only spend one of the author's store writes.
+      // 🔴 THE APP STORE CARD IS TAKEN DOWN FROM HERE NOW. The legacy shared
+      // withdraw did it server-side before answering; a document-store delete
+      // does not touch sub-listings at all, so without this call the card would
+      // outlive the generator it opens. Best-effort and not awaited, like every
+      // store call: the withdraw itself has already succeeded.
+      if (deleted && canListInStoreRef.current) {
+        depsRef.current.store.withdraw(item.key).catch((err: unknown) => {
+          // eslint-disable-next-line no-console
+          console.warn('[custom-generators] App Store withdraw failed', err);
+        });
+      }
     },
     [patchBoardRows],
   );
@@ -1526,6 +1571,18 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   );
 }
 
+/**
+ * The sentence a viewer reads for a failure. 🔴 A document-store refusal's own
+ * `message` is server prose and is never rendered — it maps to fixed copy
+ * (`lib/storageErrors.ts`). A `SharedWriteRefusal` already carries that copy.
+ */
 function errMsg(e: unknown): string {
+  if (isStorageRefusal(e)) return storageFailureMessage(e);
   return e instanceof Error ? e.message : 'Something went wrong.';
+}
+
+/** {@link errMsg} as an `Error`, for callers whose UI renders `err.message` (the Builder). */
+function toViewerError(e: unknown): unknown {
+  if (e instanceof SharedWriteRefusal || !isStorageRefusal(e)) return e;
+  return new Error(storageFailureMessage(e), { cause: e });
 }
