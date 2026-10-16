@@ -107,8 +107,8 @@ export interface FakeCivitaiOptions {
   /**
    * The viewer's library behind `OPEN_IMAGE_PICKER`. Like the host, the fake
    * keeps only the images matching the request's `sources` and answers with the
-   * first one, or `{ selected: null }` (a dismissal) when none match or this is
-   * unset. 🔴 It does NOT model the host's eligibility rules (published post,
+   * first one, or with no `selected` key (`{}`, a dismissal) when none match or
+   * this is unset. 🔴 It does NOT model the host's eligibility rules (published post,
    * scanned, rated) — a test that needs an ineligible image to be offered says
    * so by putting one here.
    */
