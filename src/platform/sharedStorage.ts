@@ -94,12 +94,19 @@ function requireCount(reply: { count?: unknown }, op: string): number {
   return reply.count;
 }
 
-/** A refused create/edit → viewer copy (`lib/storageErrors.ts`). Anything else rethrows unchanged. */
+/**
+ * A failed create/edit → viewer copy (`lib/storageErrors.ts`). 🔴 EVERY failure,
+ * not only a `StorageError`: a reply without the store's envelope (a proxy's JSON
+ * 502, the SDK's own malformed-reply error) arrives as a plain error whose message
+ * is server or SDK text, and the Builder renders `err.message`. Those get the
+ * generic retry line; the original stays on `cause`.
+ */
 function asPublishRefusal(err: unknown): never {
+  if (err instanceof SharedWriteRefusal) throw err;
   if (err instanceof StorageError) {
     throw new SharedWriteRefusal(publishRefusalMessage(err), err.code, { cause: err });
   }
-  throw err;
+  throw new SharedWriteRefusal(publishRefusalMessage({ code: 'unknown' }), 'unknown', { cause: err });
 }
 
 function viewerIdNow(): number | null {
@@ -183,7 +190,6 @@ export function createSharedStorage(options: SharedStorageOptions = {}): SharedS
         }
         await coll.put(key, value as RecordDocument, { ifVersion: current.version });
       } catch (err) {
-        if (err instanceof SharedWriteRefusal) throw err;
         asPublishRefusal(err);
       }
     },

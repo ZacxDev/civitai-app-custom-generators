@@ -250,7 +250,7 @@ export const DISCOVER_LIST_LIMIT = 50;
  *
  * 🔴 A LARGER VALUE IS REFUSED, NOT CLAMPED — the store answers `invalid_request`,
  * measured against the SDK's contract fake. `platform/sharedStorage.ts` clamps to
- * the same number before sending, so drift here under-asks rather than failing.
+ * the same number before sending, so raising this past 100 is silently clamped.
  * `components/Browse.ranking.test.tsx` pins it as a literal `100` on the opts
  * handed to `deps.shared` and on the wire.
  */
@@ -457,13 +457,11 @@ export function App({ deps: depsOverride }: AppProps = {}) {
    * read's `+1` truncation evidence or keep the client filter, and the client
    * filter is the defect.
    *
-   * 🔴 NO TRUNCATION APPARATUS, AND ITS ABSENCE IS A CLAIM — see
-   * {@link SHARED_LIST_LIMIT_MAX}. Asking for the route's maximum means the
-   * server's per-author row cap would have to DOUBLE before this list could be a
-   * page rather than the whole thing, and it cannot be raised past that maximum
-   * without the route being widened in the same change. There is no `+1`
-   * over-fetch here and no disclosure, unlike {@link DISCOVER_LIST_LIMIT}, whose
-   * horizon a healthy board crosses every day.
+   * 🔴 NO TRUNCATION DISCLOSURE, BECAUSE THE READ PAGES. It follows the cursor up
+   * to {@link MINE_LIST_MAX_PAGES} pages of {@link SHARED_LIST_LIMIT_MAX}, which
+   * covers the store's whole default per-viewer document quota. There is no `+1`
+   * over-fetch here, unlike {@link DISCOVER_LIST_LIMIT}, whose horizon a healthy
+   * board crosses every day.
    *
    * ⚠️ `[]` IS OVERLOADED AND NOTHING HERE DISAMBIGUATES IT. The load effect
    * confines a rejected `mine` read to this list rather than failing the whole
@@ -535,10 +533,8 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         // because it answers "did the page fill", not "is there another row".
         const pageLimit = depsRef.current.discoverPageLimit ?? DISCOVER_LIST_LIMIT;
         // 🔴 A SECOND, PARALLEL READ — NOT A FILTER OVER THE FIRST. See
-        // `myPublished` for the defect this replaces. `mine` is a REAL BOOLEAN and
-        // is only ever passed when it is true: the route's schema is a
-        // `'true' | 'false'` literal union, so a `?mine=` (what any `?? ''`
-        // fallback would produce) is a 400, not a default.
+        // `myPublished` for the defect this replaces. The adapter turns `mine` into
+        // the store's `author: 'me'` filter (server-side, over the whole board).
         //
         // 🔴 NO `+1` HERE, UNLIKE THE DISCOVER READ ABOVE, AND NO SLICE BELOW.
         // This follows the cursor (`listAllMine`, up to MINE_LIST_MAX_PAGES) —
@@ -1148,8 +1144,9 @@ export function App({ deps: depsOverride }: AppProps = {}) {
 
   // Withdraw one of the viewer's OWN published generators (its `records` document).
   // Optimistically drop it from BOTH lists, then call `withdraw(key)`; on failure
-  // restore them and surface the host error. A local draft that pointed at
-  // this row keeps its config but is unlinked (the published copy is gone).
+  // restore them and surface the error. ⚠️ A local draft that pointed at this row
+  // is NOT unlinked: it keeps its `publishedKey`, so publishing it again is
+  // refused `not_found` (as the legacy 404 did). Make a copy is the way out.
   const handleDeletePublished = useCallback(
     async (item: SharedListItem) => {
       const rollback = patchBoardRows((list) => list.filter((s) => s.key !== item.key));

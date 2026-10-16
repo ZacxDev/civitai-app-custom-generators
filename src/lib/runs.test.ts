@@ -4,6 +4,7 @@ import type { DraftStore } from './drafts.js';
 import {
   GATED_READ_MAX_IDS,
   KEPT_LIST_LIMIT,
+  KEPT_LIST_MAX_PAGES,
   KEPT_PAGE_LIMIT,
   KEPT_PREFIX,
   chunkImageIds,
@@ -197,6 +198,24 @@ describe('the gallery reads the viewer NEWEST runs, and reports what it left out
     expect(page.runs).toHaveLength(KEPT_LIST_LIMIT);
     expect(page.truncated).toBe(true);
     expect(page.incomplete).toBe(false);
+  });
+
+  /** A store answering EMPTY pages that still carry a cursor cannot spin the read. */
+  it('is bounded by pages when the store returns empty pages with a cursor', async () => {
+    let calls = 0;
+    const stuck: DraftStore = {
+      ...memoryDraftStore(),
+      async list() {
+        calls += 1;
+        // A runaway fails LOUDLY here rather than spinning the test runner.
+        if (calls > 10) throw new Error('runaway: the read is not bounded');
+        return { keys: [], nextCursor: 'c3R1Y2s=' };
+      },
+    };
+    const page = await listKeptRuns(stuck);
+    expect(calls).toBe(KEPT_LIST_MAX_PAGES);
+    expect(calls).toBe(3);
+    expect(page.runs).toEqual([]);
   });
 
   /**

@@ -245,6 +245,20 @@ describe('records: shared-write refusals', () => {
     expect((err as Error).message).toBe('Verify your email address on Civitai first, then try again.');
   });
 
+  it('a failure WITHOUT the store envelope (a proxy 502, a dead network) gets the generic copy, not its text', async () => {
+    const docs = {
+      collection: () => ({
+        async create() {
+          throw new Error('upstream proxy said: SERVER-PROSE');
+        },
+      }),
+    } as unknown as DocumentStorage;
+    const shared = createSharedStorage({ docs: () => docs, viewerId: () => 99 });
+    const err = await shared.append(LEGACY).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SharedWriteRefusal);
+    expect((err as Error).message).toBe("This couldn't be published just now. Try again in a moment.");
+  });
+
   /**
    * A create's 429 is the author's shared-write budget (a refill every six
    * minutes): it is NOT retried in place, even with a short Retry-After.

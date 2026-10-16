@@ -73,6 +73,9 @@ export const KEPT_PAGE_LIMIT = 100;
  */
 export const KEPT_LIST_LIMIT = 200;
 
+/** Hard bound on list calls per gallery read, whatever the store answers. */
+export const KEPT_LIST_MAX_PAGES = Math.ceil(KEPT_LIST_LIMIT / KEPT_PAGE_LIMIT) + 1;
+
 export function keptKey(id: string): string {
   return KEPT_PREFIX + id;
 }
@@ -331,7 +334,9 @@ export async function listKeptRuns(store: DraftStore): Promise<KeptRunPage> {
   const values: unknown[] = [];
   let cursor: string | undefined;
   let more = false;
-  while (values.length < KEPT_LIST_LIMIT) {
+  // 🔴 BOUNDED BY PAGES TOO, not only by values: a page that came back empty
+  // WITH a cursor (a store bug) would otherwise make no progress and loop forever.
+  for (let page = 0; values.length < KEPT_LIST_LIMIT && page < KEPT_LIST_MAX_PAGES; page++) {
     const res = await store.list({
       prefix: KEPT_PREFIX,
       limit: Math.min(KEPT_PAGE_LIMIT, KEPT_LIST_LIMIT - values.length),
