@@ -385,8 +385,9 @@ describe('optional App Store card image', () => {
     );
     const pickerCalls = outbound.filter((m) => m.type === 'OPEN_IMAGE_PICKER');
     expect(pickerCalls).toHaveLength(1);
-    expect(pickerCalls[0]!.payload).toMatchObject({ sources: ['posted'] });
-    expect((pickerCalls[0]!.payload as Record<string, unknown>).multiple).toBeUndefined();
+    // Whole-payload equality: `publicOnly` is the literal boolean (civitai#6134
+    // refuses a non-boolean), and there is no `multiple`.
+    expect(pickerCalls[0]!.payload).toStrictEqual({ sources: ['posted'], publicOnly: true });
 
     await userEvent.click(screen.getByTestId('publish'));
     await expectInAppPublishStood(fake, 'Pictured');
@@ -401,6 +402,59 @@ describe('optional App Store card image', () => {
     });
     expect(fake.subListings().get(key)!.imageId).toBe(MY_POSTED);
     expect(await screen.findByTestId('builder-store-notice')).toHaveTextContent(/moderator/i);
+  });
+
+  it('a pick from a Private post is not offered (publicOnly); the public one behind it is', async () => {
+    const PRIVATE_POSTED = 48_271;
+    const fake = renderApp({
+      options: {
+        cannedImagePicks: [{ ...posted(PRIVATE_POSTED), privatePost: true }, posted(MY_POSTED)],
+        subListings: { publicImages: [{ imageId: MY_POSTED, userId: ME }] },
+      },
+    });
+    await buildGenerator('Public Only', 'Desc.');
+    await chooseStoreImage();
+    expect(await screen.findByTestId('store-image-preview')).toHaveAttribute(
+      'src',
+      `https://image.civitai.com/x/${MY_POSTED}.jpeg`,
+    );
+    await userEvent.click(screen.getByTestId('publish'));
+    await waitFor(() => expect(storeCalls(fake, 'upsert').length).toBe(1));
+    expect(storeCalls(fake, 'upsert')[0]!.body).toMatchObject({ imageId: MY_POSTED });
+  });
+
+  /**
+   * 🔴 `upsert` REPLACES. An edit that left `imageId` out would CLEAR the card's
+   * image (the server stores `body.imageId ?? null`), so a republish after an
+   * unrelated edit must send the chosen image again.
+   */
+  it('an edit + republish that keeps the image re-sends its imageId, and the card keeps it', async () => {
+    const fake = renderApp({
+      options: {
+        cannedImagePicks: [posted(MY_POSTED)],
+        subListings: { publicImages: [{ imageId: MY_POSTED, userId: ME }] },
+      },
+    });
+    await buildGenerator('Kept Pic', 'Desc.');
+    await chooseStoreImage();
+    await screen.findByTestId('store-image-preview');
+    await userEvent.click(screen.getByTestId('publish'));
+    await waitFor(() => expect(storeCalls(fake, 'upsert').length).toBe(1));
+    const key = (storeCalls(fake, 'upsert')[0]!.body as { itemKey: string }).itemKey;
+
+    const name = screen.getByTestId('gen-name');
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Kept Pic Renamed');
+    await userEvent.click(screen.getByTestId('publish'));
+    await waitFor(() => expect(storeCalls(fake, 'upsert').length).toBe(2));
+    expect(storeCalls(fake, 'upsert')[1]!.body).toStrictEqual({
+      itemKey: key,
+      title: 'Kept Pic Renamed',
+      tagline: 'Desc.',
+      subPath: `g/${key}`,
+      imageId: MY_POSTED,
+    });
+    expect(fake.subListings().get(key)).toMatchObject({ title: 'Kept Pic Renamed', imageId: MY_POSTED });
   });
 
   it('sends NO imageId key when no image is chosen (the card keeps the parent cover)', async () => {

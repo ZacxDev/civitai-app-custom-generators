@@ -9,13 +9,21 @@
 // rated (civitai `postedPickableWhere`). Those are the only ones that carry an
 // `imageId`, and an `imageId` is what the store's `upsert` takes.
 //
-// ⚠️ THE PICKER'S SET IS NOT PROVABLY THE STORE'S. The store checks the image
-// with a separate anonymous-visibility read (`publicImageOwner` →
-// `getImage({ isModerator: false })`), so a pick can still be refused with
-// `image_not_public` — and a pick that was public can stop being so later. The
-// caller surfaces that refusal; it does not assume eligibility.
+// `publicOnly: true` (civitai/civitai#6134) narrows that set further to images in
+// a post that is not Private — the store shows a card to everyone, so a pick
+// from a Private post is one the store would refuse. 🔴 It must be the literal
+// boolean: the host REFUSES a non-boolean `publicOnly` (`resolveImagePickerRequest`)
+// rather than ignoring it. A host older than #6134 ignores the key and offers the
+// whole posted set, as before.
 //
-// `@civitai/sdk` 0.14 has no wrapper for this message, but its transport ledger
+// ⚠️ THE PICKER'S SET IS STILL NOT PROVABLY THE STORE'S. The store checks the
+// image with a separate anonymous-visibility read (`publicImageOwner` →
+// `getImage({ isModerator: false })`), so a pick can still be refused with
+// `image_not_public` — by an older host that ignored `publicOnly`, or because a
+// pick that was public stopped being so later (the post made Private, the image
+// re-rated). The caller surfaces that refusal; it does not assume eligibility.
+//
+// `@civitai/sdk` 0.15 has no wrapper for this message, but its transport ledger
 // does (`OPEN_IMAGE_PICKER` → `IMAGE_PICKER_RESULT`, legacy framing), so a plain
 // `transport.request()` correlates the reply. The transport imposes no timeout,
 // so one is applied here: the reply waits on a person, and a host that predates
@@ -29,7 +37,8 @@ import { getPlatformTransport } from './client.js';
 export const IMAGE_PICKER_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
- * Open the host picker over the viewer's own POSTED images. Resolves with the
+ * Open the host picker over the viewer's own POSTED images, from public posts
+ * only (on a host that supports `publicOnly`). Resolves with the
  * picked image, or `null` when nothing was picked (dismissed, signed out, review
  * mode). Rejects on a host refusal or a timeout.
  */
@@ -37,7 +46,7 @@ export async function pickPostedImage(): Promise<BlockPickedImageInfo | null> {
   const transport = getPlatformTransport();
   const reply = (await transport.request(
     'OPEN_IMAGE_PICKER',
-    { sources: ['posted'] },
+    { sources: ['posted'], publicOnly: true },
     { signal: AbortSignal.timeout(IMAGE_PICKER_TIMEOUT_MS) },
   )) as { selected?: BlockPickedImageInfo | null } | null | undefined;
   return reply?.selected ?? null;

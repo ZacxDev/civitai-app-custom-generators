@@ -116,6 +116,8 @@ describe('the platform seam', () => {
     expect(importers).toEqual([
       'platform/client.ts',
       'platform/hooks.ts',
+      // Imports `SubListingError` to assert the adapter's `cause` is the SDK's own.
+      'platform/storeListings.transport.test.ts',
       'platform/storeListings.ts',
       'platform/testing.tsx',
       'platform/workflows.ts',

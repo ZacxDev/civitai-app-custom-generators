@@ -111,8 +111,14 @@ export interface FakeCivitaiOptions {
    * this is unset. 🔴 It does NOT model the host's eligibility rules (published post,
    * scanned, rated) — a test that needs an ineligible image to be offered says
    * so by putting one here.
+   *
+   * The ONE eligibility rule it does model is civitai#6134's `publicOnly`: an
+   * entry with `privatePost: true` (a posted image whose post is Private) is not
+   * offered when the request carries `publicOnly: true`. The marker is fake-only
+   * and never reaches the app — the host rebuilds each pick field by field
+   * (`toWirePick`), so the fake strips it too.
    */
-  cannedImagePicks?: BlockPickedImageInfo[];
+  cannedImagePicks?: (BlockPickedImageInfo & { privatePost?: boolean })[];
   /** Refuse `OPEN_IMAGE_PICKER` with this host error instead. */
   imagePickerError?: string;
   cannedGenerationSourceUpload?: BlockGenerationSourceImageInfo | null;
@@ -318,6 +324,8 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
       tagline: string | null;
       imageId: number | null;
       authorUserId: number;
+      /** The server's `pendingSubmittedAt != null`: an edit to an approved item awaits review. */
+      pendingEdit: boolean;
     }
   >();
   for (const s of options.subListings?.seed ?? []) {
@@ -328,6 +336,7 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
       tagline: null,
       imageId: null,
       authorUserId: s.authorUserId ?? viewerId ?? 1,
+      pendingEdit: false,
     });
   }
   const workflows = new Map<string, { snapshot: BlockWorkflowSnapshot; pollsLeft: number }>();
@@ -621,7 +630,7 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
             itemKey,
             status: r.status,
             title: r.title,
-            pendingEdit: false,
+            pendingEdit: r.pendingEdit,
             statusReason: null,
             editRejectionReason: null,
             updatedAt: '2026-01-02T00:00:00.000Z',
@@ -684,6 +693,7 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
           // The server stores `body.imageId ?? null`: an absent key clears it.
           imageId: (b.imageId as number | undefined) ?? null,
           authorUserId: viewerId,
+          pendingEdit: approved,
         });
         return json(200, {
           id: `asl_${b.itemKey}`,
@@ -763,11 +773,25 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
 
   fake.handle('OPEN_IMAGE_PICKER', (params) => {
     if (options.imagePickerError !== undefined) throw new Error(options.imagePickerError);
-    const sources = (params as { sources?: string[] })?.sources ?? ['posted', 'generated'];
-    const pick = (options.cannedImagePicks ?? []).find((p) => sources.includes(p.source));
+    const req = (params ?? {}) as { sources?: string[]; publicOnly?: unknown };
+    // civitai `resolveImagePickerRequest` (#6134): an absent `publicOnly` is
+    // `false`, and anything present that is not a boolean is REFUSED with an
+    // `error` — never coerced, never ignored.
+    if (req.publicOnly !== undefined && typeof req.publicOnly !== 'boolean') {
+      throw new Error('OPEN_IMAGE_PICKER: publicOnly must be a boolean.');
+    }
+    const publicOnly = req.publicOnly === true;
+    const sources = req.sources ?? ['posted', 'generated'];
+    // `publicOnly` narrows the POSTED source only (`postedPickableWhere`);
+    // generated images are listed as before either way.
+    const found = (options.cannedImagePicks ?? []).find(
+      (p) => sources.includes(p.source) && !(publicOnly && p.source === 'posted' && p.privatePost),
+    );
     // The real host answers a dismissal with no `selected` key at all
     // (civitai `buildImagePickerReply`), never `selected: null`.
-    return pick ? { selected: pick } : {};
+    if (!found) return {};
+    const { privatePost: _privatePost, ...selected } = found;
+    return { selected };
   });
 
   fake.handle('PUBLISH_GENERATION_OUTPUTS', (params) => {
