@@ -168,7 +168,7 @@ export interface AppDeps {
   updateSharedGenerator: (key: string, value: SharedAppendValue) => Promise<void>;
   /**
    * The App Store sub-listing routes (`platform/storeListings.ts`). Every call is
-   * BEST-EFFORT and fires only after the shared-storage write it mirrors has
+   * BEST-EFFORT and fires only after the shared-board write it mirrors has
    * succeeded — see `lib/storeListing.ts`.
    */
   store: StoreListings;
@@ -934,7 +934,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
    *
    * ⚠️ "NO SERVER-SIDE GET-BY-KEY FOR A GENERATOR ROW HERE" IS WHAT THIS BLOCK
    * USED TO SAY, AND IT IS FALSE. `depsRef.current.shared.get(key)` is live
-   * (`src/platform/sharedStorage.ts`, over `GET blocks/shared-storage/item`). So
+   * (`src/platform/sharedStorage.ts`, a document-store `get` on `records`). So
    * the `false` below is a choice this call site has not revisited, not an
    * impossibility — and the "withdrawn since" half would still need handling, since
    * `get` returns `null` for a withdrawn or moderated row too. Changing it is out
@@ -998,7 +998,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   /**
    * Mirror a just-published generator into the App Store. Fire-and-forget.
    *
-   * 🔴 NOT AWAITED BY THE PUBLISH, AND NEVER THROWS. The shared-storage write has
+   * 🔴 NOT AWAITED BY THE PUBLISH, AND NEVER THROWS. The shared-board write has
    * already succeeded when this runs; the store is a second, optional home. So a
    * store call that fails — or never answers — cannot fail, delay or roll back
    * the in-app publish, and the author's "Published!" is true either way. What
@@ -1146,7 +1146,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     [],
   );
 
-  // Withdraw one of the viewer's OWN published generators (the shared_kv row).
+  // Withdraw one of the viewer's OWN published generators (its `records` document).
   // Optimistically drop it from BOTH lists, then call `withdraw(key)`; on failure
   // restore them and surface the host error. A local draft that pointed at
   // this row keeps its config but is unlinked (the published copy is gone).
@@ -1273,7 +1273,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   // ⚠️ THAT FALLBACK IS A DEFECT, NOT A PLATFORM LIMIT, AND THIS COMMENT USED TO
   // SAY OTHERWISE ("the block can't fetch a single shared row by key"). It can:
   // `depsRef.current.shared.get(key)` is live (`src/platform/sharedStorage.ts`,
-  // over `GET blocks/shared-storage/item`). This call site does not use it yet —
+  // a document-store `get` on `records`). This call site does not use it yet —
   // deliberately out of scope here, since changing it is a behaviour change with
   // its own premise to check (what a `get` on a withdrawn or moderated key should
   // do on screen). Same for `openPublishedByKey` above.

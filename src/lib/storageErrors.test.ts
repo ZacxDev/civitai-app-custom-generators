@@ -27,7 +27,7 @@ describe('publishRefusalMessage', () => {
     ['too_large', undefined, 'This generator is too large to publish. Remove some buttons or shorten its text, then try again.'],
     ['rate_limited', { retryAfter: 360 }, "You've published or edited a lot just now. Wait a few minutes, then try again."],
     ['not_author', undefined, 'Only the person who published this generator can change it.'],
-    ['not_found', undefined, "This generator isn't published any more, so it couldn't be updated. Publish it again to share it."],
+    ['not_found', undefined, "This generator isn't published any more, so it couldn't be updated."],
     ['version_conflict', { currentVersion: 3 }, 'This generator was changed somewhere else (another tab?). Go back, reopen it and try again.'],
     ['moderation_unavailable', { retryAfter: 5 }, "This couldn't be published just now. Try again in a moment."],
     ['a_code_from_a_later_server', undefined, "This couldn't be published just now. Try again in a moment."],

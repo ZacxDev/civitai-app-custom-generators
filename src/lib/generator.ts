@@ -354,7 +354,14 @@ export interface BuildBodyOptions {
    * moderated `display` upload because it's public content shown to others.)
    */
   sourceImage?: BlockSourceImage;
-  /** The published generator's shared_kv key → creator attribution (G5). */
+  /**
+   * The published generator's shared key → creator attribution (G5).
+   *
+   * ⚠️ The server resolves the author from the LEGACY shared store only, so since
+   * 0.13.0 attribution is recorded for generators copied over at go-live and is
+   * left unset (fail-open, track-only — no money moves on it) for ones published
+   * to the document store after it.
+   */
   sharedContentKey?: string;
   /** Runner "advanced" overrides merged over the author's params (e.g. quantity/seed/steps). */
   paramOverrides?: Partial<GenButtonParams>;

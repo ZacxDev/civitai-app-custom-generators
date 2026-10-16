@@ -5,8 +5,8 @@ where users **build** named "generators" (a set of buttons, each carrying a
 pinned checkpoint + weighted LoRA stack + prompt template + params), **publish**
 them to shared storage, and **run** them. The platform has no concept of a
 "generator" — the whole model lives here; the platform provides only generic
-seams (resource picker, image upload, the Buzz workflow money path, shared/KV
-storage).
+seams (resource picker, image upload, the Buzz workflow money path, the App Blocks
+document store — private `kv` + shared `records`, see the README's "Storage").
 
 Running a button **spends the viewer's Buzz**, so these are the load-bearing
 invariants — read [`README.md`](./README.md) before touching any of them:
@@ -33,6 +33,12 @@ invariants — read [`README.md`](./README.md) before touching any of them:
   cap and `page.buzzBudgetPerGen: 1000`.
 - **The publish text/data split.** All user-visible text goes in `title`/`body`
   (the platform moderates it); `data` is opaque structured config only.
+- **The storage mapping is a contract with the go-live data copy.** `kv` documents
+  are `{ value }` under the legacy key; `records` documents are the legacy
+  `{ title, body, data }` under the legacy ULID. Never rename a collection, change
+  its visibility, or change either shape without a matching copy change.
+- **Every shared create/edit checks `apps:storage:publish` first** (consent-gated;
+  `App.tsx` → `ensurePublishGrant`). A new path that writes to `records` must too.
 - **Upload purpose.** `useImageUpload()` = moderated cosmetic background;
   `useImageUpload({ purpose: 'generationSource' })` = the UNSCANNED img2img
   source. Do not collapse the two.
@@ -96,7 +102,7 @@ markup contract — package gaps surface there first.
 
 ⚠️ **A "fetch one shared row by key" host gap used to be claimed here, and it is
 FALSE** — `shared.get(key)` is live in this app's own adapter
-(`src/platform/sharedStorage.ts`, over `GET blocks/shared-storage/item`). The
+(`src/platform/sharedStorage.ts`, a document-store `get` on `records`). The
 by-key resolvers in `src/App.tsx` (the first-load deeplink, the `ROUTE_CHANGED`
 handler, and `openPublishedByKey`) still go through `shared.find(...)` over
 the single loaded Discover page and therefore still miss a key past it, but that is

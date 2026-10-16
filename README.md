@@ -4,7 +4,7 @@ A first-party **page App Block** where users **build "generators"** (named butto
 that each carry an image-generation payload), **publish** them app-scoped, and
 **run** them. The platform has **no concept of a "generator"** — the whole
 generator model lives in this app; the platform only provides generic seams
-(resource picker, image upload, the Buzz workflow money path, shared/KV storage).
+(resource picker, image upload, the Buzz workflow money path, the document store).
 
 Phase **2a** scope: **image** generation (txt2img + img2img). Video/audio/3D are a
 later phase.
@@ -18,7 +18,8 @@ later phase.
 | category | `generation` |
 | trust tier | `unverified` (shared storage requires the opaque-origin sandbox) |
 | `page.buzzBudgetPerGen` | `1000` (the platform cap) |
-| scopes | `ai:write:budgeted`, `buzz:read:self`, `apps:storage:read`, `apps:storage:write`, `apps:storage:shared:read`, `apps:storage:shared:write`, `posts:write:self`, `apps:store:items:write` |
+| scopes | `ai:write:budgeted`, `buzz:read:self`, `apps:storage`, `apps:storage:publish`, `posts:write:self`, `apps:store:items:write` |
+| storage | `kv` (`private`), `records` (`shared`, `write: own`, `marks: [vote]`) — see "Storage" below |
 
 ## SDK
 
@@ -36,7 +37,8 @@ the names the components already used: `useBlockContext`, `useBlockToken`,
 `useBuzzWorkflow`, `useBuzzBalance`, `useBuzzPurchase`, `useSharedStorage`,
 `useAppStorage`, `useCivitaiNavigate`, `useRequestConsent` /
 `useRequestSignIn`. Host UI goes through `app.host.*`, data through
-`app.site.*` over `/api/v1/blocks/*`, per-viewer KV through `app.storage`.
+`app.site.*` over `/api/v1/blocks/*`, and both stores through the document store
+(`app.storage.collection(name)`, see "Storage").
 UI is composed on the `@civitai/components` markup contract
 (`data-civitai-ui` + `--civitai-*` design tokens) through the adapters in
 `src/ui/` — the app chrome (`theme.ts`) reads those same tokens (no
@@ -113,6 +115,48 @@ This app emits **no analytics or funnel telemetry**. It used to carry an
 console.debug(...)` — inert in production, consumed by nothing. All of it is
 deleted. A caught render error is recovered on screen and reported nowhere.
 
+## Storage (0.13.0: the App Blocks document store)
+
+Everything this app stores lives in two collections of the document store
+(`@civitai/sdk` 0.14 `app.storage.collection(name)`, REST `/api/v1/blocks/storage/*`),
+declared in `block.manifest.json` → `storage.collections`. Before 0.13.0 it used the
+legacy per-viewer KV (`/blocks/app-storage/*`) and the legacy shared store
+(`/blocks/shared-storage/*`), both deprecated.
+
+| Collection | Holds | Key | Document data | Module |
+|---|---|---|---|---|
+| `kv` (`private`) | the viewer's drafts, kept runs, App Store backfill ledger | the legacy key, unchanged: `draft:<id>`, `kept:<id>`, `store-backfill:v1` | `{ value: <the legacy value> }`, always wrapped | `src/platform/appStorage.ts` |
+| `records` (`shared`, `write: own`, `marks: [vote]`) | published generators | the legacy ULID, unchanged | the legacy `{ title, body, data }`, verbatim | `src/platform/sharedStorage.ts` |
+
+🔴 **That mapping is a contract with the go-live data copy**, which writes existing
+viewers' rows into these collections in exactly this shape. `src/manifest.test.ts`
+pins the declaration whole; `src/platform/appStorage.test.ts` and
+`src/platform/sharedStorage.test.ts` read documents seeded in the copy's shape.
+
+- **Votes and reports are marks.** The tally is `marks.vote`, "did I vote" is
+  `viewer.marks`; a report is the built-in `report` mark (permanent, does not hide).
+- **Ownership is `author.isViewer`.** The store never discloses an author id; a
+  viewer's own rows are stamped with their id for the app's "is this mine?" checks.
+- **Publishing needs consent.** `apps:storage:publish` (creating or editing a
+  `records` document) is consent-gated: the first Publish — and an edit after the
+  grant is gone — asks for it with a bounded `requestGrants` before writing. A
+  declined or unavailable dialog writes nothing to the board. The auto card cover
+  (a background edit) never asks; it is skipped without the grant. Everything else
+  (reads, the viewer's `kv`, withdrawing their own row, votes, reports) needs only
+  `apps:storage`, which is consent-exempt.
+- **Refusals are fixed copy.** A refused write maps to a sentence keyed on the
+  store's `code` (and `details.reason` / `details.ceiling`) in
+  `src/lib/storageErrors.ts`; the server's own message is never rendered. Every
+  shared create and edit is text-moderated by the store — every string in the
+  document, `data` included.
+- **Read budget.** List pages carry values (no `get` per key), at most 100 a page.
+  Kept runs are read newest-first (`-key`) in two pages; drafts and "Published by
+  me" follow the cursor (bounded). A short `rate_limited` (store contention) is
+  retried in place at most twice; a spent per-minute window is not waited out.
+- **Creator attribution (`sharedContentKey`)** still resolves the author from the
+  legacy shared store server-side, so it is recorded for copied generators only
+  (track-only, fail-open).
+
 ## Deeplinks + OG/meta
 
 A published generator is linkable at
@@ -140,7 +184,7 @@ matching generator in the Runner. Only the exact shape `g/<key>` (key
   that page leaves the viewer on Browse. ⚠️ This used to be written up here as a
   missing host seam — "the shared store exposes `list`/`getCount(s)` but no
   fetch-single-row-by-key" — and that is **false**: `shared.get(key)` is live in
-  `src/platform/sharedStorage.ts` (over `GET blocks/shared-storage/item`). The call
+  `src/platform/sharedStorage.ts` (a document-store `get` on `records`). The call
   sites simply do not use it yet. Fixing them also has to decide what to show when
   `get` returns `null`, which it does for a withdrawn or moderated row as well as a
   missing one.
@@ -163,13 +207,21 @@ the manifest; consent-exempt; never minted for dev, tunnel or review tokens).
   `contentRating` (unset inherits the app's own). Every new item and every edit
   to an approved one waits for a moderator; the Builder says so in one line
   under "Published!".
-- **Withdraw** → no store call. civitai's shared-storage withdraw takes the
-  author's card down itself, server-side, before it answers.
+- **Withdraw** → `POST blocks/sub-listings/withdraw` with `{ itemKey }`, best-effort,
+  after the document delete succeeded. (The legacy shared withdraw took the card
+  down server-side; a document-store delete does not touch sub-listings.)
+- ⚠️ **The store validates `itemKey` against the LEGACY shared store.** A generator
+  published after 0.13.0 exists only in the document store, so its upsert is
+  refused `item_not_found` ("Couldn't add this to the App Store") until the server
+  learns the document store. Generators copied over at go-live keep their legacy
+  row and keep working. The backfill does not remember `item_not_found`, so those
+  generators are listed by a later run once the server can see them.
 - **Backfill** → off the "Published by me" read, the app calls
   `GET blocks/sub-listings/mine` and upserts the viewer's published generators
   that have no card yet: at most 10 per run, at most one run per 6 hours across
   page loads (a ledger under `store-backfill:v1` in the viewer's app storage),
-  and an item the store refused is not retried by the backfill. The server counts
+  and an item the store refused is not retried by the backfill (except
+  `item_not_found`, above). The server counts
   every upsert, refused or not, against 30 writes/hour and 100/day. A viewer with
   no published generators never reaches the store routes.
 - **Best-effort, always.** Store calls run after the shared-storage write has
@@ -198,8 +250,9 @@ server cap — a forged row cannot build an over-limit submit body.
 `buildPublishPayload()` writes a shared-storage `{ title, body, data }` record:
 
 - `title` / `body` → **all user-visible text** (name, description, every button
-  label, every prompt template). This is what the platform's text
-  content-safety belt moderates.
+  label, every prompt template). Since 0.13.0 the document store moderates every
+  string in the record — `data` included — so the split decides where this app
+  puts its own visible text, not what is scanned.
 - `data` → the **opaque structured config** (buttons with resource ids +
   weights, params, exposed inputs, `backgroundImageRef`). Unmoderated, app-owned
   — and carries no visible text that isn't *also* in `title`/`body`.

@@ -85,7 +85,7 @@ export function publishRefusalMessage(err: StorageRefusalLike): string {
     case 'not_author':
       return 'Only the person who published this generator can change it.';
     case 'not_found':
-      return "This generator isn't published any more, so it couldn't be updated. Publish it again to share it.";
+      return "This generator isn't published any more, so it couldn't be updated.";
     case 'version_conflict':
       return 'This generator was changed somewhere else (another tab?). Go back, reopen it and try again.';
     default:
