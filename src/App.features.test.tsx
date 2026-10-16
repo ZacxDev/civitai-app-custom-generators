@@ -220,6 +220,54 @@ describe('App — fork / duplicate (feature #9)', () => {
   });
 });
 
+describe('App — card covers (owner-set header, else first published output)', () => {
+  const gated = async (ids: number[]) =>
+    ids.map((id) => ({ imageId: id, status: 'visible' as const, url: `https://img.example/${id}.jpg`, width: 1024, height: 576 }));
+
+  it('renders the auto cover (coverImageId) on the card when no header is set', async () => {
+    const seed = publishedSeed('shared:cov', 'Covered');
+    (seed.value.data as { coverImageId?: number }).coverImageId = 4242;
+    setup([seed], { getImages: gated });
+    const card = await screen.findByTestId('published-card');
+    const cover = await within(card).findByTestId('published-cover');
+    expect(cover).toHaveAttribute('src', 'https://img.example/4242.jpg');
+  });
+
+  it("the owner's first kept output becomes the cover of their coverless generator", async () => {
+    const { shared } = setup([publishedSeed('shared:mine', 'Mine', VIEWER_ID)], {
+      getImages: gated,
+      keepOutputs: async () => [555],
+    });
+    await userEvent.click(await within(await screen.findByTestId('published-card')).findByTestId('published-open'));
+    await screen.findByTestId('runner');
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a lighthouse');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+    await screen.findByTestId('queue-results');
+    await userEvent.click(screen.getByTestId('result-keep'));
+    await screen.findByTestId('result-kept');
+    await waitFor(() => expect(shared.updated.length).toBeGreaterThan(0));
+    expect(shared.updated.at(-1)!.key).toBe('shared:mine');
+    expect((shared.updated.at(-1)!.value.data as { coverImageId?: number }).coverImageId).toBe(555);
+  });
+
+  it("a visitor's keep never writes a cover onto someone else's generator", async () => {
+    const { shared } = setup([publishedSeed('shared:theirs', 'Theirs', 7)], {
+      getImages: gated,
+      keepOutputs: async () => [556],
+    });
+    await userEvent.click(await within(await screen.findByTestId('published-card')).findByTestId('published-open'));
+    await screen.findByTestId('runner');
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a lighthouse');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+    await screen.findByTestId('queue-results');
+    await userEvent.click(screen.getByTestId('result-keep'));
+    await screen.findByTestId('result-kept');
+    expect(shared.updated).toHaveLength(0);
+  });
+});
+
 describe('App — rehydration-failure notice (feature #12)', () => {
   it('surfaces a non-blocking notice in the Runner when resource rehydration throws', async () => {
     setup([publishedSeed('shared:r', 'Rehydrate Me')], {

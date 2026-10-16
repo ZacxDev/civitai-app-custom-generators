@@ -229,7 +229,7 @@ export function Builder({ initial, c, pickResource, uploadImage, scanBackground,
         <Group justify="space-between">
           <div style={{ fontSize: 13 }}>
             <div style={{ fontWeight: 600 }}>Header image</div>
-            <div style={{ color: c.muted }}>Cosmetic cover banner shown at the top of your generator — scanned + moderated because it's public.</div>
+            <div style={{ color: c.muted }}>Shown at the top of your generator and as its cover in lists — scanned + moderated because it's public. Without one, your first kept generation becomes the list cover automatically.</div>
           </div>
           <Group gap={8}>
             {config.headerImageRef && (

@@ -14,6 +14,8 @@ import {
   exposesPrompt,
   loraFromPick,
   missingRequiredInputs,
+  cardCoverImageIdOf,
+  coverImageIdOf,
   headerImageRefOf,
   mergeParams,
   moveButton,
@@ -243,6 +245,22 @@ describe('publish payload split (moderation boundary)', () => {
     expect(parsed!.buttons).toHaveLength(2);
     expect(parsed!.buttons[0].checkpoint?.versionId).toBe(1001);
     expect(parsed!.headerImageRef?.imageId).toBe(77);
+  });
+
+  it('card cover: coverImageId round-trips, and the owner-set header wins over it', () => {
+    const withCover = { ...config, coverImageId: 4242 };
+    const payload = buildPublishPayload(withCover);
+    expect((payload.data as { coverImageId?: number }).coverImageId).toBe(4242);
+    expect(parsePublishedGenerator(payload)!.coverImageId).toBe(4242);
+    // Header set (config carries headerImageRef 77) → header is the card cover.
+    expect(cardCoverImageIdOf(payload)).toBe(77);
+    // No header → the auto cover is the card cover.
+    const noHeader = buildPublishPayload({ ...withCover, headerImageRef: undefined });
+    expect(cardCoverImageIdOf(noHeader)).toBe(4242);
+    expect(coverImageIdOf(noHeader)).toBe(4242);
+    // Neither → no cover.
+    const bare = buildPublishPayload({ ...config, headerImageRef: undefined });
+    expect(cardCoverImageIdOf(bare)).toBeUndefined();
   });
 
   it('BACK-COMPAT: reads the legacy `backgroundImageRef` from an already-published row into headerImageRef', () => {
