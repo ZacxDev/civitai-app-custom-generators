@@ -11,7 +11,7 @@ describe('block.manifest.json', () => {
     expect(() => validateManifest()).not.toThrow();
   });
 
-  it('declares exactly the eight scopes the app uses', () => {
+  it('declares exactly the ten scopes the app uses', () => {
     expect(manifest.scopes).toEqual([
       'ai:write:budgeted',
       'buzz:read:self',
@@ -19,6 +19,8 @@ describe('block.manifest.json', () => {
       'apps:storage:write',
       'apps:storage:shared:read',
       'apps:storage:shared:write',
+      'apps:storage',
+      'apps:storage:publish',
       'posts:write:self',
       'apps:store:items:write',
     ]);
@@ -36,7 +38,7 @@ describe('block.manifest.json', () => {
       expect(known.has(scope), `${scope} is not in the installed @civitai/app-sdk BLOCK_SCOPES`).toBe(true);
     }
     // APPEND the unknown scope rather than replacing the list: replacing it
-    // would orphan all eight `scopeJustifications`, which `defineBlock` rejects
+    // would orphan all ten `scopeJustifications`, which `defineBlock` rejects
     // on its own — so the case would stay red with the enum check deleted.
     // Pinned to the error's FIELD, so only the scope-enum check can satisfy it.
     let caught: unknown;
@@ -46,9 +48,9 @@ describe('block.manifest.json', () => {
       caught = e;
     }
     expect(caught).toBeInstanceOf(BlockManifestError);
-    expect((caught as BlockManifestError).field).toBe('scopes[8]');
+    expect((caught as BlockManifestError).field).toBe('scopes[10]');
     expect((caught as BlockManifestError).message).toMatch(
-      /^manifest\.scopes\[8\] must be equal to one of the allowed values/,
+      /^manifest\.scopes\[10\] must be equal to one of the allowed values/,
     );
   });
 

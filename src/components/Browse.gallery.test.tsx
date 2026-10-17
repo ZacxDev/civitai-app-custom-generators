@@ -358,31 +358,26 @@ describe('the gallery tab only exists when it can', () => {
   });
 
   /**
-   * 🔴 The roving-tabindex navigation walks the VISIBLE tabs. Walking the static
-   * list instead would let `End` select a tab that is not in the DOM: the panel
-   * would render nothing and the follow-up `.focus()` would find no element — a
-   * dead tablist, with no error anywhere.
+   * 🔴 The sidebar carries ONLY the sections that exist. The gallery item is
+   * not rendered at all for a viewer who cannot own a gallery — there is no
+   * hidden item for navigation (keyboard or otherwise) to land on.
    */
-  it('keyboard navigation never lands on the hidden gallery tab', async () => {
+  it('the hidden gallery item is not in the sidebar at all', async () => {
     setup({}, null);
-    const discover = await screen.findByTestId('tab-discover');
-    discover.focus();
-
-    await userEvent.keyboard('{End}');
-    await waitFor(() => expect(screen.getByTestId('tab-mine')).toHaveAttribute('aria-selected', 'true'));
+    await screen.findByTestId('browse');
+    await userEvent.click(screen.getByTestId('nav-toggle'));
+    expect(screen.getByTestId('sidebar')).toHaveAttribute('data-open', 'true');
     expect(screen.queryByTestId('tab-kept')).not.toBeInTheDocument();
-
-    // Wrapping forward from the last visible tab returns to the first.
-    await userEvent.keyboard('{ArrowRight}');
-    await waitFor(() => expect(screen.getByTestId('tab-discover')).toHaveAttribute('aria-selected', 'true'));
+    await userEvent.click(screen.getByTestId('tab-mine'));
+    expect(await screen.findByTestId('mine-list')).toBeInTheDocument();
   });
 
-  it('reaches the gallery by keyboard when it IS available', async () => {
+  it('reaches the gallery from the sidebar when it IS available', async () => {
     setup();
-    const discover = await screen.findByTestId('tab-discover');
-    discover.focus();
-    await userEvent.keyboard('{End}');
-    await waitFor(() => expect(screen.getByTestId('tab-kept')).toHaveAttribute('aria-selected', 'true'));
+    await screen.findByTestId('browse');
+    await userEvent.click(screen.getByTestId('nav-toggle'));
+    await userEvent.click(screen.getByTestId('tab-kept'));
+    await waitFor(() => expect(screen.getByTestId('tab-kept')).toHaveAttribute('current'));
     expect(await screen.findByTestId('kept-list')).toBeInTheDocument();
   });
 });
