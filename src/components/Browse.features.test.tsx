@@ -209,27 +209,35 @@ describe('Browse — pagination', () => {
   });
 });
 
-describe('Browse — tablist a11y (roving tabindex + arrow keys)', () => {
-  it('uses roving tabindex and moves selection with ArrowRight/ArrowLeft', async () => {
+describe('Browse — sidebar navigation (upstream civitai-nav-list)', () => {
+  it('marks the current section on its nav item and switches panels on click', async () => {
     renderBrowse({ discover: [item('a', 'Alpha')] });
     const discoverTab = screen.getByTestId('tab-discover');
     const mineTab = screen.getByTestId('tab-mine');
 
-    // roving tabindex: selected=0, other=-1; panels are labelled by their tab
-    expect(discoverTab).toHaveAttribute('aria-selected', 'true');
-    expect(discoverTab).toHaveAttribute('tabindex', '0');
-    expect(mineTab).toHaveAttribute('tabindex', '-1');
-    expect(discoverTab).toHaveAttribute('aria-controls', 'panel-discover');
+    // The upstream nav item reflects its state as `current`; panels stay
+    // labelled by their nav item.
+    await waitFor(() => expect(discoverTab).toHaveAttribute('current'));
+    expect(mineTab).not.toHaveAttribute('current');
     expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'tab-discover');
 
-    discoverTab.focus();
-    await userEvent.keyboard('{ArrowRight}');
-    expect(mineTab).toHaveAttribute('aria-selected', 'true');
-    expect(mineTab).toHaveAttribute('tabindex', '0');
-    expect(discoverTab).toHaveAttribute('tabindex', '-1');
+    await userEvent.click(mineTab);
+    await waitFor(() => expect(mineTab).toHaveAttribute('current'));
+    expect(screen.getByTestId('mine-list')).toBeInTheDocument();
+  });
 
-    await userEvent.keyboard('{ArrowLeft}');
-    expect(discoverTab).toHaveAttribute('aria-selected', 'true');
+  it('the sidebar starts closed, opens from the header toggle, and closes on selection', async () => {
+    renderBrowse({ discover: [item('a', 'Alpha')] });
+    const sidebar = screen.getByTestId('sidebar');
+    expect(sidebar).toHaveAttribute('data-open', 'false');
+
+    await userEvent.click(screen.getByTestId('nav-toggle'));
+    expect(sidebar).toHaveAttribute('data-open', 'true');
+    expect(screen.getByTestId('nav-toggle')).toHaveAttribute('aria-expanded', 'true');
+
+    await userEvent.click(screen.getByTestId('tab-mine'));
+    expect(sidebar).toHaveAttribute('data-open', 'false');
+    expect(screen.getByTestId('mine-list')).toBeInTheDocument();
   });
 });
 
@@ -265,6 +273,6 @@ describe('Browse — fork + share affordances', () => {
     const fork = within(card).getByTestId('published-fork');
     const forkTipId = fork.getAttribute('aria-describedby');
     expect(forkTipId).toBeTruthy();
-    expect(document.getElementById(forkTipId!)).toHaveTextContent('Fork into your own editable draft');
+    expect(document.getElementById(forkTipId!)).toHaveTextContent('Make a copy — fork into your own editable draft');
   });
 });

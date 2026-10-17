@@ -115,6 +115,8 @@ describe('the platform seam', () => {
     expect(importers.filter((f) => !f.startsWith('platform/'))).toEqual([]);
     expect(importers).toEqual([
       'platform/client.ts',
+      'platform/generatorSocial.test.ts',
+      'platform/generatorSocial.ts',
       'platform/hooks.ts',
       // Imports `SubListingError` to assert the adapter's `cause` is the SDK's own.
       'platform/storeListings.transport.test.ts',
