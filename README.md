@@ -116,11 +116,11 @@ This app emits **no analytics or funnel telemetry**. It used to carry an
 console.debug(...)` — inert in production, consumed by nothing. All of it is
 deleted. A caught render error is recovered on screen and reported nowhere.
 
-## Storage (0.13.0: the App Blocks document store)
+## Storage (0.15.0: the App Blocks document store)
 
 Everything this app stores lives in two collections of the document store
 (`@civitai/sdk` 0.14 `app.storage.collection(name)`, REST `/api/v1/blocks/storage/*`),
-declared in `block.manifest.json` → `storage.collections`. Before 0.13.0 it used the
+declared in `block.manifest.json` → `storage.collections`. Before 0.15.0 it used the
 legacy per-viewer KV (`/blocks/app-storage/*`) and the legacy shared store
 (`/blocks/shared-storage/*`), both deprecated.
 
@@ -282,7 +282,7 @@ server cap — a forged row cannot build an over-limit submit body.
 `buildPublishPayload()` writes a shared-storage `{ title, body, data }` record:
 
 - `title` / `body` → **all user-visible text** (name, description, every button
-  label, every prompt template). Since 0.13.0 the document store moderates every
+  label, every prompt template). Since 0.15.0 the document store moderates every
   string in the record — `data` included — so the split decides where this app
   puts its own visible text, not what is scanned.
 - `data` → the **opaque structured config** (buttons with resource ids +

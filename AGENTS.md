@@ -14,7 +14,8 @@ no UI framework. Their API reference ships with them, in `node_modules`:
   fires on every snapshot change (theme, context, each token rotation — update
   the view in place, never rebuild it); `app.site` is the `/api/v1` REST API as
   the viewer; `app.requestGrants([...])` asks for a consent-gated scope;
-  `app.storage` / `app.sharedStorage` are app storage; `app.host` is the host's
+  `app.storage` is app storage (the document store; `app.sharedStorage` is
+  the deprecated legacy shared store, unused here); `app.host` is the host's
   own UI.
 - **`node_modules/@civitai/components/custom-elements.json`** — every
   `<civitai-*>` element's tags, attributes, events and slots.

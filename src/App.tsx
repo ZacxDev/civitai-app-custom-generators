@@ -241,7 +241,7 @@ export interface AppDeps {
  * is whole. 51 → 50 rendered, disclosed, and there really is a row it did not
  * show.
  *
- * ⚠️ SINCE THE DOCUMENT-STORE PORT (0.13.0) THE CURSOR IS EXACT — the store
+ * ⚠️ SINCE THE DOCUMENT-STORE PORT (0.15.0) THE CURSOR IS EXACT — the store
  * reads one row past the page and sends `nextCursor` only when it exists — so the
  * defect above cannot recur through it. The `+1` is kept anyway: it costs one row,
  * and it keeps this claim independent of whichever store answers.
