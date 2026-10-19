@@ -110,3 +110,33 @@ export interface SharedStorage {
  * of a transport change.
  */
 export type UseSharedStorage = SharedStorage;
+
+/** One generator's downvote tally + the reading viewer's own downvote state. */
+export interface DownvoteState {
+  count: number;
+  downvoted: boolean;
+}
+
+/** One `generator_media` document: a kept run's published Image ids. */
+export interface GeneratorMediaDoc {
+  generatorKey: string;
+  imageIds: number[];
+  [key: string]: unknown;
+}
+
+/**
+ * The document-store social signals (see `generatorSocial.ts`): downvotes
+ * and published-media presence for published generators. Every method is
+ * best-effort from the caller's side — the collections exist only once a
+ * declaring version is approved, and a refusal must never blank Browse.
+ */
+export interface GeneratorSocial {
+  /** Downvote state for the given generator keys; absent key = no document = 0 / not downvoted. */
+  getDownvotes(keys: string[]): Promise<Record<string, DownvoteState>>;
+  /** Set or clear the viewer's downvote; resolves with the authoritative count. */
+  setDownvote(key: string, on: boolean): Promise<{ count: number }>;
+  /** Published Image ids per generator key (newest kept runs first, capped). */
+  getPublishedMedia(keys: string[]): Promise<Record<string, number[]>>;
+  /** Record a kept run's published outputs against its generator. */
+  recordPublishedMedia(generatorKey: string, imageIds: number[]): Promise<void>;
+}

@@ -38,8 +38,11 @@ import {
   useHostRoute,
   createStoreListings,
   pickPostedImage,
+  createGeneratorSocial,
 } from './platform/index.js';
 import type {
+  DownvoteState,
+  GeneratorSocial,
   SharedAppendValue,
   SharedListItem,
   SharedListResult,
@@ -49,7 +52,7 @@ import type {
 
 import { Loader } from './ui/index.js';
 
-import { AI_WRITE_BUDGETED, hasGenerateScope, hasStoreScope } from './scopes.js';
+import { AI_WRITE_BUDGETED, hasDocPublishScope, hasGenerateScope, hasStoreScope } from './scopes.js';
 import { palette, pageStyle, contentStyle, metaText } from './theme.js';
 
 import { paintTheme } from './bootTheme.js';
@@ -174,6 +177,13 @@ export interface AppDeps {
    * image. Resolves with the pick, or `null` when nothing was picked.
    */
   pickStoreImage: () => Promise<BlockPickedImageInfo | null>;
+  /**
+   * Document-store social signals (downvotes + published-media presence).
+   * Optional: absent (older test fixtures) = cards render no downvote /
+   * media signal rather than failing. See platform/generatorSocial.ts for
+   * why these live on the document store and why every call is best-effort.
+   */
+  social?: GeneratorSocial;
   drafts: DraftStore;
   requestConsent: (opts: { scopes: string[] }) => void;
   requestSignIn: () => void;
@@ -387,6 +397,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       updateSharedGenerator: sharedHook.update,
       store: createStoreListings(),
       pickStoreImage: pickPostedImage,
+      social: createGeneratorSocial(),
       drafts: appStorage as unknown as DraftStore,
       requestConsent,
       requestSignIn,
@@ -423,6 +434,10 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   const canListInStore = Boolean(viewer) && hasStoreScope(token.scopes);
   const canListInStoreRef = useRef(canListInStore);
   canListInStoreRef.current = canListInStore;
+  /** Live token scopes, for best-effort writes gated on a consent scope the
+   *  app must not prompt for mid-flow (the published-media record at keep). */
+  const tokenScopesRef = useRef(token.scopes);
+  tokenScopesRef.current = token.scopes;
   /** The backfill runs at most once per mount (and per interval — see `lib/storeListing.ts`). */
   const storeReconciledRef = useRef(false);
   /**
@@ -538,6 +553,11 @@ export function App({ deps: depsOverride }: AppProps = {}) {
   // else (hidden / above the viewer's ceiling / unresolved / errored) maps to
   // `null` so a card NEVER falls back to the unmoderated stored `url`.
   const [coverUrls, setCoverUrls] = useState<Record<number, string | null>>({});
+  // Document-store social signals for the cards, keyed by generator key.
+  // Best-effort: an empty record is the honest pre-approval / failure state
+  // (the collections exist only once a declaring version is approved).
+  const [downvoteStates, setDownvoteStates] = useState<Record<string, DownvoteState>>({});
+  const [mediaImageIds, setMediaImageIds] = useState<Record<string, number[]>>({});
 
   useEffect(() => {
     if (!ready || view !== 'browse') return;
@@ -746,6 +766,25 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     } catch {
       /* best-effort — the keep itself already succeeded */
     }
+    // ── PUBLISHED-MEDIA RECORD ──────────────────────────────────────────
+    // Record this keep's published outputs against their generator so its
+    // Discover card can show real output. Best-effort and consent-quiet:
+    // creating the record needs the consent-gated document-store publish
+    // scope, so it is attempted only when the token already carries it —
+    // a keep never stops to ask for a bookkeeping write.
+    try {
+      const social = depsRef.current.social;
+      if (social && run.generatorKey && run.imageIds.length > 0 && hasDocPublishScope(tokenScopesRef.current)) {
+        await social.recordPublishedMedia(run.generatorKey, run.imageIds);
+        setMediaImageIds((prev) => {
+          const existing = prev[run.generatorKey!] ?? [];
+          const merged = [...run.imageIds.filter((id) => !existing.includes(id)), ...existing];
+          return { ...prev, [run.generatorKey!]: merged.slice(0, 3) };
+        });
+      }
+    } catch {
+      /* best-effort — the keep itself already succeeded */
+    }
   }, [viewer]);
 
   /**
@@ -808,15 +847,41 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     })();
   }, []);
 
+  // Load the document-store social signals for every generator on screen
+  // (Discover page + the viewer's own rows). Best-effort and confined: a
+  // refusal (pre-approval the collections do not exist) leaves the defaults
+  // and never blanks the board.
+  useEffect(() => {
+    const social = depsRef.current.social;
+    if (!social || view !== 'browse') return;
+    const keys = [...new Set([...shared, ...myPublished].map((i) => i.key))];
+    if (keys.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const [dv, media] = await Promise.allSettled([social.getDownvotes(keys), social.getPublishedMedia(keys)]);
+      if (cancelled) return;
+      if (dv.status === 'fulfilled') setDownvoteStates(dv.value);
+      if (media.status === 'fulfilled') setMediaImageIds(media.value);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [shared, myPublished, view]);
+
   // Resolve the MODERATED cover url for every card whose stored data carries a
   // header `imageId` not yet resolved. Batches the ids through the host
   // `getImages` gate; a `visible` id keeps its host-served url, all others map to
   // `null` (never the unmoderated stored url). Failures fail-closed to `null`.
   useEffect(() => {
     const wanted = new Set<number>();
-    for (const item of shared) {
+    for (const item of [...shared, ...myPublished]) {
       const id = cardCoverImageIdOf(item.value);
       if (typeof id === 'number') wanted.add(id);
+    }
+    // Published-media thumbnails resolve through the SAME gated read — a
+    // media id is an ordinary Civitai Image id and gets no raw-url shortcut.
+    for (const ids of Object.values(mediaImageIds)) {
+      for (const id of ids) wanted.add(id);
     }
     const missing = [...wanted].filter((id) => !(id in coverUrls));
     if (missing.length === 0) return;
@@ -839,7 +904,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     return () => {
       cancelled = true;
     };
-  }, [shared, coverUrls]);
+  }, [shared, myPublished, mediaImageIds, coverUrls]);
 
   /**
    * This generator's kept runs, for the Runner's "Kept from this generator".
@@ -865,6 +930,39 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       return typeof id === 'number' ? coverUrls[id] ?? null : null;
     },
     [coverUrls],
+  );
+
+  // Card media lookup passed to Browse: the resolved MODERATED urls of the
+  // outputs published from this generator (newest kept runs first), or [].
+  const mediaUrlsFor = useCallback(
+    (item: SharedListItem): string[] => {
+      const ids = mediaImageIds[item.key] ?? [];
+      return ids
+        .map((id) => coverUrls[id] ?? null)
+        .filter((u): u is string => typeof u === 'string')
+        .slice(0, 3);
+    },
+    [mediaImageIds, coverUrls],
+  );
+
+  /**
+   * Toggle the viewer's downvote on a published generator (document-store
+   * mark). Resolves with the authoritative count. Anonymous viewers are
+   * handed to sign-in, mirroring handleVote.
+   */
+  const handleDownvote = useCallback(
+    async (item: SharedListItem, nextDownvoted: boolean): Promise<number> => {
+      const social = depsRef.current.social;
+      if (!social) throw new Error('Downvotes are unavailable.');
+      if (!viewer) {
+        depsRef.current.requestSignIn();
+        throw new Error('Sign in to downvote.');
+      }
+      const { count } = await social.setDownvote(item.key, nextDownvoted);
+      setDownvoteStates((prev) => ({ ...prev, [item.key]: { count, downvoted: nextDownvoted } }));
+      return count;
+    },
+    [viewer],
   );
 
   // ---- navigation ----
@@ -1436,6 +1534,9 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             onDeleteDraft={handleDeleteDraft}
             onDeletePublished={handleDeletePublished}
             onVote={handleVote}
+            downvotes={downvoteStates}
+            onDownvote={deps.social ? handleDownvote : undefined}
+            mediaUrlsFor={mediaUrlsFor}
             onFork={handleFork}
             onShare={handleShare}
             onReport={handleReport}

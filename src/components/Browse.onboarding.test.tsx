@@ -116,11 +116,12 @@ describe('Browse — softened "one-tap" copy (fix #5)', () => {
   });
 });
 
-describe('Browse — Discover cost signal (fix #3)', () => {
-  it('surfaces an approximate "≈ N ⚡ per run" on each Discover card', () => {
+describe('Browse — no per-run Buzz on cards', () => {
+  it('shows no Buzz-per-run figure on a Discover card (the price lives on the run path)', () => {
     renderBrowse({ discover: [itemWithButtons('k1', 'Alpha')] });
     const card = screen.getByTestId('published-card');
-    expect(within(card).getByTestId('published-cost')).toHaveTextContent(/≈ \d+ ⚡ per run/);
+    expect(within(card).queryByTestId('published-cost')).not.toBeInTheDocument();
+    expect(card.textContent).not.toMatch(/per run/);
   });
 });
 
@@ -139,17 +140,20 @@ describe('Browse — Discover intro line (fix #1)', () => {
   });
 });
 
-describe('Browse — sections in a side nav (sidenav)', () => {
-  it('renders the section tabs as a vertical tablist in a nav landmark on wide frames', () => {
+describe('Browse — sections in a slide-out sidebar', () => {
+  it('renders the sections as an upstream nav list inside a nav landmark, closed until toggled', async () => {
     setViewport('desktop');
     renderBrowse();
     const nav = screen.getByTestId('tab-discover').closest('nav');
     expect(nav).not.toBeNull();
-    const tablist = screen.getByTestId('tab-discover').closest('[role="tablist"]');
-    expect(tablist).toHaveAttribute('aria-orientation', 'vertical');
+    expect(screen.getByTestId('tab-discover').closest('civitai-nav-list')).not.toBeNull();
+    const sidebar = screen.getByTestId('sidebar');
+    expect(sidebar).toHaveAttribute('data-open', 'false');
+    await userEvent.click(screen.getByTestId('nav-toggle'));
+    expect(sidebar).toHaveAttribute('data-open', 'true');
   });
 
-  it('switching sections from the sidenav still swaps panels', async () => {
+  it('switching sections from the sidebar still swaps panels', async () => {
     renderBrowse();
     await userEvent.click(screen.getByTestId('tab-mine'));
     expect(screen.getByTestId('mine-list')).toBeInTheDocument();

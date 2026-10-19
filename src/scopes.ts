@@ -1,4 +1,4 @@
-// Block-scope constants used by the app. All eight are declared in the manifest.
+// Block-scope constants used by the app. All ten are declared in the manifest.
 //
 // `ai:write:budgeted` is CONSENT-GATED: the host mints the first token WITHOUT
 // it and only adds it after the viewer grants consent (REQUEST_CONSENT →
@@ -13,6 +13,22 @@ export const APPS_STORAGE_READ = 'apps:storage:read';
 export const APPS_STORAGE_WRITE = 'apps:storage:write';
 export const APPS_STORAGE_SHARED_READ = 'apps:storage:shared:read';
 export const APPS_STORAGE_SHARED_WRITE = 'apps:storage:shared:write';
+/**
+ * The DOCUMENT STORE (`app.storage.collection(...)`) — a different scope
+ * from every legacy `apps:storage:*` scope above. Consent-EXEMPT: reads,
+ * marks and counters ride on it. This app declares it for the
+ * `generator_marks` (downvotes) and `generator_media` (published-output
+ * presence) collections in the manifest's `storage.collections`.
+ */
+export const APPS_STORAGE = BLOCK_SCOPES.APPS_STORAGE;
+/**
+ * Creating documents in a shared `"own"` document-store collection —
+ * CONSENT-GATED, like `apps:storage:shared:write` is for the legacy store.
+ * Only the published-media record (a write at keep time) needs it, and that
+ * write is best-effort: it is attempted only when the token already
+ * carries the scope, never prompted for mid-keep.
+ */
+export const APPS_STORAGE_PUBLISH = BLOCK_SCOPES.APPS_STORAGE_PUBLISH;
 /**
  * Publish a REAL, feed-visible Post on the VIEWER'S profile from images this app
  * already published for them (`useCreatePostFromApp()`).
@@ -48,4 +64,9 @@ export function hasGenerateScope(tokenScopes: readonly string[] | undefined): bo
 /** Does the current token carry the App Store sub-listing scope? */
 export function hasStoreScope(tokenScopes: readonly string[] | undefined): boolean {
   return (tokenScopes ?? []).includes(APPS_STORE_ITEMS_WRITE);
+}
+
+/** Does the current token carry the document-store publish scope (consent-gated)? */
+export function hasDocPublishScope(tokenScopes: readonly string[] | undefined): boolean {
+  return (tokenScopes ?? []).includes(APPS_STORAGE_PUBLISH);
 }

@@ -6,20 +6,23 @@
 // Chrome is the `@civitai/theme` design system: EmptyState panels, SafeImage
 // covers, and `--civitai-*` tokens (via ../theme) so it flips with `[data-theme]`.
 //
-// a11y: the Discover/Mine switcher is an ARIA tablist with roving tabindex +
-// arrow-key navigation; each panel is a labelled `role="tabpanel"`. It renders
-// as a sticky side nav on wide frames and a top strip on narrow ones.
+// Navigation: a slide-out sidebar (hamburger in the header) carrying the
+// upstream `civitai-nav-list` / `civitai-nav-item` web components; each panel
+// stays a labelled `role="tabpanel"` named by its nav item.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 
-import { Alert, Badge, Button, Card, Group, Loader, Modal, Stack, TextInput, SegmentedControl, Tooltip, ToastProvider, useToast } from '../ui/index.js';
-// The SegmentedControl, hover/focus Tooltip, and Toast system render the
-// `@civitai/components` markup contract (`data-civitai-ui` + `--civitai-*`
-// tokens), same as the control adapters in ui/primitives — one visual system.
+import { Alert, Badge, Button, Card, Group, Loader, Modal, Stack, TextInput, Tooltip, ToastProvider, useToast } from '../ui/index.js';
+// The hover/focus Tooltip and Toast system render the `@civitai/components`
+// markup contract (`data-civitai-ui` + `--civitai-*` tokens), same as the
+// control adapters in ui/primitives — one visual system. The sidebar nav and
+// the sort menu below are the upstream WEB COMPONENTS themselves
+// (`civitai-nav-list` / `civitai-menu`), registered by define-upstream.
 
 import type { BlockGatedImage } from '@civitai/app-sdk/blocks';
-import type { SharedListItem } from '../platform/index.js';
+import type { DownvoteState, SharedListItem } from '../platform/index.js';
+import '../define-upstream.js';
 import type { StoredDraft } from '../lib/drafts.js';
 import { keptImageCount, type KeptImageCell, type KeptRun } from '../lib/runs.js';
 import { KeptGallery } from './KeptGallery.js';
@@ -28,9 +31,7 @@ import { token, radius, metaText, type Palette } from '../theme.js';
 // Motion is opt-in per element and gated on `prefers-reduced-motion` by
 // `useMotion()` — see ../motion.ts for the single-guard rationale.
 import { CLASS_LIFT, CLASS_RISE, CLASS_TICK, motionClass, staggerDelayMs, useChangeTick, useMotion } from '../motion.js';
-import { formatCostRange, generatorCostRange } from '../lib/cost.js';
 import { EmptyState } from './EmptyState.js';
-import { useIsMobile } from '../useMediaQuery.js';
 import { SafeImage } from './SafeImage.js';
 import { ReportButton } from '../ui/index.js';
 
@@ -60,6 +61,16 @@ const TAB_LABELS: Record<Tab, string> = {
   discover: 'Discover',
   mine: 'My generators',
   kept: 'My gallery',
+};
+
+/** Each section's host-page route — the nav item `href` the upstream list
+ *  matches `current` against. Mirrors `routeForPage` in lib/routes.ts.
+ *  Discover is `/`, never ``: an EMPTY href makes civitai-nav-item render as
+ *  a collapsible GROUP header (chevron, aria-expanded) instead of a link. */
+const SECTION_ROUTE: Record<Tab, string> = {
+  discover: '/',
+  mine: 'mine',
+  kept: 'gallery',
 };
 
 export interface BrowseProps {
@@ -122,6 +133,21 @@ export interface BrowseProps {
   onDeletePublished: (item: SharedListItem) => void | Promise<void>;
   /** Toggle this viewer's up-vote; resolves with the authoritative post-vote count. */
   onVote: (item: SharedListItem, nextVoted: boolean) => Promise<number>;
+  /**
+   * Downvote tallies + the viewer's own downvote state per generator key,
+   * from the document store (`generator_marks`). Absent key = 0 / not
+   * downvoted. Optional as a whole: no `onDownvote` = no downvote control.
+   */
+  downvotes?: Record<string, DownvoteState>;
+  /** Toggle this viewer's downvote; resolves with the authoritative post-downvote count. */
+  onDownvote?: (item: SharedListItem, nextDownvoted: boolean) => Promise<number>;
+  /**
+   * Resolved MODERATED urls of outputs published from a generator (kept
+   * runs recorded at keep time), newest first. Rendered as the card's media
+   * strip when the generator has no cover of its own — a generator people
+   * have actually made things with should not read as raw text.
+   */
+  mediaUrlsFor?: (item: SharedListItem) => string[];
   /**
    * File a published generator for PLATFORM moderator review.
    *
@@ -255,16 +281,26 @@ interface VoteState {
 }
 
 export function Browse(props: BrowseProps) {
-  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onFork, onShare, onReport, coverUrlFor, keptRuns, keptTruncated = false, keptIncomplete = false, keptError = null, getImages, onOpenGeneratorKey, posting, onRequestSignIn, copyToClipboard, onRetry } = props;
+  const { c, loading, error, discover, discoverTruncated, myDrafts, myPublished, viewerId, onSignIn, onCreate, onOpenPublished, onOpenDraft, onEditDraft, onDeleteDraft, onDeletePublished, onVote, onDownvote, downvotes, mediaUrlsFor, onFork, onShare, onReport, coverUrlFor, keptRuns, keptTruncated = false, keptIncomplete = false, keptError = null, getImages, onOpenGeneratorKey, posting, onRequestSignIn, copyToClipboard, onRetry } = props;
   const [tabState, setTabState] = useState<Tab>('discover');
   const tab = props.section ?? tabState;
   const setTab = (next: Tab) => {
     if (props.onSectionChange) props.onSectionChange(next);
     else setTabState(next);
   };
-  // The section switcher is a sticky side nav on wide frames and a top strip
-  // on narrow ones (below the civitai `sm` tier — see useMediaQuery).
-  const isMobile = useIsMobile();
+  // The section switcher is a SLIDE-OUT sidebar: closed until the header's
+  // menu button opens it, at every width. The nav itself is the upstream
+  // civitai-nav-list web component (see the aside below).
+  const [navOpen, setNavOpen] = useState(false);
+  // Escape closes the sidebar — the keyboard way out of a slide-over.
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setNavOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [navOpen]);
   // Motion gate for the chrome Browse owns directly (draft cards). Cards rendered
   // by PublishedCard read it themselves.
   const motion = useMotion();
@@ -275,6 +311,16 @@ export function Browse(props: BrowseProps) {
   // Discover controls: search, sort, incremental pagination.
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortMode>('new');
+  // The sort control is the upstream civitai-menu: its `select` event is the
+  // real-browser path; the items ALSO take onClick (below) so the choice
+  // registers wherever the element has not upgraded (jsdom, older hosts).
+  const sortMenuRef = useCallback((el: HTMLElement | null) => {
+    if (!el) return;
+    el.addEventListener('select', (e: Event) => {
+      const v = (e as CustomEvent<{ value?: string }>).detail?.value;
+      if (v === 'new' || v === 'top') setSort(v);
+    });
+  }, []);
   const [discoverVisible, setDiscoverVisible] = useState(PAGE_SIZE);
   const [draftsVisible, setDraftsVisible] = useState(PAGE_SIZE);
 
@@ -293,7 +339,12 @@ export function Browse(props: BrowseProps) {
   // clobber a newer click's result — only the latest click applies its outcome.
   const voteSeq = useRef<Record<string, number>>({});
 
-  const tablistRef = useRef<HTMLDivElement>(null);
+  // Downvote overlay: same optimistic + latest-click-wins discipline as the
+  // upvote overlay, seeded from the document-store read (App's `downvotes`).
+  const [downvoteOverlay, setDownvoteOverlay] = useState<Record<string, DownvoteState>>({});
+  const downvoteState = (item: SharedListItem): DownvoteState =>
+    downvoteOverlay[item.key] ?? downvotes?.[item.key] ?? { count: 0, downvoted: false };
+  const downvoteSeq = useRef<Record<string, number>>({});
 
   // The gallery tab exists only when there is a viewer to own it AND the app is
   // wired for the gated read. `visibleTabs` — not `TABS` — is what the keyboard
@@ -351,6 +402,12 @@ export function Browse(props: BrowseProps) {
     const optimistic: VoteState = { voted: nextVoted, count: Math.max(0, cur.count + (nextVoted ? 1 : -1)) };
     setVoteOverlay((o) => ({ ...o, [item.key]: optimistic }));
     try {
+      // One vote per viewer per direction: casting an upvote clears the
+      // viewer's downvote on the same generator first.
+      if (nextVoted && onDownvote && downvoteState(item).downvoted) {
+        const dc = await onDownvote(item, false);
+        setDownvoteOverlay((o) => ({ ...o, [item.key]: { downvoted: false, count: dc } }));
+      }
       const count = await onVote(item, nextVoted);
       // Only the latest click applies its authoritative count (guards against a
       // slow earlier vote resolving AFTER a newer unvote, which would double-count).
@@ -366,38 +423,58 @@ export function Browse(props: BrowseProps) {
     }
   }
 
-  // Roving-tabindex + arrow-key navigation for the tablist (ARIA pattern).
-  function onTabKeyDown(e: ReactKeyboardEvent) {
-    // 🔴 Walks `visibleTabs`, NOT `TABS`. With the gallery hidden (anonymous
-    // viewer, or an app not wired for the gated read) a `TABS`-based wrap would
-    // move focus onto a tab that is not in the DOM: `End` would select 'kept',
-    // the panel would render nothing, and the subsequent `.focus()` would find no
-    // element — a dead tablist with no error.
-    const tabs = visibleTabs;
-    const idx = tabs.indexOf(tab);
-    let next: Tab | null = null;
-    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = tabs[(idx + 1) % tabs.length];
-    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = tabs[(idx - 1 + tabs.length) % tabs.length];
-    else if (e.key === 'Home') next = tabs[0];
-    else if (e.key === 'End') next = tabs[tabs.length - 1];
-    if (next) {
-      e.preventDefault();
-      setTab(next);
-      const target = next;
-      requestAnimationFrame(() => tablistRef.current?.querySelector<HTMLButtonElement>(`#tab-${target}`)?.focus());
+  async function toggleDownvote(item: SharedListItem) {
+    if (!onDownvote) return;
+    // Anonymous viewers can't mark — hand off to the App (which prompts
+    // sign-in) WITHOUT an optimistic flash that would only revert.
+    if (viewerId == null) {
+      try {
+        await onDownvote(item, true);
+      } catch {
+        /* App requested sign-in — nothing to roll back. */
+      }
+      return;
+    }
+    const cur = downvoteState(item);
+    const nextDownvoted = !cur.downvoted;
+    const seq = (downvoteSeq.current[item.key] ?? 0) + 1;
+    downvoteSeq.current[item.key] = seq;
+    const optimistic: DownvoteState = {
+      downvoted: nextDownvoted,
+      count: Math.max(0, cur.count + (nextDownvoted ? 1 : -1)),
+    };
+    setDownvoteOverlay((o) => ({ ...o, [item.key]: optimistic }));
+    try {
+      // Casting a downvote clears the viewer's upvote on the same generator.
+      if (nextDownvoted && voteState(item).voted) {
+        const upCount = await onVote(item, false);
+        setVoteOverlay((o) => ({ ...o, [item.key]: { voted: false, count: upCount } }));
+      }
+      const count = await onDownvote(item, nextDownvoted);
+      // Only the latest click applies its authoritative count.
+      if (downvoteSeq.current[item.key] === seq) {
+        setDownvoteOverlay((o) => ({ ...o, [item.key]: { downvoted: nextDownvoted, count } }));
+      }
+    } catch {
+      if (downvoteSeq.current[item.key] === seq) {
+        setDownvoteOverlay((o) => ({ ...o, [item.key]: cur }));
+      }
     }
   }
 
   // Derived Discover list: filter by query, sort (newest = as-given, popular =
-  // by effective vote count desc), then page.
+  // by effective NET score — upvotes minus downvotes — desc), then page.
   const filteredDiscover = useMemo(() => {
     const q = query.trim().toLowerCase();
     const base = q ? discover.filter((it) => matchesQuery(it, q)) : discover.slice();
     if (sort === 'top') {
-      base.sort((a, b) => (voteOverlay[b.key]?.count ?? b.count) - (voteOverlay[a.key]?.count ?? a.count));
+      const net = (it: SharedListItem) =>
+        (voteOverlay[it.key]?.count ?? it.count) -
+        (downvoteOverlay[it.key]?.count ?? downvotes?.[it.key]?.count ?? 0);
+      base.sort((a, b) => net(b) - net(a));
     }
     return base;
-  }, [discover, query, sort, voteOverlay]);
+  }, [discover, query, sort, voteOverlay, downvoteOverlay, downvotes]);
   const visibleDiscover = filteredDiscover.slice(0, discoverVisible);
   /** Every loaded row is on screen, so the absence of a "Show more" reads as
    *  "that is the whole catalog" — which is false on a truncated board, and is
@@ -418,6 +495,18 @@ export function Browse(props: BrowseProps) {
         style={{ paddingBottom: 14, borderBottom: `1px solid ${token.border}` }}
       >
         <Group gap={12} align="center" wrap={false} style={{ minWidth: 0 }}>
+          <Button
+            size="sm"
+            variant="subtle"
+            data-testid="nav-toggle"
+            aria-label="Open menu"
+            aria-expanded={navOpen}
+            aria-controls="cg-sidebar"
+            onClick={() => setNavOpen(true)}
+            style={{ fontSize: 17, lineHeight: 1, padding: '4px 8px' }}
+          >
+            ☰
+          </Button>
           <span aria-hidden="true" style={brandMarkStyle}>
             <BrandMarkIcon />
           </span>
@@ -451,65 +540,100 @@ export function Browse(props: BrowseProps) {
         </Alert>
       )}
 
-      <div
+      {/* ── Slide-out sidebar ─────────────────────────────────────────────
+          The sections ride the upstream civitai-nav-list / civitai-nav-item
+          web components; the slide-over chrome (scrim, transform, close) is
+          the app's — the upstream docs ship nav PRIMITIVES, not a shell.
+          Item clicks land on the host element, so routing works whether or
+          not the element has upgraded yet. Selecting a section routes (App
+          owns the page) and closes the sidebar. */}
+      {navOpen && (
+        <div
+          data-testid="nav-scrim"
+          onClick={() => setNavOpen(false)}
+          style={{ position: 'fixed', inset: 0, background: 'var(--cg-scrim, rgba(0, 0, 0, 0.55))', zIndex: 940 }}
+        />
+      )}
+      <aside
+        id="cg-sidebar"
+        data-testid="sidebar"
+        data-open={navOpen ? 'true' : 'false'}
+        aria-hidden={!navOpen}
         style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          height: '100dvh',
+          width: 264,
+          maxWidth: '85vw',
+          zIndex: 950,
           display: 'flex',
-          flexDirection: isMobile ? 'column' : 'row',
-          gap: isMobile ? 12 : 20,
-          alignItems: 'stretch',
-          minWidth: 0,
+          flexDirection: 'column',
+          gap: 14,
+          padding: 16,
+          background: 'var(--civitai-color-surface)',
+          borderRight: `1px solid ${token.border}`,
+          boxShadow: navOpen ? '0 0 44px rgba(0, 0, 0, 0.4)' : 'none',
+          transform: navOpen ? 'translateX(0)' : 'translateX(-102%)',
+          transition: motion ? 'transform 240ms ease' : 'none',
         }}
       >
-        <nav
-          ref={tablistRef}
-          aria-label="Sections"
-          style={
-            isMobile
-              ? undefined
-              : { flex: '0 0 176px', width: 176, position: 'sticky', top: 12, alignSelf: 'flex-start' }
-          }
-        >
-          <div
-            role="tablist"
-            aria-label="Generator source"
-            aria-orientation={isMobile ? 'horizontal' : 'vertical'}
-            onKeyDown={onTabKeyDown}
-            style={{
-              display: 'flex',
-              flexDirection: isMobile ? 'row' : 'column',
-              flexWrap: isMobile ? 'wrap' : undefined,
-              gap: 6,
-            }}
-          >
+        <Group justify="space-between" align="center" wrap={false}>
+          <Group gap={10} align="center" wrap={false} style={{ minWidth: 0 }}>
+            <span aria-hidden="true" style={brandMarkStyle}>
+              <BrandMarkIcon />
+            </span>
+            <span style={{ fontWeight: 700, fontSize: 15 }}>Custom Generators</span>
+          </Group>
+          <Button size="sm" variant="subtle" data-testid="nav-close" aria-label="Close menu" onClick={() => setNavOpen(false)}>
+            ✕
+          </Button>
+        </Group>
+        <nav aria-label="Sections">
+          <civitai-nav-list label="Sections" current={SECTION_ROUTE[tab]}>
             {visibleTabs.map((t) => (
-              <Button
+              <civitai-nav-item
                 key={t}
                 id={`tab-${t}`}
-                size="sm"
-                variant={tab === t ? 'filled' : 'subtle'}
-                role="tab"
-                aria-selected={tab === t}
-                aria-controls={`panel-${t}`}
-                tabIndex={tab === t ? 0 : -1}
                 data-testid={`tab-${t}`}
-                onClick={() => setTab(t)}
-                style={isMobile ? undefined : { justifyContent: 'flex-start', width: '100%' }}
+                href={SECTION_ROUTE[t]}
+                label={TAB_LABELS[t]}
+                current={tab === t}
+                onClick={(e) => {
+                  e.preventDefault();
+                  setTab(t);
+                  setNavOpen(false);
+                }}
               >
-                {TAB_LABELS[t]}
-                {t === 'kept' && keptTotal > 0 && (
-                  <>
-                    {' '}
-                    <Badge variant="light" data-testid="tab-kept-count">
-                      {keptTotal}
-                    </Badge>
-                  </>
-                )}
-              </Button>
+                <span slot="label">
+                  {TAB_LABELS[t]}
+                  {t === 'kept' && keptTotal > 0 && (
+                    <>
+                      {' '}
+                      <Badge variant="light" data-testid="tab-kept-count">
+                        {keptTotal}
+                      </Badge>
+                    </>
+                  )}
+                </span>
+              </civitai-nav-item>
             ))}
-          </div>
+          </civitai-nav-list>
         </nav>
+        <Button
+          data-testid="nav-create"
+          variant="light"
+          leftSection="+"
+          onClick={() => {
+            setNavOpen(false);
+            onCreate();
+          }}
+        >
+          Create generator
+        </Button>
+      </aside>
 
-        <div style={{ flex: '1 1 auto', minWidth: 0 }}>
+      <div style={{ minWidth: 0 }}>
 
       {tab === 'discover' && (
         <div role="tabpanel" id="panel-discover" aria-labelledby="tab-discover" tabIndex={0}>
@@ -528,16 +652,23 @@ export function Browse(props: BrowseProps) {
                   onChange={(e) => setQuery(e.currentTarget.value)}
                 />
               </div>
-              <SegmentedControl
-                aria-label="Sort generators"
-                data-testid="discover-sort"
-                value={sort}
-                onChange={(v) => setSort(v as SortMode)}
-                data={[
-                  { value: 'new', label: 'Newest' },
-                  { value: 'top', label: 'Popular' },
-                ]}
-              />
+              <civitai-menu label="Sort generators" data-testid="discover-sort" ref={sortMenuRef}>
+                <Button
+                  slot="trigger"
+                  size="sm"
+                  variant="light"
+                  data-testid="discover-sort-button"
+                  aria-label={`Sort generators, currently ${sort === 'new' ? 'Newest' : 'Popular'}`}
+                >
+                  ⇅ {sort === 'new' ? 'Newest' : 'Popular'}
+                </Button>
+                <civitai-menu-item value="new" data-testid="sort-new" onClick={() => setSort('new')}>
+                  Newest
+                </civitai-menu-item>
+                <civitai-menu-item value="top" data-testid="sort-top" onClick={() => setSort('top')}>
+                  Popular
+                </civitai-menu-item>
+              </civitai-menu>
             </Group>
 
             {/* 🔴 EVERY claim this panel makes about the catalog is really a
@@ -604,6 +735,10 @@ export function Browse(props: BrowseProps) {
                   voteCount={vs.count}
                   voted={vs.voted}
                   onVote={() => toggleVote(item)}
+                  downvoteCount={downvoteState(item).count}
+                  downvoted={downvoteState(item).downvoted}
+                  onDownvote={onDownvote ? () => toggleDownvote(item) : undefined}
+                  mediaUrls={mediaUrlsFor?.(item) ?? []}
                   onFork={() => onFork(item)}
                   onShare={() => onShare(item)}
                   onOpen={() => onOpenPublished(item)}
@@ -752,6 +887,10 @@ export function Browse(props: BrowseProps) {
                     voteCount={vs.count}
                     voted={vs.voted}
                     onVote={() => toggleVote(item)}
+                    downvoteCount={downvoteState(item).count}
+                    downvoted={downvoteState(item).downvoted}
+                    onDownvote={onDownvote ? () => toggleDownvote(item) : undefined}
+                    mediaUrls={mediaUrlsFor?.(item) ?? []}
                     onShare={() => onShare(item)}
                     onOpen={() => onOpenPublished(item)}
                     onDelete={() => setPendingDelete(item)}
@@ -855,7 +994,6 @@ export function Browse(props: BrowseProps) {
           </Stack>
         </div>
       )}
-        </div>
       </div>
 
       {/* The payoff view for a kept image, with the way back to the generator
@@ -933,6 +1071,29 @@ export function Browse(props: BrowseProps) {
   );
 }
 
+/** Share glyph (nodes-and-lines), drawn inline like the brand mark. */
+function ShareIcon(): React.JSX.Element {
+  return (
+    <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx={18} cy={5} r={3} />
+      <circle cx={6} cy={12} r={3} />
+      <circle cx={18} cy={19} r={3} />
+      <line x1={8.59} y1={13.51} x2={15.42} y2={17.49} />
+      <line x1={15.41} y1={6.51} x2={8.59} y2={10.49} />
+    </svg>
+  );
+}
+
+/** Make-a-copy glyph (two overlapping sheets). */
+function CopyIcon(): React.JSX.Element {
+  return (
+    <svg width={15} height={15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x={9} y={9} width={13} height={13} rx={2} />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
 /** A tinted rounded tile that holds the brand mark, styled entirely off
  * `--civitai-*` tokens. (The manifest's `page.icon` stays `wand` — that
  * enum is the host's, not the brand's.) */
@@ -974,6 +1135,10 @@ function PublishedCard({
   voteCount,
   voted,
   onVote,
+  downvoteCount,
+  downvoted,
+  onDownvote,
+  mediaUrls,
   onFork,
   onShare,
   onOpen,
@@ -989,6 +1154,17 @@ function PublishedCard({
   voteCount: number;
   voted: boolean;
   onVote: () => void;
+  /** Downvote tally (document store) + the viewer's own downvote state. */
+  downvoteCount: number;
+  downvoted: boolean;
+  /** When present, renders the downvote control (absent = signal unavailable). */
+  onDownvote?: () => void;
+  /**
+   * Host-resolved MODERATED urls of outputs published from this generator.
+   * Shown as a media strip when there is no cover — presence evidence that
+   * people have made things with it, instead of a text-only card.
+   */
+  mediaUrls: string[];
   /**
    * When present, renders the Report control. Presence IS the gate: Browse
    * passes it only for a signed-in non-author, so this component never has to
@@ -1004,9 +1180,10 @@ function PublishedCard({
   onDelete?: () => void;
 }) {
   const desc = (item.value.body ?? '').split('\n')[0];
-  // Approximate at-a-glance run cost (heuristic; the real price is the host
-  // estimate on the run path). Shown prefixed with "≈" so it never reads as exact.
-  const costLabel = formatCostRange(generatorCostRange(item.value));
+  // 🔴 NO per-run Buzz on the card, deliberately: the figure was a heuristic
+  // range, and the one true price is the host estimate on the run path —
+  // which the Runner shows, and gates Confirm on. A guessed price here read
+  // as a quote and competed with it.
   const toast = useToast();
   const motion = useMotion();
   // 0 until the count actually moves, so a freshly-painted list does not tick.
@@ -1043,20 +1220,26 @@ function PublishedCard({
             style={{ width: '100%', aspectRatio: '16 / 9', objectFit: 'cover', borderRadius: radius.md, border: `1px solid ${c.border}`, display: 'block' }}
           />
         )}
+        {!coverUrl && mediaUrls.length > 0 && (
+          // Published output made with this generator (kept runs), resolved
+          // through the same moderated gated read as covers.
+          <div data-testid="published-media" style={{ display: 'flex', gap: 6 }}>
+            {mediaUrls.map((url) => (
+              <SafeImage
+                key={url}
+                src={url}
+                alt=""
+                style={{ flex: '1 1 0', minWidth: 0, height: 118, objectFit: 'cover', borderRadius: radius.md, border: `1px solid ${c.border}`, display: 'block' }}
+              />
+            ))}
+          </div>
+        )}
         <Group justify="space-between" align="flex-start" gap={12}>
           <div style={{ flex: '1 1 200px', minWidth: 0 }}>
             <div style={{ fontWeight: 600 }}>{item.value.title || 'Untitled generator'}</div>
             {desc && (
               <div style={{ ...metaText, marginTop: 2 }} data-testid="published-desc">
                 {desc}
-              </div>
-            )}
-            {costLabel && (
-              <div
-                style={{ ...metaText, marginTop: 4, fontVariantNumeric: 'tabular-nums' }}
-                data-testid="published-cost"
-              >
-                {costLabel}
               </div>
             )}
           </div>
@@ -1084,15 +1267,34 @@ function PublishedCard({
                 </Badge>
               </Button>
             </Tooltip>
+            {onDownvote && (
+              <Tooltip label={downvoted ? 'Remove your downvote' : 'Downvote this generator'}>
+                <Button
+                  size="sm"
+                  variant={downvoted ? 'light' : 'subtle'}
+                  data-testid="downvote-button"
+                  aria-pressed={downvoted}
+                  aria-label={downvoted ? 'Remove downvote' : 'Downvote'}
+                  onClick={onDownvote}
+                >
+                  ▼{' '}
+                  <Badge variant="light" data-testid="published-downvotes">
+                    <span style={{ fontVariantNumeric: 'tabular-nums' }}>{downvoteCount}</span>
+                  </Badge>
+                </Button>
+              </Tooltip>
+            )}
             {onShare && (
-              <Button size="sm" variant="subtle" data-testid="published-share" onClick={share}>
-                Share
-              </Button>
+              <Tooltip label="Copy a share link">
+                <Button size="sm" variant="subtle" data-testid="published-share" aria-label="Share" onClick={share}>
+                  <ShareIcon />
+                </Button>
+              </Tooltip>
             )}
             {onFork && (
-              <Tooltip label="Fork into your own editable draft">
-                <Button size="sm" variant="subtle" data-testid="published-fork" onClick={onFork}>
-                  Make a copy
+              <Tooltip label="Make a copy — fork into your own editable draft">
+                <Button size="sm" variant="subtle" data-testid="published-fork" aria-label="Make a copy" onClick={onFork}>
+                  <CopyIcon />
                 </Button>
               </Tooltip>
             )}
@@ -1109,7 +1311,7 @@ function PublishedCard({
               </Button>
             )}
             <Button size="sm" data-testid="published-open" onClick={onOpen}>
-              Open
+              Generate
             </Button>
           </Group>
         </Group>
