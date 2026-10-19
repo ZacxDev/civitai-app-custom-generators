@@ -516,8 +516,21 @@ export function buildPublishPayload(config: GeneratorConfig): SharedStorageValue
         ? config.coverImageId
         : undefined,
     promptPlaceholder: config.promptPlaceholder?.trim() || undefined,
+    // Only the id: the picker's rendition url is the author's preview, not data.
+    storeImageId: storeImageIdOf(config.storeImage?.imageId),
   };
   return { title, body, data };
+}
+
+/**
+ * An App Store card image id as this app will send it: a positive whole number,
+ * else `undefined`. The server's body schema is `z.number().int().positive()`,
+ * so anything else — a forged row's `-1`, `1.5` or `"12"` — would be a 400
+ * `invalid_body` on every upsert of that generator; dropping it keeps the card
+ * (on the parent's cover) instead.
+ */
+export function storeImageIdOf(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 /**
@@ -581,7 +594,13 @@ export function parsePublishedGenerator(value: SharedStorageValue): GeneratorCon
         ? data.coverImageId
         : undefined,
     promptPlaceholder: typeof data.promptPlaceholder === 'string' ? data.promptPlaceholder : undefined,
+    storeImage: storeImageFromData(data.storeImageId),
   };
+}
+
+function storeImageFromData(value: unknown): GeneratorConfig['storeImage'] {
+  const imageId = storeImageIdOf(value);
+  return imageId === undefined ? undefined : { imageId };
 }
 
 /**
@@ -676,5 +695,10 @@ export const WORKFLOW_TYPES: WorkflowType[] = ['txt2img', 'img2img'];
 export function cloneConfigForFork(config: GeneratorConfig): GeneratorConfig {
   const clone = structuredClone(config);
   clone.buttons = clone.buttons.map((b) => ({ ...b, id: newId() }));
+  // The store image is the SOURCE author's own posted image. The forker cannot
+  // list it (the server answers 403 `image_not_yours`), so the fork starts
+  // without one and its card falls back to the parent's cover until the forker
+  // picks one of their own.
+  delete clone.storeImage;
   return clone;
 }

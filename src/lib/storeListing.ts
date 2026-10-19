@@ -10,6 +10,8 @@
 // Everything in this file is pure apart from the injected `StoreListings`, so the
 // node project covers it without a DOM.
 
+import type { BlockPickedImageInfo } from '@civitai/app-sdk/blocks';
+
 import { StoreListingError } from '../platform/index.js';
 import type {
   SharedListItem,
@@ -17,9 +19,9 @@ import type {
   StoreListingResult,
   StoreListings,
 } from '../platform/index.js';
-import type { GeneratorConfig } from '../types.js';
+import type { GeneratorConfig, StoreImageRef } from '../types.js';
 import { isRoutableKey, routeForKey } from './deeplink.js';
-import { parsePublishedGenerator } from './generator.js';
+import { parsePublishedGenerator, storeImageIdOf } from './generator.js';
 
 /**
  * civitai `APP_SUB_LISTING_TITLE_MAX` / `APP_SUB_LISTING_TAGLINE_MAX`
@@ -81,15 +83,22 @@ export function clampStoreText(value: string, max: number): string {
  * - `title` is the generator name; `tagline` its description. The description is
  *   the author's one-line pitch; the rest of the moderated `body` (the prompt hint
  *   and the button list) is not tagline material, so there is no fallback to it.
- * - No `imageId`: a generator's cover is a moderated cosmetic upload, not an image
- *   in a published post, and the server refuses anything else (`image_not_public`).
- *   The card shows the parent's cover instead.
+ * - `imageId` only when the author CHOSE a store image (`config.storeImage`), and
+ *   the key is left out otherwise. The generator's header is NOT sent: it is a
+ *   moderated cosmetic upload, not an image in a published post, and the server
+ *   refuses anything else (`image_not_public`). With no `imageId` the card shows
+ *   the parent's cover.
+ *
+ *   🔴 OMITTING `imageId` CLEARS A CARD'S IMAGE. The server stores
+ *   `body.imageId ?? null`, so every upsert must carry the author's choice —
+ *   which is why it lives on the published `data` (`storeImageId`) and the
+ *   backfill, reading that row, sends it too.
  * - No `contentRating`: unset inherits the parent app's rating, which is the
  *   floor the server enforces anyway.
  */
 export function storeListingFor(
   key: string,
-  config: Pick<GeneratorConfig, 'name' | 'description'>,
+  config: Pick<GeneratorConfig, 'name' | 'description' | 'storeImage'>,
 ): StoreListingInput | null {
   if (!isRoutableKey(key)) return null;
   const title = clampStoreText(config.name ?? '', STORE_TITLE_MAX);
@@ -97,7 +106,27 @@ export function storeListingFor(
   const tagline = clampStoreText(config.description ?? '', STORE_TAGLINE_MAX);
   const input: StoreListingInput = { itemKey: key, title, subPath: routeForKey(key) };
   if (tagline) input.tagline = tagline;
+  const imageId = storeImageIdOf(config.storeImage?.imageId);
+  if (imageId !== undefined) input.imageId = imageId;
   return input;
+}
+
+/**
+ * The store image a host picker result may become, or `null` when it cannot be
+ * one.
+ *
+ * Only a `posted` pick carries an `Image` row id, and an id is all the store
+ * takes; a `generated` pick (never posted, no id) cannot be listed. The picker is
+ * opened with `sources: ['posted']`, so this is the second line, not the first —
+ * it holds even against a host that ignored the filter.
+ */
+export function storeImageFromPick(
+  pick: Pick<BlockPickedImageInfo, 'source' | 'imageId' | 'url'> | null | undefined,
+): StoreImageRef | null {
+  if (!pick || pick.source !== 'posted') return null;
+  const imageId = storeImageIdOf(pick.imageId);
+  if (imageId === undefined) return null;
+  return typeof pick.url === 'string' && pick.url ? { imageId, url: pick.url } : { imageId };
 }
 
 /** {@link storeListingFor} for a row read back from shared storage (the backfill). */
@@ -163,9 +192,16 @@ export function storeNoticeFor(outcome: StoreOutcome): string | null {
         ? `You’ve reached the App Store card limit, so this one wasn’t added there. ${STILL_HERE}`
         : `Too many App Store updates for now — try again later. ${STILL_HERE}`;
     case 'item':
-      return code === 'text_rejected'
-        ? `The App Store didn’t accept this name or description. ${STILL_HERE}`
-        : `Couldn’t add this to the App Store. ${STILL_HERE}`;
+      if (code === 'text_rejected') return `The App Store didn’t accept this name or description. ${STILL_HERE}`;
+      // The two refusals of a chosen store image. Nothing else about the card
+      // was wrong, so the copy names the image and the way out of it.
+      if (code === 'image_not_public') {
+        return `The App Store can only show an image from one of your published posts that has finished review, so the App Store card wasn’t saved. Pick another image, or remove it to use the app’s cover. ${STILL_HERE}`;
+      }
+      if (code === 'image_not_yours') {
+        return `The App Store can only show an image you posted yourself, so the App Store card wasn’t saved. Pick one of your own, or remove it to use the app’s cover. ${STILL_HERE}`;
+      }
+      return `Couldn’t add this to the App Store. ${STILL_HERE}`;
     case 'transient':
       return `Couldn’t reach the App Store just now. ${STILL_HERE}`;
   }

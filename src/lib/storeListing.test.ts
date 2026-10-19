@@ -20,6 +20,7 @@ import {
   clampStoreText,
   classifyStoreFailure,
   reconcileStoreListings,
+  storeImageFromPick,
   storeListingFor,
   storeListingForItem,
   storeNoticeFor,
@@ -170,6 +171,73 @@ describe('storeListingFor', () => {
     // A row whose body has no description line gets no tagline, not "Buttons:".
     const bare = storeListingForItem(row('k8', 'Bare Row', ME, ''))!;
     expect(bare.tagline).toBeUndefined();
+  });
+});
+
+describe('the optional store image', () => {
+  // A fixture id no constant in this file equals, so a mutant that hardcodes an
+  // id (or sends the header's) cannot pass.
+  const CHOSEN = 31_337;
+
+  it('sends the chosen imageId', () => {
+    expect(
+      storeListingFor('k1', { name: 'Neon', description: 'Glow.', storeImage: { imageId: CHOSEN, url: 'https://x/y.jpg' } }),
+    ).toStrictEqual({ itemKey: 'k1', title: 'Neon', tagline: 'Glow.', subPath: 'g/k1', imageId: CHOSEN });
+  });
+
+  it('leaves the imageId key OUT when none is chosen (the body is .strict(); absent = the parent cover)', () => {
+    const out = storeListingFor('k1', { name: 'Neon', description: 'Glow.' })!;
+    expect(Object.prototype.hasOwnProperty.call(out, 'imageId')).toBe(false);
+    const cleared = storeListingFor('k1', { name: 'Neon', description: 'Glow.', storeImage: undefined })!;
+    expect(Object.prototype.hasOwnProperty.call(cleared, 'imageId')).toBe(false);
+  });
+
+  it.each([0, -4, 1.5, Number.NaN, '12', null])('drops an id the server schema would 400 on: %s', (bad) => {
+    const out = storeListingFor('k1', {
+      name: 'Neon',
+      description: '',
+      storeImage: { imageId: bad as unknown as number },
+    })!;
+    expect(Object.prototype.hasOwnProperty.call(out, 'imageId')).toBe(false);
+  });
+
+  it('the backfill sends the image published on the row, so a backfill never clears a card image', () => {
+    const r = row('k9', 'Row Title', ME, 'Row description');
+    (r.value.data as GeneratorData).storeImageId = CHOSEN;
+    expect(storeListingForItem(r)).toStrictEqual({
+      itemKey: 'k9',
+      title: 'Row Title',
+      tagline: 'Row description',
+      subPath: 'g/k9',
+      imageId: CHOSEN,
+    });
+  });
+
+  it('accepts only a POSTED pick with an image id', () => {
+    expect(storeImageFromPick({ source: 'posted', imageId: CHOSEN, url: 'https://x/p.jpg' })).toStrictEqual({
+      imageId: CHOSEN,
+      url: 'https://x/p.jpg',
+    });
+    // A generator output has no Image row, so nothing the store can take.
+    expect(storeImageFromPick({ source: 'generated', url: 'https://x/g.png' })).toBeNull();
+    // Even if a host attached an id to a generated pick, it is not a posted image.
+    expect(storeImageFromPick({ source: 'generated', imageId: CHOSEN, url: 'https://x/g.png' })).toBeNull();
+    expect(storeImageFromPick({ source: 'posted', url: 'https://x/p.jpg' })).toBeNull();
+    expect(storeImageFromPick({ source: 'posted', imageId: -1, url: 'https://x/p.jpg' })).toBeNull();
+    expect(storeImageFromPick(null)).toBeNull();
+  });
+
+  it('tells the author which image refusal happened, and that the in-app publish stands', () => {
+    const notPublic = storeNoticeFor({ ok: false, error: new StoreListingError(400, 'image_not_public') })!;
+    const notYours = storeNoticeFor({ ok: false, error: new StoreListingError(403, 'image_not_yours') })!;
+    const generic = storeNoticeFor({ ok: false, error: new StoreListingError(400, 'invalid_body') })!;
+    expect(notPublic).toMatch(/published posts? that has finished review/);
+    expect(notYours).toMatch(/image you posted yourself/);
+    for (const n of [notPublic, notYours]) {
+      expect(n).toMatch(/still published here/);
+      expect(n).not.toBe(generic);
+    }
+    expect(notPublic).not.toBe(notYours);
   });
 });
 

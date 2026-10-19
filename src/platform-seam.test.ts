@@ -121,6 +121,8 @@ describe('the platform seam', () => {
       'platform/hooks.ts',
       'platform/sharedStorage.test.ts',
       'platform/sharedStorage.ts',
+      // Imports `SubListingError` to assert the adapter's `cause` is the SDK's own.
+      'platform/storeListings.transport.test.ts',
       'platform/storeListings.ts',
       'platform/testing.tsx',
       'platform/workflows.ts',

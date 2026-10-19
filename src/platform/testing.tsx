@@ -44,6 +44,7 @@ import type { BlockTransport } from '@civitai/sdk';
 import type {
   BlockCreatePostResult,
   BlockGatedImage,
+  BlockPickedImageInfo,
   BlockResourceInfo,
   BlockResourcePickerType,
   BlockGenerationSourceImageInfo,
@@ -118,6 +119,23 @@ export interface FakeCivitaiOptions {
   shared?: { seed?: MockSharedSeed[] };
   cannedPicks?: Partial<Record<BlockResourcePickerType, BlockResourceInfo | null>>;
   cannedImageUpload?: { imageId: number; url: string } | null;
+  /**
+   * The viewer's library behind `OPEN_IMAGE_PICKER`. Like the host, the fake
+   * keeps only the images matching the request's `sources` and answers with the
+   * first one, or with no `selected` key (`{}`, a dismissal) when none match or
+   * this is unset. 🔴 It does NOT model the host's eligibility rules (published post,
+   * scanned, rated) — a test that needs an ineligible image to be offered says
+   * so by putting one here.
+   *
+   * The ONE eligibility rule it does model is civitai#6134's `publicOnly`: an
+   * entry with `privatePost: true` (a posted image whose post is Private) is not
+   * offered when the request carries `publicOnly: true`. The marker is fake-only
+   * and never reaches the app — the host rebuilds each pick field by field
+   * (`toWirePick`), so the fake strips it too.
+   */
+  cannedImagePicks?: (BlockPickedImageInfo & { privatePost?: boolean })[];
+  /** Refuse `OPEN_IMAGE_PICKER` with this host error instead. */
+  imagePickerError?: string;
   cannedGenerationSourceUpload?: BlockGenerationSourceImageInfo | null;
   /** Bare strings are the bridge's spelling; the object form carries a reason. */
   cannedImageScan?:
@@ -215,6 +233,13 @@ export interface FakeCivitaiOptions {
    */
   subListings?: {
     seed?: { itemKey: string; status: 'pending' | 'approved' | 'hidden' | 'withdrawn'; authorUserId?: number }[];
+    /**
+     * The images an anonymous viewer may see, with their uploader. An upsert's
+     * `imageId` outside this list is the server's 400 `image_not_public`; one
+     * uploaded by someone else is 403 `image_not_yours` (the server checks in
+     * that order).
+     */
+    publicImages?: { imageId: number; userId: number }[];
     fail?: Partial<
       Record<'upsert' | 'mine', { status: number; code?: string; html?: boolean }>
     >;
@@ -238,7 +263,10 @@ export interface FakeCivitai {
   /** Every REST call the app made, in order. */
   calls: RecordedCall[];
   /** The fake server's App Store sub-listing rows, keyed by item key. */
-  subListings: () => Map<string, { status: string; title: string; subPath: string; tagline: string | null }>;
+  subListings: () => Map<
+    string,
+    { status: string; title: string; subPath: string; tagline: string | null; imageId: number | null }
+  >;
 }
 
 /**
@@ -376,7 +404,16 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
 
   const subListings = new Map<
     string,
-    { status: string; title: string; subPath: string; tagline: string | null; authorUserId: number }
+    {
+      status: string;
+      title: string;
+      subPath: string;
+      tagline: string | null;
+      imageId: number | null;
+      authorUserId: number;
+      /** The server's `pendingSubmittedAt != null`: an edit to an approved item awaits review. */
+      pendingEdit: boolean;
+    }
   >();
   for (const s of options.subListings?.seed ?? []) {
     subListings.set(s.itemKey, {
@@ -384,7 +421,9 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
       title: s.itemKey,
       subPath: `g/${s.itemKey}`,
       tagline: null,
+      imageId: null,
       authorUserId: s.authorUserId ?? viewerId ?? 1,
+      pendingEdit: false,
     });
   }
   const workflows = new Map<string, { snapshot: BlockWorkflowSnapshot; pollsLeft: number }>();
@@ -591,7 +630,7 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
             itemKey,
             status: r.status,
             title: r.title,
-            pendingEdit: false,
+            pendingEdit: r.pendingEdit,
             statusReason: null,
             editRejectionReason: null,
             updatedAt: '2026-01-02T00:00:00.000Z',
@@ -608,6 +647,8 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
           b.title.length < 1 ||
           b.title.length > 80 ||
           (b.tagline != null && (typeof b.tagline !== 'string' || b.tagline.length > 140)) ||
+          (b.imageId != null &&
+            (typeof b.imageId !== 'number' || !Number.isInteger(b.imageId) || b.imageId <= 0)) ||
           typeof b.subPath !== 'string' ||
           !/^[A-Za-z0-9_-]{1,64}(\/[A-Za-z0-9_-]{1,64}){0,3}$/.test(b.subPath);
         if (bad) return json(400, { error: 'Invalid request body', code: 'invalid_body' });
@@ -617,23 +658,50 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
         if (author !== viewerId) {
           return json(403, { error: 'Only the item author can publish it', code: 'not_your_item' });
         }
+        if (b.imageId != null) {
+          const img = (options.subListings?.publicImages ?? []).find((i) => i.imageId === b.imageId);
+          if (!img) {
+            return json(400, {
+              error: 'The image must be public: in a published post and reviewed',
+              code: 'image_not_public',
+            });
+          }
+          if (img.userId !== viewerId) {
+            return json(403, { error: 'The image must be one you uploaded', code: 'image_not_yours' });
+          }
+        }
         const existing = subListings.get(b.itemKey as string);
         if (existing?.status === 'hidden') {
           return json(200, { id: `asl_${b.itemKey}`, status: 'hidden', pendingEdit: false });
         }
-        const approved = existing?.status === 'approved';
-        subListings.set(b.itemKey as string, {
-          status: approved ? 'approved' : 'pending',
+        // The server stores `body.imageId ?? null` (and the same for tagline): an absent key
+        // clears it. Upsert REPLACES the item.
+        const content = {
           title: b.title as string,
           subPath: b.subPath as string,
           tagline: (b.tagline as string | undefined) ?? null,
+          imageId: (b.imageId as number | undefined) ?? null,
+        };
+        if (existing?.status === 'approved') {
+          // As civitai's `writeSubListing`: an approved item keeps serving its live version. An
+          // edit identical to it clears any staged edit (`pendingEdit: false`); anything else is
+          // staged for a moderator (`pendingEdit: true`) and the live columns are NOT touched.
+          const same =
+            existing.title === content.title &&
+            existing.subPath === content.subPath &&
+            existing.tagline === content.tagline &&
+            existing.imageId === content.imageId;
+          existing.pendingEdit = !same;
+          return json(200, { id: `asl_${b.itemKey}`, status: 'approved', pendingEdit: !same });
+        }
+        // New, pending or withdrawn: the live columns are the draft, and it waits for review.
+        subListings.set(b.itemKey as string, {
+          status: 'pending',
+          ...content,
           authorUserId: viewerId,
+          pendingEdit: false,
         });
-        return json(200, {
-          id: `asl_${b.itemKey}`,
-          status: approved ? 'approved' : 'pending',
-          pendingEdit: approved,
-        });
+        return json(200, { id: `asl_${b.itemKey}`, status: 'pending', pendingEdit: false });
       }
       return json(405, { error: 'Method not allowed' });
     }
@@ -703,6 +771,29 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
       });
     });
     return { selected: { status: 'pending', imageId: up.imageId, url: up.url } };
+  });
+
+  fake.handle('OPEN_IMAGE_PICKER', (params) => {
+    if (options.imagePickerError !== undefined) throw new Error(options.imagePickerError);
+    const req = (params ?? {}) as { sources?: string[]; publicOnly?: unknown };
+    // civitai `resolveImagePickerRequest` (#6134): an absent `publicOnly` is
+    // `false`, and anything present that is not a boolean is REFUSED with an
+    // `error` — never coerced, never ignored.
+    if (req.publicOnly !== undefined && typeof req.publicOnly !== 'boolean') {
+      throw new Error('OPEN_IMAGE_PICKER: publicOnly must be a boolean.');
+    }
+    const publicOnly = req.publicOnly === true;
+    const sources = req.sources ?? ['posted', 'generated'];
+    // `publicOnly` narrows the POSTED source only (`postedPickableWhere`);
+    // generated images are listed as before either way.
+    const found = (options.cannedImagePicks ?? []).find(
+      (p) => sources.includes(p.source) && !(publicOnly && p.source === 'posted' && p.privatePost),
+    );
+    // The real host answers a dismissal with no `selected` key at all
+    // (civitai `buildImagePickerReply`), never `selected: null`.
+    if (!found) return {};
+    const { privatePost: _privatePost, ...selected } = found;
+    return { selected };
   });
 
   fake.handle('PUBLISH_GENERATION_OUTPUTS', (params) => {
@@ -787,9 +878,9 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
     calls,
     subListings: () =>
       new Map(
-        [...subListings.entries()].map(([k, { status, title, subPath, tagline }]) => [
+        [...subListings.entries()].map(([k, { status, title, subPath, tagline, imageId }]) => [
           k,
-          { status, title, subPath, tagline },
+          { status, title, subPath, tagline, imageId },
         ]),
       ),
   };

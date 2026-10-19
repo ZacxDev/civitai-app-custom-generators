@@ -12,6 +12,7 @@ import type {
   BlockGatedImage,
   BlockGenerationSourceImageInfo,
   BlockPendingImageInfo,
+  BlockPickedImageInfo,
   BlockResourceInfo,
   BlockResourcePickerType,
   BlockWorkflowSnapshot,
@@ -36,6 +37,7 @@ import {
   useKvStorage,
   useHostRoute,
   createStoreListings,
+  pickPostedImage,
   requestGrants as platformRequestGrants,
 } from './platform/index.js';
 import type {
@@ -172,6 +174,12 @@ export interface AppDeps {
    * succeeded — see `lib/storeListing.ts`.
    */
   store: StoreListings;
+  /**
+   * The host's picker over the viewer's OWN posted images
+   * (`platform/imagePicker.ts`), for a generator's optional App Store card
+   * image. Resolves with the pick, or `null` when nothing was picked.
+   */
+  pickStoreImage: () => Promise<BlockPickedImageInfo | null>;
   drafts: DraftStore;
   requestConsent: (opts: { scopes: string[] }) => void;
   /**
@@ -368,6 +376,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       // and the store lets only the row's author make it (`write: "own"`).
       updateSharedGenerator: sharedHook.update,
       store: createStoreListings(),
+      pickStoreImage: pickPostedImage,
       drafts: appStorage,
       requestConsent,
       requestGrants: platformRequestGrants,
@@ -1519,6 +1528,10 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             onSaveDraft={handleSaveDraft}
             onPublish={handlePublish}
             storeNotice={storeNotice}
+            // The card image only means something where a card can exist: no
+            // store scope on the token, no store call, so no picker either. A
+            // previously chosen image stays on the config and is still published.
+            pickStoreImage={canListInStore ? deps.pickStoreImage : undefined}
             onBack={backToBrowse}
           />
         )}
