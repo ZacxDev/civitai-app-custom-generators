@@ -1,190 +1,228 @@
-// The app-global SHARED store, over the ten routes under
-// `/api/v1/blocks/shared-storage/`.
+// The app-global SHARED board of published generators, over ONE shared collection
+// of the App Blocks document store (`records`).
 //
-// Replaces the `SHARED_*` bridge messages. Every route is a thin adapter over the
-// SAME server function the bridge message called — `listSharedRows` and friends —
-// so per-app schema isolation, the approved-block and revocation checks, the
-// min-trust write gate and the fail-closed kill-switch all hold verbatim, and a
-// REST read cannot diverge from the bridge read. That is why `SharedListItem` is
-// unchanged and why `Browse` did not move.
+// It replaces the legacy shared store (`/api/v1/blocks/shared-storage/*`, scopes
+// `apps:storage:shared:read` / `:write`), which is deprecated. Every caller keeps
+// the `SharedStorage` shape it had; only this file knows documents exist.
 //
-// Scopes: reads take `apps:storage:shared:read`, writes take
-// `apps:storage:shared:write`. Both already existed; neither is new.
+// 🔴 THE MAPPING IS FIXED, AND THE PRODUCTION DATA COPY DEPENDS ON IT EXACTLY:
 //
-// ✅ ANONYMOUS READS WORK, and this needed checking rather than assuming.
-// `@civitai/sdk`'s BREAKING.md warns that an app declaring
-// `apps:storage:shared:write` — which this one does — gets a 403 on anonymous
-// READS, because the request-time scope-binding check ran over every scope on the
-// token and reached the write scope's "requires authenticated subject" rule. That
-// is FIXED (civitai#5063): the binding switch is now scoped to the route's own
-// `requiredScope`. `block-scope.middleware.ts` says so in terms, and names this
-// exact contradiction as the reason — *"the `apps:storage:shared:read` case says
-// anon reads ARE allowed, while the `apps:storage:shared:write` case one below it
-// 403s the same anon token on that same read"*. `list.ts`'s own docblock agrees:
-// *"ANON IS ALLOWED, deliberately."* Signed-out browsing — this app's whole Browse
-// premise — therefore survives the port. BREAKING.md is stale on this point.
+//   1. ONE collection, `records`, declared `{ "visibility": "shared", "write":
+//      "own", "marks": ["vote"] }` — no counters, no indexes, no `showAuthor`.
+//   2. Document key = the legacy shared key (a server-minted ULID), byte-for-byte.
+//      Deeplinks (`g/<key>`), share links, a draft's `publishedKey`, a kept run's
+//      `generatorKey`, the App Store card's `itemKey` and a submit's
+//      `sharedContentKey` all name a row by that key, so a key that moved would
+//      orphan every one of them.
+//   3. Document data = the legacy value VERBATIM: `{ title, body, data }`. Not
+//      wrapped (contrast the private `kv` collection): it is already an object, and
+//      the moderation split — viewer-visible text in `title`/`body`, opaque config
+//      in `data` — is kept as it was.
+//   4. A vote is the `vote` MARK: the tally is `marks.vote`, "did I vote" is
+//      `viewer.marks`. A report is the built-in `report` mark (undeclared, never
+//      withdrawable, count never exposed).
+//   5. Publish = `create` (the server mints the key, as `append` did); edit = `put`
+//      on the existing key at the version just read; withdraw = `delete`. `own`
+//      lets only a document's author edit or delete it.
 //
-// 🔴 ANONYMOUS WRITES ARE STILL REFUSED, and authenticated ones must additionally
-// clear a minimum-trust gate (account age, paid tier, verified email or a linked
-// OAuth account). A signed-in viewer is NOT automatically a permitted writer, so a
-// write rejection is an expected outcome to render, not a bug.
+// 🔴 OWNERSHIP IS `author.isViewer`, NEVER A USER ID. The store does not say who
+// wrote a document, so the legacy `authorUserId` has no source. To keep every
+// "is this mine?" check (`authorUserId === viewer.id`) unchanged, a row the store
+// marks `isViewer` is stamped with the id of the viewer the read was made FOR, and
+// every other row gets `null` — which equals no viewer id. A row read for viewer A
+// can therefore never count as owned by viewer B; the board re-reads when the
+// viewer changes (`App.tsx`'s load effect depends on `viewer`).
+//
+// Scopes: everything takes `apps:storage` (consent-exempt) except creating and
+// editing, which also take `apps:storage:publish` (CONSENT-GATED). Reads work
+// signed out; every write needs a signed-in viewer who also clears the store's
+// minimum-trust gate.
 
-import { getClient } from './client.js';
-import type {
-  SharedAppendValue,
-  SharedListItem,
-  SharedListResult,
-  SharedStorage,
-} from './types.js';
+import type { DocumentStorage, StorageCollection, StorageDocument } from '@civitai/sdk';
+import { StorageError } from '@civitai/sdk';
 
-/** One row as it arrives on the wire: dates are ISO strings, not `Date`s. */
-interface WireSharedItem {
-  key: string;
-  authorUserId: number;
-  value: SharedAppendValue;
-  count: number;
-  createdAt: string | number | Date;
-  updatedAt: string | number | Date;
-  viewerVoted?: boolean;
-}
+import { publishRefusalMessage, SharedWriteRefusal } from '../lib/storageErrors.js';
+import { getSnapshot } from './client.js';
+import {
+  DEFAULT_RATE_LIMIT_RETRY,
+  DOC_LIST_LIMIT_MAX,
+  getDocStorage,
+  RECORDS_COLLECTION,
+  withRateLimitRetry,
+  type RateLimitRetryPolicy,
+} from './docStore.js';
+import type { SharedAppendValue, SharedListItem, SharedListResult, SharedStorage } from './types.js';
 
+/** The declared vote mark. */
+export const VOTE_MARK = 'vote';
+/** The store's built-in report mark — undeclared, never withdrawable. */
+export const REPORT_MARK = 'report';
 /**
- * Revive one row.
- *
- * The dates are `Date`s server-side and JSON turns them into ISO strings, so they
- * are revived here — once, at the transport edge — exactly as the bridge hook did.
- * `Browse` sorts on `createdAt` and renders a relative age from it, so a string
- * would sort lexicographically (right by luck for ISO) and then throw on
- * `.getTime()`.
- *
- * `viewerVoted` defaults to `false` rather than `undefined`: it is declared
- * non-optional on `SharedListItem` because the vote button hydrates from it, and
- * an anonymous viewer's rows legitimately omit it.
+ * Newest first by KEY, which is what the legacy list returned. Keys are
+ * server-minted sortable ids, so key order is creation order — and it stays that
+ * for rows the copy carried over, whose keys are the legacy ULIDs while their
+ * `createdAt` is the copy's.
  */
-function reviveItem(raw: WireSharedItem): SharedListItem {
+export const BOARD_SORT = '-key';
+
+/** The stored document's data: the legacy shared value, verbatim (rule 3). */
+export type RecordDocument = SharedAppendValue & Record<string, unknown>;
+
+/** A store document → the row the app reads. The one place a document becomes a row. */
+export function toSharedListItem(doc: StorageDocument<RecordDocument>, viewerId: number | null): SharedListItem {
+  const mine = doc.author.kind === 'user' && doc.author.isViewer && viewerId != null;
   return {
-    key: raw.key,
-    authorUserId: raw.authorUserId,
-    value: raw.value,
-    count: typeof raw.count === 'number' ? raw.count : Number(raw.count ?? 0),
-    createdAt: new Date(raw.createdAt),
-    updatedAt: new Date(raw.updatedAt),
-    viewerVoted: raw.viewerVoted === true,
+    key: doc.key,
+    authorUserId: mine ? viewerId : null,
+    value: doc.data as SharedAppendValue,
+    count: doc.marks[VOTE_MARK] ?? 0,
+    viewerVoted: doc.viewer?.marks.includes(VOTE_MARK) ?? false,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+    version: doc.version,
   };
 }
 
-export function createSharedStorage(): SharedStorage {
+/**
+ * Assert a mark reply's `count`. 🔴 ASSERTED, NOT COERCED: `?? 0` would report a
+ * vote that did not land as a tally of zero, and the app writes this number
+ * straight into the card.
+ */
+function requireCount(reply: { count?: unknown }, op: string): number {
+  if (typeof reply.count !== 'number' || !Number.isFinite(reply.count)) {
+    throw new Error(`records ${op}: reply carried no numeric count`);
+  }
+  return reply.count;
+}
+
+/**
+ * A failed create/edit → viewer copy (`lib/storageErrors.ts`). 🔴 EVERY failure,
+ * not only a `StorageError`: a reply without the store's envelope (a proxy's JSON
+ * 502, the SDK's own malformed-reply error) arrives as a plain error whose message
+ * is server or SDK text, and the Builder renders `err.message`. Those get the
+ * generic retry line; the original stays on `cause`.
+ */
+function asPublishRefusal(err: unknown): never {
+  if (err instanceof SharedWriteRefusal) throw err;
+  if (err instanceof StorageError) {
+    throw new SharedWriteRefusal(publishRefusalMessage(err), err.code, { cause: err });
+  }
+  // Logged, so a genuine bug behind the generic copy stays attributable.
+  // eslint-disable-next-line no-console
+  console.warn('[custom-generators] shared write failed', err);
+  throw new SharedWriteRefusal(publishRefusalMessage({ code: 'unknown' }), 'unknown', { cause: err });
+}
+
+function viewerIdNow(): number | null {
+  try {
+    return getSnapshot().viewer?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export interface SharedStorageOptions {
+  docs?: () => DocumentStorage | Promise<DocumentStorage>;
+  /** Who the reads are made for — the id rows the store marks `isViewer` are stamped with. */
+  viewerId?: () => number | null;
+  retry?: RateLimitRetryPolicy;
+}
+
+export function createSharedStorage(options: SharedStorageOptions = {}): SharedStorage {
+  const docs = options.docs ?? getDocStorage;
+  const viewerId = options.viewerId ?? viewerIdNow;
+  const retry = options.retry ?? DEFAULT_RATE_LIMIT_RETRY;
+  const records = async (): Promise<StorageCollection<RecordDocument>> =>
+    (await docs()).collection<RecordDocument>(RECORDS_COLLECTION);
+
   return {
-    async list(opts = {}) {
-      const app = await getClient();
-      const res = await app.site.get<{
-        items?: WireSharedItem[];
-        metadata?: { nextCursor?: string };
-      }>('blocks/shared-storage/list', {
-        query: {
-          ...(opts.prefix !== undefined ? { prefix: opts.prefix } : {}),
-          ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
-          ...(opts.cursor !== undefined ? { cursor: opts.cursor } : {}),
-          // 🔴 CONDITIONALLY SPREAD, AND A REAL BOOLEAN — both halves matter, and
-          // the route 400s on either mistake. Its schema is
-          // `z.union([z.literal('true'), z.literal('false')]).optional()`, so:
-          //   - the SDK's `urlFor` renders a boolean as `?mine=true` / `?mine=false`
-          //     (`String(item)`), which the union accepts;
-          //   - an UNSET `mine` must leave the key out ENTIRELY. A `?? ''`
-          //     fallback would send `?mine=`, which matches neither literal and
-          //     400s rather than defaulting to the whole board. An unrecognised
-          //     value is loud by design there, so a typo cannot quietly widen a
-          //     "my rows" read back into a full-board read.
-          ...(opts.mine !== undefined ? { mine: opts.mine } : {}),
-        },
-      });
-      const result: SharedListResult = { items: (res.items ?? []).map(reviveItem) };
-      // 🔴 PASSED THROUGH UNTOUCHED, PRESENT EXACTLY WHEN THE SERVER SENT IT. The
-      // server sets it iff the page it returned was FULL, so it is not evidence a
-      // next row exists — `App.tsx`'s `DISCOVER_LIST_LIMIT` over-fetches by one and
-      // reads truncation off the row count precisely because this cursor lies in
-      // that one case. Never default it, never re-derive it from `items.length`.
-      if (res.metadata?.nextCursor !== undefined) result.nextCursor = res.metadata.nextCursor;
+    async list(opts = {}): Promise<SharedListResult> {
+      const forViewer = viewerId();
+      const page = await withRateLimitRetry(
+        async () =>
+          (await records()).list({
+            sort: BOARD_SORT,
+            // `list({ mine: true })` was the legacy route's server-side author
+            // filter; the store's is `author: 'me'`. An anonymous viewer gets
+            // `sign_in_required` for it (the legacy route answered an empty page),
+            // which is why `App.tsx` does not make this read for one.
+            ...(opts.mine === true ? { author: 'me' as const } : {}),
+            ...(opts.limit !== undefined
+              ? { limit: Math.min(Math.max(1, Math.floor(opts.limit)), DOC_LIST_LIMIT_MAX) }
+              : {}),
+            ...(opts.cursor !== undefined ? { cursor: opts.cursor } : {}),
+          }),
+        retry,
+      );
+      const result: SharedListResult = { items: page.items.map((d) => toSharedListItem(d, forViewer)) };
+      // `null` exactly on the last page — passed through, never re-derived.
+      if (page.nextCursor !== null) result.nextCursor = page.nextCursor;
       return result;
     },
 
     async get(key) {
-      const app = await getClient();
-      const res = await app.site.get<{ item?: WireSharedItem | null }>(
-        'blocks/shared-storage/item',
-        { query: { key } },
-      );
-      // `null` covers a missing key AND a hidden one — a withdrawn or moderated row
-      // is never leaked as "exists but withheld".
-      return res.item ? reviveItem(res.item) : null;
-    },
-
-    async getCount(key) {
-      const counts = await this.getCounts([key]);
-      return counts[key] ?? 0;
-    },
-
-    async getCounts(keys) {
-      if (keys.length === 0) return {};
-      const app = await getClient();
-      const res = await app.site.get<{ counts?: Record<string, number> }>(
-        'blocks/shared-storage/counts',
-        // 🔴 REPEATED `keys` PARAMS, not a comma-joined list — this route's schema
-        // differs from the two by-id reads (`gated-images`, `generation-resources`),
-        // which do take comma lists. A joined string here arrives as ONE key and
-        // every real key reads 0.
-        { query: { keys } },
-      );
-      const counts = res.counts ?? {};
-      // Keys absent from the reply have no votes; the callers index this map
-      // directly, so materialise the zeros rather than leaving holes.
-      const out: Record<string, number> = {};
-      for (const k of keys) out[k] = counts[k] ?? 0;
-      return out;
+      const forViewer = viewerId();
+      const doc = await withRateLimitRetry(async () => (await records()).get(key), retry);
+      // `null` covers a missing key AND a moderator-hidden one.
+      return doc ? toSharedListItem(doc, forViewer) : null;
     },
 
     async append(value) {
-      const app = await getClient();
-      return app.site.post<{ key: string }>('blocks/shared-storage/append', { value });
+      try {
+        // 🔴 NOT RETRIED ON A 429: a create's 429 is the author's shared-write
+        // budget (a refill every six minutes), which an in-place retry cannot
+        // outlast — the viewer gets the copy instead.
+        const doc = await (await records()).create(value as RecordDocument);
+        return { key: doc.key };
+      } catch (err) {
+        return asPublishRefusal(err);
+      }
     },
 
-    async update(key, value) {
-      const app = await getClient();
-      // Author-scoped server-side: 403 when the viewer is not the row's author,
-      // 404 when the key is missing or hidden. The key and the row's vote/report
-      // totals are preserved — only the contributed value changes.
-      await app.site.post('blocks/shared-storage/update', { key, value });
+    async update(key, value, opts = {}) {
+      try {
+        const coll = await records();
+        if (opts.ifVersion !== undefined) {
+          // The caller read the row and built `value` from THAT read: write only
+          // if nothing moved since (a missing row is refused too, never created).
+          await coll.put(key, value as RecordDocument, { ifVersion: opts.ifVersion });
+          return;
+        }
+        // 🔴 `put` CREATES A MISSING KEY, and the legacy `update` answered 404 for
+        // one. Reading first and writing AT that version keeps an edit from
+        // resurrecting a row its author withdrew in another tab: a row gone in
+        // between makes the conditional write refuse `version_conflict`, and a row
+        // already gone is reported as the store reports one, `not_found`. The key
+        // and the row's marks are preserved; only the data changes.
+        const current = await withRateLimitRetry(() => coll.get(key), retry);
+        if (current === null) {
+          throw new SharedWriteRefusal(publishRefusalMessage({ code: 'not_found' }), 'not_found');
+        }
+        await coll.put(key, value as RecordDocument, { ifVersion: current.version });
+      } catch (err) {
+        asPublishRefusal(err);
+      }
     },
 
     async vote(key) {
-      const app = await getClient();
-      const res = await app.site.post<{ count: number }>('blocks/shared-storage/vote', { key });
-      return res.count;
+      return requireCount(await (await records()).mark(key, VOTE_MARK), 'vote');
     },
 
     async unvote(key) {
-      const app = await getClient();
-      const res = await app.site.post<{ count: number }>('blocks/shared-storage/unvote', { key });
-      return res.count;
+      return requireCount(await (await records()).unmark(key, VOTE_MARK), 'unvote');
     },
 
     async withdraw(key) {
-      const app = await getClient();
-      const res = await app.site.post<{ ok: boolean; deleted: boolean }>(
-        'blocks/shared-storage/withdraw',
-        { key },
-      );
-      return { ok: res.ok, deleted: res.deleted };
+      // Needs only `apps:storage`: a viewer who withdrew the publish consent can
+      // still remove what they published. `deleted: false` = nothing was there.
+      const { deleted } = await withRateLimitRetry(async () => (await records()).delete(key), retry);
+      return { ok: true as const, deleted };
     },
 
-    async report(key, reason) {
-      const app = await getClient();
-      // Identical reply whether newly filed or already reported. Filing does NOT
-      // hide the row — a moderator decides. `ReportButton`'s fixed copy says so.
-      await app.site.post('blocks/shared-storage/report', {
-        key,
-        ...(reason !== undefined ? { reason } : {}),
-      });
+    async report(key) {
+      // Idempotent and permanent. Filing does NOT hide the row — a moderator
+      // decides. `ReportButton`'s fixed copy says so.
+      await (await records()).mark(key, REPORT_MARK);
     },
   };
 }

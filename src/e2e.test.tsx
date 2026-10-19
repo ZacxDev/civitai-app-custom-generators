@@ -66,7 +66,7 @@ describe('e2e: build → publish → discover → open → run', () => {
     // as a special-key sequence by userEvent.
     fireEvent.change(within(editor).getByTestId('btn-prompt-template'), { target: { value: 'neon glow {prompt}' } });
 
-    // 2. publish (through the fake's `blocks/shared-storage/*` routes)
+    // 2. publish (through the document store: `blocks/storage/records`)
     await userEvent.click(screen.getByTestId('publish'));
     await screen.findByTestId('builder-notice');
 

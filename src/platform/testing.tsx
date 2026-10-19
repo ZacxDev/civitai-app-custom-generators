@@ -13,6 +13,18 @@
 // and `./appStorage` — including their URL construction, query parameters, date
 // revival, batching and error classification. Only the server is fake.
 //
+// 🔴 THE DOCUMENT STORE (`blocks/storage/*`) IS ANSWERED BY THE SDK'S OWN CONTRACT
+// FAKE, `createFakeStorage`, over this repo's `block.manifest.json` — not
+// re-implemented here. It enforces the declarations, scopes and consent, `own`
+// (`not_author`), marks and `viewer.marks`, the trust gate, key rules, the list
+// `limit` ceiling and exact cursors, depth/size/quota limits, moderation and (opt
+// in) rate limits; the SDK runs the platform's storage contract against it. This
+// file only converts `fetch` to its `Http` seam, maps numeric test viewer ids onto
+// its viewers, and sends each request with the scopes on the CURRENT token — so a
+// token without `apps:storage:publish` is refused `consent_required` exactly as
+// the real store refuses it, and a consent grant (`grantConsent`) that refreshes
+// the token is what lets the next write through.
+//
 // 🔴 A FAKE PASSING IS EVIDENCE ABOUT THE FAKE. These suites prove the app is
 // internally consistent with this file's reading of the REST contract. They are
 // NOT evidence that civitai's routes behave as their docblocks say. Nothing here
@@ -25,9 +37,9 @@
 import { useRef } from 'react';
 import type { ReactNode } from 'react';
 
-import { createFakeTransport, __resetTransport } from '@civitai/sdk/testing';
-import type { FakeTransport } from '@civitai/sdk/testing';
-import { getTransport } from '@civitai/sdk';
+import { createFakeStorage, createFakeTransport, __resetTransport } from '@civitai/sdk/testing';
+import type { FakeStorage, FakeStorageOptions, FakeStorageViewer, FakeTransport } from '@civitai/sdk/testing';
+import { ApiError, getTransport } from '@civitai/sdk';
 import type { BlockTransport } from '@civitai/sdk';
 import type {
   BlockCreatePostResult,
@@ -40,7 +52,10 @@ import type {
   SharedStorageValue,
 } from '@civitai/app-sdk/blocks';
 
+import blockManifest from '../../block.manifest.json';
 import { __configurePlatform } from './client.js';
+import { KV_COLLECTION, RECORDS_COLLECTION } from './docStore.js';
+import { toSharedListItem, VOTE_MARK, type RecordDocument } from './sharedStorage.js';
 import type { SharedListItem } from './types.js';
 
 export { __resetTransport };
@@ -171,8 +186,24 @@ export interface FakeCivitaiOptions {
    * {@link FakeCivitaiOptions.createPostNoReply}.
    */
   createPostHold?: boolean;
-  /** Seeded per-viewer app storage. */
+  /**
+   * Seeded per-viewer app storage: legacy-shaped `key → value`, written into the
+   * private `kv` collection as `{ value }` — exactly what the go-live copy writes.
+   */
   storage?: { seed?: Record<string, unknown> };
+  /** Passed to `createFakeStorage`: rate limits, clock, moderation, consent state. */
+  docStore?: Pick<FakeStorageOptions, 'enforceRateLimits' | 'now' | 'moderate' | 'consent' | 'disabled'> & {
+    /** The viewer fails the store's minimum-trust gate on shared writes and marks. */
+    untrustedReason?: string;
+  };
+  /**
+   * How the fake host answers `REQUEST_CONSENT`: `'grant'` refreshes the token
+   * with the requested scopes added (the real host's re-mint), `'unavailable'`
+   * pushes `CONSENT_UNAVAILABLE` (so `requestGrants` resolves `false` at once),
+   * and `'ignore'` (the default) answers nothing — a dismissed dialog, which only
+   * the caller's own timeout ends.
+   */
+  grantConsent?: 'grant' | 'unavailable' | 'ignore';
   /**
    * The host route the block is opened at: `PageSlotContext.subPath` in the init
    * context. Defaults to `''` (the app root). A LATER route change is a
@@ -182,7 +213,7 @@ export interface FakeCivitaiOptions {
   /** Observe every outbound bridge message (requests AND notifications). */
   onOutbound?: (message: { type: string; payload: unknown }) => void;
   /**
-   * The App Store sub-listing routes (`blocks/sub-listings/{upsert,withdraw,mine}`).
+   * The App Store sub-listing routes this app calls (`blocks/sub-listings/{upsert,mine}`).
    *
    * `seed` rows belong to the viewer unless `authorUserId` says otherwise. `fail`
    * answers one route with a fixed status instead: a JSON `{ error, code }` body
@@ -191,9 +222,14 @@ export interface FakeCivitaiOptions {
    *
    * 🔴 The fake enforces the parts of the contract this app can get WRONG — the
    * `.strict()` body (an unknown key is a 400), the title/tagline/subPath bounds,
-   * the item existing in shared storage and being the viewer's — and none of the
-   * parts it cannot observe (text safety, rate limits, moderation). A test that
-   * needs one of those scripts it with `fail`.
+   * the item existing and being the viewer's — and none of the parts it cannot
+   * observe (text safety, rate limits, moderation). A test that needs one of those
+   * scripts it with `fail`.
+   *
+   * 🔴 "THE ITEM EXISTING" MEANS IN THE DOCUMENT STORE, as the server resolves it
+   * for an app whose manifest declares a shared collection (civitai/civitai#6120): the
+   * legacy store is never read. Likewise, an author's delete of a `records`
+   * document withdraws that author's card here, as that server change does.
    */
   subListings?: {
     seed?: { itemKey: string; status: 'pending' | 'approved' | 'hidden' | 'withdrawn'; authorUserId?: number }[];
@@ -205,7 +241,7 @@ export interface FakeCivitaiOptions {
      */
     publicImages?: { imageId: number; userId: number }[];
     fail?: Partial<
-      Record<'upsert' | 'withdraw' | 'mine', { status: number; code?: string; html?: boolean }>
+      Record<'upsert' | 'mine', { status: number; code?: string; html?: boolean }>
     >;
   };
 }
@@ -220,8 +256,10 @@ export interface RecordedCall {
 export interface FakeCivitai {
   transport: BlockTransport;
   fetch: typeof fetch;
-  /** The fake server's shared rows, for asserting server state. */
-  rows: () => SharedListItem[];
+  /** The fake server's shared rows (newest key first), as the default viewer reads them. */
+  rows: () => Promise<SharedListItem[]>;
+  /** The SDK contract fake behind `blocks/storage/*`, for asserting stored documents. */
+  docStore: FakeStorage;
   /** Every REST call the app made, in order. */
   calls: RecordedCall[];
   /** The fake server's App Store sub-listing rows, keyed by item key. */
@@ -231,15 +269,28 @@ export interface FakeCivitai {
   >;
 }
 
-const DEFAULT_SCOPES = [
+/**
+ * The token's scopes by default: everything the manifest declares except the App
+ * Store scope (minted by no dev, tunnel or review token), with BOTH consent-gated
+ * scopes already granted — the state of a returning viewer. A test about the
+ * consent flow passes its own `scopes` without `apps:storage:publish`.
+ */
+export const DEFAULT_SCOPES = [
   'ai:write:budgeted',
   'buzz:read:self',
-  'apps:storage:read',
-  'apps:storage:write',
-  'apps:storage:shared:read',
-  'apps:storage:shared:write',
+  'apps:storage',
+  'apps:storage:publish',
   'posts:write:self',
 ];
+
+/** A numeric test viewer id → the SDK fake's viewer. */
+function docViewer(id: number, untrustedReason?: string): FakeStorageViewer {
+  return {
+    username: `user${id}`,
+    id,
+    ...(untrustedReason !== undefined ? { trusted: false, untrustedReason } : {}),
+  };
+}
 
 /**
  * The reply a `createPostHold` fake is sitting on.
@@ -306,15 +357,51 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
   const calls: RecordedCall[] = [];
 
   // ---- server state -------------------------------------------------------
-  const shared = new Map<string, { value: SharedStorageValue; authorUserId: number; voters: Set<number> }>();
-  for (const seed of options.shared?.seed ?? []) {
-    shared.set(seed.key ?? mintKey(), {
-      value: seed.value,
-      authorUserId: seed.authorUserId ?? viewerId ?? 1,
-      voters: new Set(seed.voters ?? []),
-    });
-  }
-  const storage = new Map<string, unknown>(Object.entries(options.storage?.seed ?? {}));
+  // The document store: the SDK's contract fake over this repo's manifest.
+  //
+  // 🔴 SEEDS ARE FIXTURE, NOT TRAFFIC. Written as each seed's own author with a
+  // full, consented token before the first request is answered, and — with rate
+  // limits on — on a clock that jumps a full window per reading, so seeding never
+  // spends the windows the app's requests are measured against.
+  let seeding = true;
+  let seedClock = 0;
+  const callerNow = options.docStore?.now;
+  const realNow = callerNow ?? Date.now;
+  const docStore: FakeStorage = createFakeStorage({
+    manifest: blockManifest as FakeStorageOptions['manifest'],
+    viewer: viewerId == null ? null : docViewer(viewerId, options.docStore?.untrustedReason),
+    ...(options.docStore?.enforceRateLimits !== undefined ? { enforceRateLimits: options.docStore.enforceRateLimits } : {}),
+    ...(options.docStore?.moderate ? { moderate: options.docStore.moderate } : {}),
+    ...(options.docStore?.consent ? { consent: options.docStore.consent } : {}),
+    ...(options.docStore?.disabled ? { disabled: options.docStore.disabled } : {}),
+    ...(options.docStore?.enforceRateLimits || callerNow
+      ? { now: () => (seeding ? (seedClock += 61_000) : realNow()) }
+      : {}),
+  });
+  const seedAuthor = viewerId ?? 1;
+  const seeded = (async () => {
+    const asSeed = docStore.as({ viewer: docViewer(seedAuthor), scopes: blockManifest.scopes });
+    for (const [k, v] of Object.entries(options.storage?.seed ?? {})) {
+      await asSeed.storage.collection(KV_COLLECTION).put(k, { value: v });
+    }
+    for (const seed of options.shared?.seed ?? []) {
+      const key = seed.key ?? mintKey();
+      const author = seed.authorUserId ?? seedAuthor;
+      await docStore
+        .as({ viewer: docViewer(author), scopes: blockManifest.scopes })
+        .storage.collection<RecordDocument>(RECORDS_COLLECTION)
+        .put(key, seed.value as RecordDocument);
+      for (const voter of seed.voters ?? []) {
+        await docStore
+          .as({ viewer: docViewer(voter), scopes: blockManifest.scopes })
+          .storage.collection(RECORDS_COLLECTION)
+          .mark(key, VOTE_MARK);
+      }
+    }
+  })().finally(() => {
+    seeding = false;
+  });
+
   const subListings = new Map<
     string,
     {
@@ -342,31 +429,50 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
   const workflows = new Map<string, { snapshot: BlockWorkflowSnapshot; pollsLeft: number }>();
   let workflowCounter = 0;
 
-  const rowOf = (key: string): SharedListItem => {
-    const r = shared.get(key)!;
-    return {
-      key,
-      authorUserId: r.authorUserId,
-      value: r.value,
-      count: r.voters.size,
-      createdAt: new Date('2026-01-01T00:00:00.000Z'),
-      updatedAt: new Date('2026-01-02T00:00:00.000Z'),
-      viewerVoted: viewerId != null && r.voters.has(viewerId),
-    };
+  /** The current token's scopes — what every store request is made with. */
+  const tokenScopes = (): readonly string[] => fake.snapshot.get().token?.scopes ?? [];
+
+  /** Every shared row, newest key first, as the default viewer reads them. */
+  const rows = async (): Promise<SharedListItem[]> => {
+    await seeded;
+    const reader = docStore.as({ viewer: viewerId == null ? null : docViewer(viewerId), scopes: blockManifest.scopes });
+    const out: SharedListItem[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await reader.storage
+        .collection<RecordDocument>(RECORDS_COLLECTION)
+        .list({ sort: '-key', limit: 100, ...(cursor ? { cursor } : {}) });
+      for (const d of page.items) out.push(toSharedListItem(d, viewerId));
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    return out;
   };
 
-  /** Wire form: the dates are ISO strings, as JSON makes them. */
-  const wireRow = (key: string) => {
-    const row = rowOf(key);
-    return { ...row, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() };
+  /**
+   * Who wrote a shared item, for the sub-listing author check: the viewer, someone
+   * else (-1), or nobody (`null`) — from the DOCUMENT STORE only, as civitai
+   * resolves it (civitai/civitai#6120 and #6296): every ITEM collection the
+   * manifest declares (shared, viewer-authored: `own`/`anyone`) is probed, a
+   * `write: "none"` one (`generator_marks`) never is, and a key found in two item
+   * collections names no item.
+   */
+  const declared: Record<string, { visibility: string; write?: string }> =
+    blockManifest.storage?.collections ?? {};
+  const itemCollections = Object.entries(declared)
+    .filter(([, c]) => c.visibility === 'shared' && (c.write === 'own' || c.write === 'anyone'))
+    .map(([name]) => name);
+  const itemAuthor = async (key: string): Promise<number | null> => {
+    if (viewerId == null) return null;
+    const reader = docStore.as({ viewer: docViewer(viewerId), scopes: blockManifest.scopes });
+    const found = [];
+    for (const name of itemCollections) {
+      const doc = await reader.storage.collection(name).get(key);
+      if (doc) found.push(doc);
+    }
+    if (found.length !== 1) return null;
+    const doc = found[0]!;
+    return doc.author.kind === 'user' && doc.author.isViewer ? viewerId : -1;
   };
-
-  const rows = () =>
-    [...shared.keys()].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0)).map(rowOf);
-
-  /** Anonymous writes are refused before anything else, as the server does. */
-  const requireViewer = (): Response | null =>
-    viewerId == null ? json(403, { error: 'apps:storage:shared:write requires authenticated subject' }) : null;
 
   const cost = gen.costPerGen ?? 12;
 
@@ -379,131 +485,37 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
     const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined;
     calls.push({ method, path, body, query: q });
 
-    // ---- shared storage
-    if (path === 'blocks/shared-storage/list') {
-      const prefix = q.get('prefix') ?? '';
-      const limit = Number(q.get('limit') ?? 50);
-      const cursor = q.get('cursor');
-      const after = cursor ? atob(cursor) : null;
-      // 🔴 THE LITERAL UNION, SPELLED OUT, BECAUSE THE ROUTE 400s ON ANYTHING
-      // ELSE. Its schema is `z.union([z.literal('true'), z.literal('false')])
-      // .optional()` — deliberately NOT `z.coerce.boolean()`, which maps the
-      // string "false" to TRUE. So an absent key is "whole board", `'true'`/
-      // `'false'` are the only accepted values, and everything else — `?mine=`
-      // included, which is what any `?? ''` fallback in the adapter would
-      // produce — is a 400. A fake that accepted `?mine=` would let exactly that
-      // defect pass here and fail in production.
-      const mineRaw = q.get('mine');
-      if (mineRaw !== null && mineRaw !== 'true' && mineRaw !== 'false') {
-        return json(400, { error: 'Invalid query' });
+    // ---- the document store: blocks/storage/*
+    if (path === 'blocks/storage' || path.startsWith('blocks/storage/')) {
+      await seeded;
+      const query: Record<string, string | string[]> = {};
+      for (const name of new Set(q.keys())) {
+        const all = q.getAll(name);
+        query[name] = all.length === 1 ? (all[0] as string) : all;
       }
-      // 🔴 AN ANONYMOUS VIEWER ASKING FOR `mine` GETS AN EMPTY PAGE — not an
-      // error and not the whole board. Server-side that falls out of
-      // three-valued logic (`s.author_user_id = $4::int` is UNKNOWN for a NULL
-      // subject) rather than from a guard, so the row count is the only thing
-      // reproducible here; the SQL shape it rests on is pinned in civitai's own
-      // `apps-shared.router.test.ts`, not here.
-      const mine = mineRaw === 'true';
-      const all = [...shared.keys()]
-        .filter((k) => k.startsWith(prefix))
-        .filter((k) => (mine ? viewerId != null && shared.get(k)!.authorUserId === viewerId : true))
-        .sort((a, b) => (a < b ? 1 : a > b ? -1 : 0))
-        .filter((k) => (after ? k < after : true));
-      const page = all.slice(0, limit);
-      // `nextCursor` iff the page FILLED — the server's own rule, and the reason
-      // `App.tsx` over-fetches by one rather than trusting this.
-      const nextCursor = page.length === limit ? btoa(page[page.length - 1]!) : undefined;
-      return json(200, { items: page.map(wireRow), metadata: { nextCursor } });
-    }
-    if (path === 'blocks/shared-storage/item') {
-      const key = q.get('key') ?? '';
-      return json(200, { item: shared.has(key) ? wireRow(key) : null });
-    }
-    if (path === 'blocks/shared-storage/counts') {
-      // Repeated `keys` params — never comma-split.
-      const keys = q.getAll('keys');
-      const counts: Record<string, number> = {};
-      for (const k of keys) counts[k] = shared.get(k)?.voters.size ?? 0;
-      return json(200, { counts });
-    }
-    if (path === 'blocks/shared-storage/append') {
-      const refused = requireViewer();
-      if (refused) return refused;
-      const key = mintKey();
-      shared.set(key, {
-        value: (body as { value: SharedStorageValue }).value,
-        authorUserId: viewerId!,
-        voters: new Set(),
-      });
-      return json(200, { key });
-    }
-    if (path === 'blocks/shared-storage/update') {
-      const refused = requireViewer();
-      if (refused) return refused;
-      const key = String(body?.key);
-      const row = shared.get(key);
-      if (!row) return json(404, { message: 'request not found' });
-      if (row.authorUserId !== viewerId)
-        return json(403, { message: 'you can only edit your own submissions' });
-      row.value = (body as { value: SharedStorageValue }).value;
-      return json(200, { ok: true });
-    }
-    if (path === 'blocks/shared-storage/vote' || path === 'blocks/shared-storage/unvote') {
-      const refused = requireViewer();
-      if (refused) return refused;
-      const key = String(body?.key);
-      const row = shared.get(key);
-      if (!row) {
-        // `vote` pre-checks existence; `unvote` does not and answers 0.
-        if (path.endsWith('vote') && !path.endsWith('unvote'))
-          return json(404, { message: 'request not found' });
-        return json(200, { count: 0 });
+      try {
+        const reply = await docStore
+          .as({ viewer: viewerId == null ? null : docViewer(viewerId, options.docStore?.untrustedReason), scopes: tokenScopes() })
+          .http<unknown>(method, path, { query, ...(body !== undefined ? { body } : {}) });
+        // The author's delete of a shared document withdraws THEIR store card,
+        // server-side (civitai/civitai#6120).
+        const recordKey = /^blocks\/storage\/records\/([^/]+)$/.exec(path)?.[1];
+        if (method === 'DELETE' && recordKey && (reply as { deleted?: boolean } | null)?.deleted) {
+          const card = subListings.get(decodeURIComponent(recordKey));
+          if (card && card.authorUserId === viewerId && (card.status === 'pending' || card.status === 'approved')) {
+            card.status = 'withdrawn';
+          }
+        }
+        return json(200, reply ?? {});
+      } catch (err) {
+        if (err instanceof ApiError) {
+          const res = json(err.status, err.body);
+          const retryAfter = (err.body as { details?: { retryAfter?: unknown } } | null)?.details?.retryAfter;
+          if (typeof retryAfter === 'number') res.headers.set('Retry-After', String(retryAfter));
+          return res;
+        }
+        throw err;
       }
-      if (path.endsWith('unvote')) row.voters.delete(viewerId!);
-      else row.voters.add(viewerId!);
-      return json(200, { count: row.voters.size });
-    }
-    if (path === 'blocks/shared-storage/withdraw') {
-      const refused = requireViewer();
-      if (refused) return refused;
-      const key = String(body?.key);
-      const row = shared.get(key);
-      // Never 403/404 — so this route is not an existence oracle for other
-      // viewers' rows.
-      const deleted = !!row && row.authorUserId === viewerId;
-      if (deleted) shared.delete(key);
-      return json(200, { ok: true, deleted });
-    }
-    if (path === 'blocks/shared-storage/report') {
-      const refused = requireViewer();
-      if (refused) return refused;
-      return json(200, { ok: true });
-    }
-
-    // ---- app storage (all POST)
-    if (path === 'blocks/app-storage/get') {
-      if (viewerId == null) return json(403, { message: 'apps:storage:read requires authenticated subject' });
-      return json(200, { value: storage.has(String(body?.key)) ? storage.get(String(body?.key)) : null });
-    }
-    if (path === 'blocks/app-storage/set') {
-      if (viewerId == null) return json(403, { message: 'apps:storage:write requires authenticated subject' });
-      storage.set(String(body?.key), body?.value);
-      return json(200, { ok: true, sizeBytes: JSON.stringify(body?.value ?? null).length });
-    }
-    if (path === 'blocks/app-storage/delete') {
-      if (viewerId == null) return json(403, { message: 'apps:storage:write requires authenticated subject' });
-      return json(200, { ok: true, deleted: storage.delete(String(body?.key)) });
-    }
-    if (path === 'blocks/app-storage/list') {
-      if (viewerId == null) return json(403, { message: 'apps:storage:read requires authenticated subject' });
-      const prefix = String(body?.prefix ?? '');
-      const keys = [...storage.keys()].filter((k) => k.startsWith(prefix)).sort();
-      return json(200, {
-        keys: keys.map((k) => ({ key: k, updatedAt: '2026-01-02T00:00:00.000Z' })),
-      });
-    }
-    if (path === 'blocks/app-storage/quota') {
-      return json(200, { usedBytes: 1024, rowCount: storage.size, limitBytes: 1_000_000, limitRows: 50 });
     }
 
     // ---- images / resources / buzz
@@ -614,7 +626,7 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
 
     // ---- App Store sub-listings (civitai `src/pages/api/v1/blocks/sub-listings/*`)
     if (path.startsWith('blocks/sub-listings/')) {
-      const op = path.slice('blocks/sub-listings/'.length) as 'upsert' | 'withdraw' | 'mine';
+      const op = path.slice('blocks/sub-listings/'.length) as 'upsert' | 'mine';
       const fail = options.subListings?.fail?.[op];
       if (fail) {
         if (fail.html) return notFound(path);
@@ -637,17 +649,6 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
           }));
         return json(200, { items });
       }
-      if (op === 'withdraw' && method === 'POST') {
-        const keys = Object.keys(body ?? {});
-        if (keys.length !== 1 || typeof body?.itemKey !== 'string') {
-          return json(400, { error: 'Invalid request body', code: 'invalid_body' });
-        }
-        const r = subListings.get(body.itemKey);
-        const withdrawn =
-          !!r && r.authorUserId === viewerId && (r.status === 'pending' || r.status === 'approved');
-        if (withdrawn) r!.status = 'withdrawn';
-        return json(200, { ok: true, withdrawn });
-      }
       if (op === 'upsert' && method === 'POST') {
         const allowed = new Set(['itemKey', 'title', 'tagline', 'imageId', 'subPath', 'contentRating']);
         const b = (body ?? {}) as Record<string, unknown>;
@@ -663,9 +664,10 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
           typeof b.subPath !== 'string' ||
           !/^[A-Za-z0-9_-]{1,64}(\/[A-Za-z0-9_-]{1,64}){0,3}$/.test(b.subPath);
         if (bad) return json(400, { error: 'Invalid request body', code: 'invalid_body' });
-        const item = shared.get(b.itemKey as string);
-        if (!item) return json(404, { error: 'Item not found', code: 'item_not_found' });
-        if (item.authorUserId !== viewerId) {
+        await seeded;
+        const author = await itemAuthor(b.itemKey as string);
+        if (author === null) return json(404, { error: 'Item not found', code: 'item_not_found' });
+        if (author !== viewerId) {
           return json(403, { error: 'Only the item author can publish it', code: 'not_your_item' });
         }
         if (b.imageId != null) {
@@ -837,6 +839,24 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
     notify: (message) => {
       options.onOutbound?.({ type: message.type, payload: message.payload });
       fake.notify(message);
+      if (message.type === 'REQUEST_CONSENT') {
+        // The real host shows its dialog and, on approval, RE-MINTS the token with
+        // the scopes added — which is the snapshot change `requestGrants` waits for.
+        const asked = ((message.payload as { scopes?: string[] })?.scopes ?? []).filter(
+          (x): x is string => typeof x === 'string',
+        );
+        if (options.grantConsent === 'grant') {
+          queueMicrotask(() => {
+            const current = fake.snapshot.get().token;
+            fake.setSnapshot({
+              token: { ...current, scopes: [...new Set([...(current?.scopes ?? []), ...asked])] },
+            } as Parameters<FakeTransport['setSnapshot']>[0]);
+          });
+        } else if (options.grantConsent === 'unavailable') {
+          queueMicrotask(() => fake.push('CONSENT_UNAVAILABLE', {}));
+        }
+        return;
+      }
       if (message.type === 'CREATE_POST_FROM_APP') {
         const requestId = (message.payload as { requestId?: string })?.requestId;
         if (options.createPostNoReply) return;
@@ -866,6 +886,7 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
     transport,
     fetch: fakeFetch,
     rows,
+    docStore,
     calls,
     subListings: () =>
       new Map(
@@ -917,6 +938,16 @@ export interface HarnessProps extends FakeCivitaiOptions {
   applyUrlToggles?: boolean;
   /** Bump to rebuild the fake (a test that wants a fresh server mid-file). */
   resetKey?: number;
+  /**
+   * Use THIS fake (its transport, and its fetch unless `fetch` is given) instead of
+   * building a second one from the options.
+   *
+   * 🔴 A TEST THAT HOLDS A `createFakeCivitai()` HANDLE MUST PASS IT HERE. Without
+   * it the Harness builds its own fake, and the app then reads its token from THAT
+   * one's transport while its requests reach the handle's server — so a consent
+   * grant re-mints one token and the store checks the other.
+   */
+  fake?: FakeCivitai;
 }
 
 /**
@@ -932,12 +963,13 @@ export function Harness({
   children,
   resetKey = 0,
   fetch: fetchOverride,
+  fake: given,
   ...options
 }: HarnessProps): React.JSX.Element {
   const configuredFor = useRef<number | null>(null);
   if (configuredFor.current !== resetKey) {
     heldCreatePost = null;
-    const fake = createFakeCivitai(options);
+    const fake = given ?? createFakeCivitai(options);
     __configurePlatform({
       transport: fake.transport,
       fetch: fetchOverride ?? fake.fetch,

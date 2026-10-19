@@ -8,8 +8,9 @@
 // manifest carrying `iframe.src`, which is server-owned — so the source is
 // validated as committed, with nothing added or removed.
 //
-// All eight scopes are members of the SDK's `BLOCK_SCOPES` as of 0.59.0
-// (`apps:store:items:write` arrived there), so no scope needs filtering.
+// All six scopes are members of the SDK's `BLOCK_SCOPES` (`apps:storage` and
+// `apps:storage:publish` included), and the schema knows the `storage` block, so
+// nothing needs filtering before the gate runs.
 
 import { defineBlock } from '@civitai/app-sdk/manifest';
 import type { BlockManifest } from '@civitai/app-sdk/blocks';

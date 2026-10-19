@@ -81,22 +81,18 @@ export function cannedPicker(map: Partial<Record<BlockResourcePickerType, BlockR
 }
 
 /**
- * In-memory per-viewer KV store built to the HOST's list contract, not to a
- * convenient approximation of it.
+ * In-memory per-viewer KV store built to the DOCUMENT STORE's list contract, not
+ * to a convenient approximation of it.
  *
  * 🔴 THE PAGING BEHAVIOUR IS THE CONTRACT, AND A FAKE THAT IGNORES IT CAN ONLY
- * CONFIRM WHAT THE FAKE BELIEVES. This one mirrors civitai's `apps.router`
- * `storage.list` exactly:
- *   - `ORDER BY key` ascending, paging forward with `key > cursor`;
- *   - `cursor` / `nextCursor` are the base64 of a key;
- *   - `nextCursor` is emitted IF AND ONLY IF the page filled
- *     (`rows.length === limit`), so it means "there may be more", never "there
- *     is more".
- *
- * This used to ignore `limit` and `cursor` entirely and never emit a cursor — so
- * every DOM/integration test ran against a store with no horizon at all, and the
- * multi-page walk in `lib/runs.ts` was unobservable from them. `lib/runs.test.ts`
- * carried its own faithful copy; there is now one.
+ * CONFIRM WHAT THE FAKE BELIEVES. This one mirrors the store's `list` (and the
+ * SDK's `createFakeStorage`, which `platform/appStorage.test.ts` drives directly):
+ *   - key order ascending, or descending with `newestFirst` (`sort: '-key'`);
+ *   - every page carries each key's VALUE;
+ *   - `limit` above 100 is REFUSED (the store answers `invalid_request`), so a
+ *     caller that asks for more fails here exactly as it would in production;
+ *   - `nextCursor` is emitted EXACTLY when another key exists — never on the
+ *     last page, even a full one.
  */
 export function memoryDraftStore(): DraftStore {
   const map = new Map<string, unknown>();
@@ -114,21 +110,26 @@ export function memoryDraftStore(): DraftStore {
       return { ok: true, deleted: had } as const;
     },
     async list(opts) {
+      const limit = opts?.limit ?? 25;
+      if (limit > 100) throw Object.assign(new Error('invalid_request: limit'), { code: 'invalid_request' });
       const prefix = opts?.prefix ?? '';
-      const after = opts?.cursor ? decodeStoreCursor(opts.cursor) : '';
-      const limit = opts?.limit ?? 1000;
-      const all = [...map.keys()].filter((k) => k.startsWith(prefix) && k > after).sort();
+      const desc = opts?.newestFirst === true;
+      const after = opts?.cursor ? decodeStoreCursor(opts.cursor) : null;
+      const all = [...map.keys()]
+        .filter((k) => k.startsWith(prefix))
+        .sort()
+        .filter((k) => after === null || (desc ? k < after : k > after));
+      if (desc) all.reverse();
       const page = all.slice(0, limit);
       return {
-        keys: page.map((key) => ({ key })),
-        nextCursor:
-          page.length === limit ? encodeStoreCursor(page[page.length - 1] as string) : undefined,
+        keys: page.map((key) => ({ key, value: map.get(key) ?? null })),
+        ...(all.length > limit ? { nextCursor: encodeStoreCursor(page[page.length - 1] as string) } : {}),
       };
     },
   };
 }
 
-/** base64 of a key, the shape the host's `storage.list` emits as `nextCursor`. */
+/** base64 of a key — an opaque cursor, as the store's are. */
 function encodeStoreCursor(key: string): string {
   return Buffer.from(key, 'utf8').toString('base64');
 }
@@ -140,24 +141,18 @@ function decodeStoreCursor(cursor: string): string {
 /**
  * In-memory app-scoped shared store that records appends + in-place updates.
  *
- * 🔴 `list` HONOURS `limit` AND `cursor`, AND THAT IS LOAD-BEARING. It used to
- * return every seeded row whatever was asked for, and to emit `nextCursor` from
- * a boolean option — so the board's horizon was a flag a test set rather than a
- * property of the store, and `App`'s read could not be observed to page at all.
- * That is exactly the "a fake that ignores the contract can only confirm what
- * the fake believes" trap {@link memoryDraftStore} was fixed for, one file over
- * and still open. It now mirrors civitai's `apps.shared.router` `list`
- * (re-derived at `5549de73`): at most `limit` rows, keyset-forward from
- * `cursor`, and `nextCursor` emitted **iff the page filled** — meaning "there
- * may be more", never "there is more". It also honours `mine` (see `cfg.viewerId`
- * and the comment at the filter).
+ * 🔴 `list` HONOURS `limit` AND `cursor`, AND THAT IS LOAD-BEARING: at most
+ * `limit` rows, keyset-forward from `cursor`, and `nextCursor` emitted EXACTLY
+ * when another row exists — the document store's rule. It also honours `mine`
+ * (see `cfg.viewerId` and the comment at the filter).
  *
  * ⚠️ One deliberate divergence, named so nobody reads more fidelity into this
- * than it has: the host orders `ORDER BY s.key DESC` and this keeps the seeded
- * ARRAY order (newest first, which is what `append` maintains by unshifting).
- * Fixtures here carry meaning in their order — vote ranks, search matches — and
- * re-sorting them by key string would reshuffle every one of them for a property
- * no test asserts.
+ * than it has: the store orders by `-key` and this keeps the seeded ARRAY order
+ * (newest first, which is what `append` maintains by unshifting). Fixtures here
+ * carry meaning in their order — vote ranks, search matches — and re-sorting them
+ * by key string would reshuffle every one of them for a property no test asserts.
+ * `platform/sharedStorage.test.ts` drives the real adapter against the SDK's
+ * contract fake for the ordering itself.
  */
 export function fakeShared(
   seed: SharedListItem[] = [],
@@ -207,17 +202,17 @@ export function fakeShared(
    */
   const listCalls: Array<Record<string, unknown>> = [];
   const appended: SharedAppendValue[] = [];
-  const updated: Array<{ key: string; value: SharedAppendValue }> = [];
+  const updated: Array<{ key: string; value: SharedAppendValue; opts?: { ifVersion?: number } }> = [];
   /** Keys passed to `withdraw`, in call order — for asserting the delete wiring. */
   const withdrawn: string[] = [];
   /** The injectable `updateSharedGenerator` seam — mutates the SAME row in place. */
-  const update = async (key: string, value: SharedAppendValue): Promise<void> => {
-    updated.push({ key, value });
+  const update = async (key: string, value: SharedAppendValue, opts?: { ifVersion?: number }): Promise<void> => {
+    updated.push({ key, value, ...(opts ? { opts } : {}) });
     const idx = items.findIndex((i) => i.key === key);
     if (idx >= 0) items[idx] = { ...items[idx], value, updatedAt: new Date() };
   };
-  /** Keys passed to `report`, with their reason — for asserting the abuse seam. */
-  const reported: Array<{ key: string; reason?: string }> = [];
+  /** Keys passed to `report` — for asserting the abuse seam. */
+  const reported: Array<{ key: string }> = [];
   const shared: UseSharedStorage = {
     async list(opts) {
       // 🔴 RECORDED BEFORE THE REJECTION, so a failing read is still visible in
@@ -239,9 +234,8 @@ export function fakeShared(
       const page = pool.slice(start, start + limit);
       return {
         items: page,
-        // iff the page FILLED — the host's rule, and the one this app must not
-        // read as "there is another row".
-        ...(page.length === limit && page.length > 0
+        // EXACTLY when another row exists — the document store's rule.
+        ...(pool.length > start + limit && page.length > 0
           ? { nextCursor: encodeStoreCursor(page[page.length - 1]!.key) }
           : {}),
       };
@@ -249,14 +243,8 @@ export function fakeShared(
     async get(key) {
       return items.find((i) => i.key === key) ?? null;
     },
-    async report(key, reason) {
-      reported.push({ key, reason });
-    },
-    async getCount() {
-      return 0;
-    },
-    async getCounts() {
-      return {};
+    async report(key) {
+      reported.push({ key });
     },
     async append(value) {
       appended.push(value);

@@ -8,7 +8,7 @@
 // keep → back → gallery — through `App` with only the host seams injected.
 //
 // The store instance is shared across the journey exactly as it is in production
-// (one `useAppStorage`), so a keep that does not really persist cannot pass.
+// (one `useKvStorage`), so a keep that does not really persist cannot pass.
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';

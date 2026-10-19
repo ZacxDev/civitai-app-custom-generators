@@ -17,7 +17,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import { Harness } from './platform/testing.js';
+import { DEFAULT_SCOPES, Harness } from './platform/testing.js';
 
 import { App, type AppDeps } from './App.js';
 import { defaultParams } from './lib/generator.js';
@@ -55,7 +55,7 @@ function publishedSeed(key: string, title: string, authorUserId = 7): SharedList
   };
 }
 
-function setup(seed: SharedListItem[] = [], depsOver: Partial<AppDeps> = {}) {
+function setup(seed: SharedListItem[] = [], depsOver: Partial<AppDeps> = {}, scopes?: string[]) {
   const shared = fakeShared(seed);
   const wf = mockWorkflow({ cost: 12, images: ['https://image.civitai.com/out.jpeg'] });
   const copyToClipboard = vi.fn(async (_text: string) => {});
@@ -87,6 +87,7 @@ function setup(seed: SharedListItem[] = [], depsOver: Partial<AppDeps> = {}) {
       buzz={{ balance: 5000 }}
       buzzBalance={{ blue: 0, green: 0, yellow: 5000 }}
       cannedPicks={{ Checkpoint: CKPT_INFO, LORA: LORA_INFO }}
+      {...(scopes ? { scopes } : {})}
       showLog={false}
     >
       <App deps={deps} />
@@ -249,6 +250,103 @@ describe('App — card covers (owner-set header, else first published output)', 
     await waitFor(() => expect(shared.updated.length).toBeGreaterThan(0));
     expect(shared.updated.at(-1)!.key).toBe('shared:mine');
     expect((shared.updated.at(-1)!.value.data as { coverImageId?: number }).coverImageId).toBe(555);
+  });
+
+  /**
+   * 🔴 THE AUTO COVER IS AN EDIT TO A SHARED ROW, so it needs the consent-gated
+   * `apps:storage:publish` — and it is a background side effect of a keep, never a
+   * reason to open a consent dialog. Without the grant it is skipped: no write, no
+   * dialog, and the keep itself stands.
+   */
+  it("an owner WITHOUT the publish grant: the keep stands, no cover write and no consent request", async () => {
+    const requestGrants = vi.fn(async () => true);
+    const { shared } = setup(
+      [publishedSeed('shared:mine', 'Mine', VIEWER_ID)],
+      { getImages: gated, keepOutputs: async () => [557], requestGrants },
+      DEFAULT_SCOPES.filter((x) => x !== 'apps:storage:publish'),
+    );
+    await userEvent.click(await within(await screen.findByTestId('published-card')).findByTestId('published-open'));
+    await screen.findByTestId('runner');
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a lighthouse');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+    await screen.findByTestId('queue-results');
+    await userEvent.click(screen.getByTestId('result-keep'));
+    await screen.findByTestId('result-kept');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(shared.updated).toHaveLength(0);
+    expect(requestGrants).not.toHaveBeenCalled();
+  });
+
+  /**
+   * 🔴 A NEWER EDIT SURVIVES THE AUTO COVER. The board was loaded (cached row
+   * titled "Mine"); the generator is then edited elsewhere ("Edited elsewhere",
+   * version 2). The cover write must be built from a FRESH read — the edited
+   * title, body and data, with only the cover added — and sent at that read's
+   * version, not built from this tab's stale copy.
+   */
+  it('the auto cover is built from a fresh read: a newer edit survives, with the cover added', async () => {
+    const seed = { ...publishedSeed('shared:mine', 'Mine', VIEWER_ID), version: 1 };
+    const { shared } = setup([seed], { getImages: gated, keepOutputs: async () => [558] });
+    await userEvent.click(await within(await screen.findByTestId('published-card')).findByTestId('published-open'));
+    await screen.findByTestId('runner');
+    // The edit made elsewhere, after this tab cached the row.
+    const edited = {
+      title: 'Edited elsewhere',
+      body: 'a newer body',
+      data: { ...(seed.value.data as Record<string, unknown>), v: 1, marker: 'newer' },
+    };
+    shared.items[0] = { ...shared.items[0]!, value: edited, version: 2 };
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a lighthouse');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+    await screen.findByTestId('queue-results');
+    await userEvent.click(screen.getByTestId('result-keep'));
+    await screen.findByTestId('result-kept');
+    await waitFor(() => expect(shared.updated.length).toBe(1));
+    expect(shared.updated[0]).toEqual({
+      key: 'shared:mine',
+      value: { ...edited, data: { ...edited.data, coverImageId: 558 } },
+      opts: { ifVersion: 2 },
+    });
+  });
+
+  /**
+   * 🔴 THE MEDIA RECORD RUNS ON EVERY KEEP THAT CARRIES THE GRANT, not only on the
+   * keep that fills a cover. The cover step used to `return` out of the whole
+   * handler, so a visitor's keep and an owner's keep of an already-covered
+   * generator recorded nothing.
+   */
+  const keepWithSocial = async (seed: SharedListItem, imageId: number) => {
+    const recordPublishedMedia = vi.fn(async (_key: string, _ids: number[]) => {});
+    const social = {
+      getDownvotes: async () => ({}),
+      setDownvote: async () => ({ count: 0 }),
+      getPublishedMedia: async () => ({}),
+      recordPublishedMedia,
+    };
+    setup([seed], { getImages: gated, keepOutputs: async () => [imageId], social });
+    await userEvent.click(await within(await screen.findByTestId('published-card')).findByTestId('published-open'));
+    await screen.findByTestId('runner');
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a lighthouse');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+    await screen.findByTestId('queue-results');
+    await userEvent.click(screen.getByTestId('result-keep'));
+    await screen.findByTestId('result-kept');
+    return recordPublishedMedia;
+  };
+
+  it("a visitor's keep records its published outputs against the generator", async () => {
+    const record = await keepWithSocial(publishedSeed('shared:theirs', 'Theirs', 7), 561);
+    await waitFor(() => expect(record).toHaveBeenCalledWith('shared:theirs', [561]));
+  });
+
+  it("an owner's keep of an already-covered generator still records its outputs", async () => {
+    const seed = publishedSeed('shared:mine', 'Mine', VIEWER_ID);
+    (seed.value.data as { coverImageId?: number }).coverImageId = 4242;
+    const record = await keepWithSocial(seed, 562);
+    await waitFor(() => expect(record).toHaveBeenCalledWith('shared:mine', [562]));
   });
 
   it("a visitor's keep never writes a cover onto someone else's generator", async () => {

@@ -1,4 +1,4 @@
-// Block-scope constants used by the app. All ten are declared in the manifest.
+// Block-scope constants used by the app. All six are declared in the manifest.
 //
 // `ai:write:budgeted` is CONSENT-GATED: the host mints the first token WITHOUT
 // it and only adds it after the viewer grants consent (REQUEST_CONSENT →
@@ -9,23 +9,20 @@ import { BLOCK_SCOPES } from '@civitai/app-sdk/blocks';
 
 export const AI_WRITE_BUDGETED = 'ai:write:budgeted';
 export const BUZZ_READ_SELF = 'buzz:read:self';
-export const APPS_STORAGE_READ = 'apps:storage:read';
-export const APPS_STORAGE_WRITE = 'apps:storage:write';
-export const APPS_STORAGE_SHARED_READ = 'apps:storage:shared:read';
-export const APPS_STORAGE_SHARED_WRITE = 'apps:storage:shared:write';
 /**
- * The DOCUMENT STORE (`app.storage.collection(...)`) — a different scope
- * from every legacy `apps:storage:*` scope above. Consent-EXEMPT: reads,
- * marks and counters ride on it. This app declares it for the
- * `generator_marks` (downvotes) and `generator_media` (published-output
- * presence) collections in the manifest's `storage.collections`.
+ * The App Blocks document store: every read, the viewer's private `kv`
+ * collection, deleting their own documents, votes, downvote marks and counters
+ * (`generator_marks`) and reports. CONSENT-EXEMPT — the host mints it on the
+ * first token.
  */
 export const APPS_STORAGE = BLOCK_SCOPES.APPS_STORAGE;
 /**
- * Creating documents in a shared `"own"` document-store collection —
- * CONSENT-GATED, like `apps:storage:shared:write` is for the legacy store.
- * Only the published-media record (a write at keep time) needs it, and that
- * write is best-effort: it is attempted only when the token already
+ * Creating and editing documents in the shared `"own"` collections — `records`
+ * (publishing a generator, or editing a published one) and `generator_media`
+ * (a kept run's published-output record). 🔴 CONSENT-GATED like
+ * `ai:write:budgeted`: the first token does NOT carry it, so every path that
+ * publishes checks {@link hasPublishScope} and asks for it first. The
+ * `generator_media` write is best-effort: attempted only when the token already
  * carries the scope, never prompted for mid-keep.
  */
 export const APPS_STORAGE_PUBLISH = BLOCK_SCOPES.APPS_STORAGE_PUBLISH;
@@ -66,7 +63,7 @@ export function hasStoreScope(tokenScopes: readonly string[] | undefined): boole
   return (tokenScopes ?? []).includes(APPS_STORE_ITEMS_WRITE);
 }
 
-/** Does the current token carry the document-store publish scope (consent-gated)? */
-export function hasDocPublishScope(tokenScopes: readonly string[] | undefined): boolean {
+/** Does the current token carry the shared-publish scope (consent-gated)? */
+export function hasPublishScope(tokenScopes: readonly string[] | undefined): boolean {
   return (tokenScopes ?? []).includes(APPS_STORAGE_PUBLISH);
 }

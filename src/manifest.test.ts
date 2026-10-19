@@ -11,19 +11,60 @@ describe('block.manifest.json', () => {
     expect(() => validateManifest()).not.toThrow();
   });
 
-  it('declares exactly the ten scopes the app uses', () => {
+  it('declares exactly the six scopes the app uses', () => {
     expect(manifest.scopes).toEqual([
       'ai:write:budgeted',
       'buzz:read:self',
-      'apps:storage:read',
-      'apps:storage:write',
-      'apps:storage:shared:read',
-      'apps:storage:shared:write',
       'apps:storage',
       'apps:storage:publish',
       'posts:write:self',
       'apps:store:items:write',
     ]);
+  });
+
+  /**
+   * 🔴 THE STORAGE DECLARATION IS A CONTRACT WITH THE GO-LIVE DATA COPY, SO IT IS
+   * PINNED WHOLE. The legacy per-viewer KV and shared rows are copied into these
+   * two collections by a separate, hand-run step, which writes `kv` documents as
+   * `{ value }` under the legacy key and `records` documents as the legacy value
+   * under the legacy key. A renamed collection, a visibility change or a dropped
+   * `vote` mark would each make the store read a key space the copy never wrote
+   * (a renamed or re-visibilitied collection is a NEW collection server-side), so
+   * every viewer's drafts, kept images and published generators would vanish
+   * while every test of the adapters stayed green. Pinned as the WHOLE object so
+   * an added index or counter — which the copy would not populate — fails too.
+   */
+  it('declares exactly the two collections the data copy writes, and the two social collections', () => {
+    // `kv` and `records` are what the go-live copy writes (scripts/appdata-copy); the
+    // social pair is new in the document store and has no legacy data.
+    expect(manifest.storage).toEqual({
+      collections: {
+        kv: { visibility: 'private' },
+        records: { visibility: 'shared', write: 'own', marks: ['vote'] },
+        generator_marks: {
+          visibility: 'shared',
+          write: 'none',
+          marks: ['downvote'],
+          counters: ['anchor'],
+        },
+        generator_media: {
+          visibility: 'shared',
+          write: 'own',
+          indexes: { generatorKey: 'string' },
+        },
+      },
+    });
+  });
+
+  it('declares none of the four legacy storage scopes the port replaced', () => {
+    for (const legacy of [
+      'apps:storage:read',
+      'apps:storage:write',
+      'apps:storage:shared:read',
+      'apps:storage:shared:write',
+    ]) {
+      expect(manifest.scopes as string[]).not.toContain(legacy);
+    }
   });
 
   /**
@@ -38,7 +79,7 @@ describe('block.manifest.json', () => {
       expect(known.has(scope), `${scope} is not in the installed @civitai/app-sdk BLOCK_SCOPES`).toBe(true);
     }
     // APPEND the unknown scope rather than replacing the list: replacing it
-    // would orphan all ten `scopeJustifications`, which `defineBlock` rejects
+    // would orphan all six `scopeJustifications`, which `defineBlock` rejects
     // on its own — so the case would stay red with the enum check deleted.
     // Pinned to the error's FIELD, so only the scope-enum check can satisfy it.
     let caught: unknown;
@@ -48,9 +89,9 @@ describe('block.manifest.json', () => {
       caught = e;
     }
     expect(caught).toBeInstanceOf(BlockManifestError);
-    expect((caught as BlockManifestError).field).toBe('scopes[10]');
+    expect((caught as BlockManifestError).field).toBe('scopes[6]');
     expect((caught as BlockManifestError).message).toMatch(
-      /^manifest\.scopes\[10\] must be equal to one of the allowed values/,
+      /^manifest\.scopes\[6\] must be equal to one of the allowed values/,
     );
   });
 

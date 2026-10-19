@@ -1,4 +1,4 @@
-// `useSharedStorage` — the hook shape `App.tsx` passes straight into
+// `useRecordsStorage` — the hook shape `App.tsx` passes straight into
 // `deps.shared`.
 
 import { useMemo } from 'react';
@@ -15,6 +15,6 @@ import type { SharedStorage } from './types.js';
  * not break that memo (it is not in the array) but it would make the assumption
  * false, which is the kind of quiet divergence that bites the next change.
  */
-export function useSharedStorage(): SharedStorage {
+export function useRecordsStorage(): SharedStorage {
   return useMemo(() => createSharedStorage(), []);
 }

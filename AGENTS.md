@@ -14,7 +14,8 @@ no UI framework. Their API reference ships with them, in `node_modules`:
   fires on every snapshot change (theme, context, each token rotation — update
   the view in place, never rebuild it); `app.site` is the `/api/v1` REST API as
   the viewer; `app.requestGrants([...])` asks for a consent-gated scope;
-  `app.storage` / `app.sharedStorage` are app storage; `app.host` is the host's
+  `app.storage` is app storage (the document store; `app.sharedStorage` is
+  the deprecated legacy shared store, unused here); `app.host` is the host's
   own UI.
 - **`node_modules/@civitai/components/custom-elements.json`** — every
   `<civitai-*>` element's tags, attributes, events and slots.
@@ -119,15 +120,16 @@ your own script under one of them, yours is what runs.
 - **A hung `app.host` call is usually a missing HOST handler, not your bug.** The host
   silently drops messages it cannot handle, so an unanswered request looks
   exactly like a broken component. Check the host side before rewriting yours.
-- **Shared storage has a REST path, and it is the one to prefer.** There are 11
-  routes under `/api/v1/blocks/shared-storage/` (append, counts, increment, item,
-  list, report, top, unvote, update, vote, withdraw) and the platform is
-  consolidating on them; the `app.sharedStorage` postMessage bridge still works,
-  so both are valid. Each route is a thin adapter over the same server function
-  the bridge message called, so a REST read cannot diverge from a bridge read.
-  They authenticate with the **block token** and re-verify it as a block JWT — so
-  an `auth: "oauth"` app cannot use them, and declaring any `apps:storage:*`
-  scope alongside `auth: "oauth"` is refused when you submit.
+- **Storage is the App Blocks document store.** This app keeps everything in four
+  collections declared in the manifest (`kv`, private; `records`, `generator_marks`
+  and `generator_media`, shared) through
+  `app.storage.collection(name)` (REST `/api/v1/blocks/storage/*`), with scopes
+  `apps:storage` and the consent-gated `apps:storage:publish`. The legacy
+  `/api/v1/blocks/app-storage/*` and `/api/v1/blocks/shared-storage/*` routes and
+  the `app.sharedStorage` bridge are deprecated — do not add calls to them. The
+  routes authenticate with the **block token**, so an `auth: "oauth"` app cannot
+  use them, and declaring any `apps:storage*` scope alongside `auth: "oauth"` is
+  refused. Guide: https://developer.civitai.com/apps/guide/storage.md
 - **Open the resource picker with NO base-model ecosystem by default.**
   `baseModelGroup` is a filter, so a hardcoded one hides every resource outside
   that family and the picker looks empty to the viewer. Pass it only when the
