@@ -227,7 +227,7 @@ describe('host route — pages (sections, builder, draft runner)', () => {
 
   it('a page opened AT mine lands on My generators', async () => {
     await setupWithDraft('mine');
-    await waitFor(() => expect(screen.getByTestId('tab-mine')).toHaveAttribute('aria-selected', 'true'));
+    await waitFor(() => expect(screen.getByTestId('tab-mine')).toHaveAttribute('current'));
   });
 
   it('switching sections pushes the section page, and ROUTE_CHANGED back returns', async () => {
@@ -235,11 +235,11 @@ describe('host route — pages (sections, builder, draft runner)', () => {
     await screen.findAllByTestId('published-card');
     await userEvent.click(screen.getByTestId('tab-mine'));
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('mine'));
-    await waitFor(() => expect(screen.getByTestId('tab-mine')).toHaveAttribute('aria-selected', 'true'));
+    await waitFor(() => expect(screen.getByTestId('tab-mine')).toHaveAttribute('current'));
     // The host echoes the shallow push, then native Back pops to the root.
     act(() => pushFromHost('ROUTE_CHANGED', { subPath: 'mine' }));
     act(() => pushFromHost('ROUTE_CHANGED', { subPath: '' }));
-    await waitFor(() => expect(screen.getByTestId('tab-discover')).toHaveAttribute('aria-selected', 'true'));
+    await waitFor(() => expect(screen.getByTestId('tab-discover')).toHaveAttribute('current'));
   });
 
   it('Create pushes the builder page; ROUTE_CHANGED to the root leaves the builder', async () => {

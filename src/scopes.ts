@@ -11,15 +11,19 @@ export const AI_WRITE_BUDGETED = 'ai:write:budgeted';
 export const BUZZ_READ_SELF = 'buzz:read:self';
 /**
  * The App Blocks document store: every read, the viewer's private `kv`
- * collection, deleting their own documents, votes and reports. CONSENT-EXEMPT —
- * the host mints it on the first token.
+ * collection, deleting their own documents, votes, downvote marks and counters
+ * (`generator_marks`) and reports. CONSENT-EXEMPT — the host mints it on the
+ * first token.
  */
 export const APPS_STORAGE = BLOCK_SCOPES.APPS_STORAGE;
 /**
- * Creating and editing documents in the shared `records` collection — publishing
- * a generator, or editing a published one. 🔴 CONSENT-GATED like
+ * Creating and editing documents in the shared `"own"` collections — `records`
+ * (publishing a generator, or editing a published one) and `generator_media`
+ * (a kept run's published-output record). 🔴 CONSENT-GATED like
  * `ai:write:budgeted`: the first token does NOT carry it, so every path that
- * publishes checks {@link hasPublishScope} and asks for it first.
+ * publishes checks {@link hasPublishScope} and asks for it first. The
+ * `generator_media` write is best-effort: attempted only when the token already
+ * carries the scope, never prompted for mid-keep.
  */
 export const APPS_STORAGE_PUBLISH = BLOCK_SCOPES.APPS_STORAGE_PUBLISH;
 /**

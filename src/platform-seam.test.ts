@@ -118,6 +118,8 @@ describe('the platform seam', () => {
       'platform/appStorage.ts',
       'platform/client.ts',
       'platform/docStore.ts',
+      'platform/generatorSocial.test.ts',
+      'platform/generatorSocial.ts',
       'platform/hooks.ts',
       'platform/sharedStorage.test.ts',
       'platform/sharedStorage.ts',

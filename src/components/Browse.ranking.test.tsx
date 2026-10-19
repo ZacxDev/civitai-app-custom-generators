@@ -201,10 +201,9 @@ function setupAnon(hasMore: boolean, rows?: SharedListItem[]) {
   return shared;
 }
 
-/** The sort renders as a radiogroup (measured on the live app), and its options
- *  carry no testid of their own — SegmentedControl gives an author no attribute
- *  hook on the option button. Select by accessible name. */
-const popular = () => screen.getByRole('radio', { name: 'Popular' });
+ /** The sort is ONE filter menu (the upstream civitai-menu): a single icon
+ *  button opening a dropdown whose items carry their own testids. */
+const popular = () => screen.getByTestId('sort-top');
 
 const NOTICE = 'discover-partial-notice';
 
@@ -280,7 +279,7 @@ describe('partial-ranking disclosure', () => {
     expect(screen.queryByTestId(NOTICE)).toBeNull();
 
     await userEvent.click(popular());
-    await waitFor(() => expect(popular()).toBeChecked());
+    await waitFor(() => expect(screen.getByTestId('discover-sort-button')).toHaveTextContent('Popular'));
     expect(screen.queryByTestId(NOTICE)).toBeNull();
 
     await userEvent.type(screen.getByTestId('discover-search'), 'Alpha');
@@ -677,7 +676,7 @@ describe('partial-ranking disclosure', () => {
       await screen.findByTestId('discover-list');
 
       await userEvent.click(popular());
-      await waitFor(() => expect(popular()).toBeChecked());
+      await waitFor(() => expect(screen.getByTestId('discover-sort-button')).toHaveTextContent('Popular'));
       expect(screen.queryByTestId(NOTICE)).toBeNull();
       expect(showMore()).toBe(`Show more (${DISCOVER_LIST_LIMIT - 1 - PAGE_SIZE})`);
     });
@@ -689,7 +688,7 @@ describe('partial-ranking disclosure', () => {
       // Popular is the arm that fires regardless of how far the viewer has
       // paged, so this isolates the flag from `allLoadedShown`.
       await userEvent.click(popular());
-      await waitFor(() => expect(popular()).toBeChecked());
+      await waitFor(() => expect(screen.getByTestId('discover-sort-button')).toHaveTextContent('Popular'));
       expect(screen.queryByTestId(NOTICE)).toBeNull();
       // …and the whole board really did load: every row is here, unscoped.
       expect(showMore()).toBe(`Show more (${DISCOVER_LIST_LIMIT - PAGE_SIZE})`);

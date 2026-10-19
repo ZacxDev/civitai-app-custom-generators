@@ -34,11 +34,24 @@ describe('block.manifest.json', () => {
    * while every test of the adapters stayed green. Pinned as the WHOLE object so
    * an added index or counter — which the copy would not populate — fails too.
    */
-  it('declares exactly the two document-store collections the data copy writes', () => {
+  it('declares exactly the two collections the data copy writes, and the two social collections', () => {
+    // `kv` and `records` are what the go-live copy writes (scripts/appdata-copy); the
+    // social pair is new in the document store and has no legacy data.
     expect(manifest.storage).toEqual({
       collections: {
         kv: { visibility: 'private' },
         records: { visibility: 'shared', write: 'own', marks: ['vote'] },
+        generator_marks: {
+          visibility: 'shared',
+          write: 'none',
+          marks: ['downvote'],
+          counters: ['anchor'],
+        },
+        generator_media: {
+          visibility: 'shared',
+          write: 'own',
+          indexes: { generatorKey: 'string' },
+        },
       },
     });
   });

@@ -69,6 +69,9 @@ export type {
   UseSharedStorage,
 } from './types.js';
 
+export { createGeneratorSocial } from './generatorSocial.js';
+export type { DownvoteState, GeneratorMediaDoc, GeneratorSocial } from './types.js';
+
 export { fetchGatedImages, IMAGE_IDS_BATCH_MAX } from './images.js';
 export { useGatedImages } from './useGatedImages.js';
 
