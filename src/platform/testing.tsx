@@ -449,16 +449,28 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
   };
 
   /**
-   * Who wrote a shared row, for the sub-listing author check: the viewer, someone
-   * else (-1), or nobody (`null`) — from the DOCUMENT STORE only.
+   * Who wrote a shared item, for the sub-listing author check: the viewer, someone
+   * else (-1), or nobody (`null`) — from the DOCUMENT STORE only, as civitai
+   * resolves it (civitai/civitai#6120 and #6296): every ITEM collection the
+   * manifest declares (shared, viewer-authored: `own`/`anyone`) is probed, a
+   * `write: "none"` one (`generator_marks`) never is, and a key found in two item
+   * collections names no item.
    */
+  const declared: Record<string, { visibility: string; write?: string }> =
+    blockManifest.storage?.collections ?? {};
+  const itemCollections = Object.entries(declared)
+    .filter(([, c]) => c.visibility === 'shared' && (c.write === 'own' || c.write === 'anyone'))
+    .map(([name]) => name);
   const itemAuthor = async (key: string): Promise<number | null> => {
     if (viewerId == null) return null;
-    const doc = await docStore
-      .as({ viewer: docViewer(viewerId), scopes: blockManifest.scopes })
-      .storage.collection(RECORDS_COLLECTION)
-      .get(key);
-    if (!doc) return null;
+    const reader = docStore.as({ viewer: docViewer(viewerId), scopes: blockManifest.scopes });
+    const found = [];
+    for (const name of itemCollections) {
+      const doc = await reader.storage.collection(name).get(key);
+      if (doc) found.push(doc);
+    }
+    if (found.length !== 1) return null;
+    const doc = found[0]!;
     return doc.author.kind === 'user' && doc.author.isViewer ? viewerId : -1;
   };
 

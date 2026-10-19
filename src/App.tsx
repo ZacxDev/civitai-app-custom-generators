@@ -251,7 +251,7 @@ export interface AppDeps {
  * is whole. 51 → 50 rendered, disclosed, and there really is a row it did not
  * show.
  *
- * ⚠️ SINCE THE DOCUMENT-STORE PORT (0.15.0) THE CURSOR IS EXACT — the store
+ * ⚠️ SINCE THE DOCUMENT-STORE PORT (0.16.0) THE CURSOR IS EXACT — the store
  * reads one row past the page and sends `nextCursor` only when it exists — so the
  * defect above cannot recur through it. The `+1` is kept anyway: it costs one row,
  * and it keeps this claim independent of whichever store answers.
@@ -726,7 +726,10 @@ export function App({ deps: depsOverride }: AppProps = {}) {
     // header image nor a cover, that first output becomes the generator's
     // card cover by default (owner-set header always wins — this only fills
     // an empty slot, once). Best-effort: a failure here never fails the keep.
-    try {
+    // 🔴 Its own function: its early `return`s end the cover step only. Inline,
+    // they returned from the whole handler and skipped the media record below on
+    // every keep except the one that set a cover.
+    const fillEmptyCover = async (): Promise<void> => {
       const key = run.generatorKey;
       const firstImageId = run.imageIds[0];
       if (!key || typeof firstImageId !== 'number' || !viewer) return;
@@ -758,6 +761,9 @@ export function App({ deps: depsOverride }: AppProps = {}) {
         row.version !== undefined ? { ifVersion: row.version } : undefined,
       );
       setShared((prev) => prev.map((s) => (s.key === key ? { ...s, value } : s)));
+    };
+    try {
+      await fillEmptyCover();
     } catch {
       /* best-effort — the keep itself already succeeded */
     }

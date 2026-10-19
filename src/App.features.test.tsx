@@ -311,6 +311,44 @@ describe('App — card covers (owner-set header, else first published output)', 
     });
   });
 
+  /**
+   * 🔴 THE MEDIA RECORD RUNS ON EVERY KEEP THAT CARRIES THE GRANT, not only on the
+   * keep that fills a cover. The cover step used to `return` out of the whole
+   * handler, so a visitor's keep and an owner's keep of an already-covered
+   * generator recorded nothing.
+   */
+  const keepWithSocial = async (seed: SharedListItem, imageId: number) => {
+    const recordPublishedMedia = vi.fn(async (_key: string, _ids: number[]) => {});
+    const social = {
+      getDownvotes: async () => ({}),
+      setDownvote: async () => ({ count: 0 }),
+      getPublishedMedia: async () => ({}),
+      recordPublishedMedia,
+    };
+    setup([seed], { getImages: gated, keepOutputs: async () => [imageId], social });
+    await userEvent.click(await within(await screen.findByTestId('published-card')).findByTestId('published-open'));
+    await screen.findByTestId('runner');
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a lighthouse');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+    await screen.findByTestId('queue-results');
+    await userEvent.click(screen.getByTestId('result-keep'));
+    await screen.findByTestId('result-kept');
+    return recordPublishedMedia;
+  };
+
+  it("a visitor's keep records its published outputs against the generator", async () => {
+    const record = await keepWithSocial(publishedSeed('shared:theirs', 'Theirs', 7), 561);
+    await waitFor(() => expect(record).toHaveBeenCalledWith('shared:theirs', [561]));
+  });
+
+  it("an owner's keep of an already-covered generator still records its outputs", async () => {
+    const seed = publishedSeed('shared:mine', 'Mine', VIEWER_ID);
+    (seed.value.data as { coverImageId?: number }).coverImageId = 4242;
+    const record = await keepWithSocial(seed, 562);
+    await waitFor(() => expect(record).toHaveBeenCalledWith('shared:mine', [562]));
+  });
+
   it("a visitor's keep never writes a cover onto someone else's generator", async () => {
     const { shared } = setup([publishedSeed('shared:theirs', 'Theirs', 7)], {
       getImages: gated,

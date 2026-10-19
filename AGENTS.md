@@ -120,8 +120,9 @@ your own script under one of them, yours is what runs.
 - **A hung `app.host` call is usually a missing HOST handler, not your bug.** The host
   silently drops messages it cannot handle, so an unanswered request looks
   exactly like a broken component. Check the host side before rewriting yours.
-- **Storage is the App Blocks document store.** This app keeps everything in two
-  collections declared in the manifest (`kv`, private; `records`, shared) through
+- **Storage is the App Blocks document store.** This app keeps everything in four
+  collections declared in the manifest (`kv`, private; `records`, `generator_marks`
+  and `generator_media`, shared) through
   `app.storage.collection(name)` (REST `/api/v1/blocks/storage/*`), with scopes
   `apps:storage` and the consent-gated `apps:storage:publish`. The legacy
   `/api/v1/blocks/app-storage/*` and `/api/v1/blocks/shared-storage/*` routes and

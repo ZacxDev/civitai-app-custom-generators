@@ -5,12 +5,14 @@
 // production shared document the server withdraws that author's card itself, so
 // calling it from here would only spend one of the author's store writes.
 //
-// 🔴 THIS VERSION REQUIRES civitai/civitai#6120 DEPLOYED FIRST. That server change
+// 🔴 THIS VERSION REQUIRES civitai/civitai#6120 AND #6296 DEPLOYED FIRST. #6120
 // resolves an upsert's `itemKey` from the document store (an app whose approved
-// manifest declares a shared collection is resolved from the document store
+// manifest declares an item collection is resolved from the document store
 // ONLY), withdraws the card on an author's delete, and hides it on a moderator
 // hide or delete. Before it, every generator published here would be refused
-// `item_not_found` and a deleted generator's card would outlive it.
+// `item_not_found` and a deleted generator's card would outlive it. #6296 keeps
+// `write: "none"` collections out of that lookup; before it, a downvoted
+// generator (a `generator_marks` document under its key) is refused the same way.
 //
 // A parent app may place individual items it contains — here, one published
 // generator — into the `/apps` store as their own cards, badged "in Custom

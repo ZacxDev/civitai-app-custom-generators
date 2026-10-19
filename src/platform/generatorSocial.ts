@@ -1,11 +1,11 @@
-// Generator social signals on the DOCUMENT STORE — the app's first
-// document-store adoption, deliberately bounded to two new collections
-// declared in block.manifest.json (`storage.collections`):
+// Generator social signals on the DOCUMENT STORE, in two collections declared
+// in block.manifest.json (`storage.collections`) beside `kv` and `records`:
 //
 //   - `generator_marks` (shared, write "none", marks ["downvote"],
 //     counters ["anchor"]): per-viewer DOWNVOTES on a published generator,
-//     keyed by the generator's legacy shared-storage key. The legacy store's
-//     vote is up-only (`vote`/`unvote`), so downvotes live here as a mark —
+//     keyed by the generator's `records` key. The `records` upvote is the
+//     `vote` mark on the generator's own document, which only up-counts, so
+//     downvotes live here as a mark —
 //     one per viewer per generator, with the count and the viewer's own
 //     state read back on every document. A mark needs an existing document;
 //     in a write-"none" collection the first INCREMENT creates one, so the
@@ -15,9 +15,14 @@
 //     one document per KEPT RUN, written by the viewer who kept it, naming
 //     the generator and the published Image ids the keep produced. Browse
 //     reads these back per generator so a card can show real published
-//     output — the legacy board alone cannot know this: kept runs are
-//     per-viewer private storage, and only the generator's author can
-//     update the generator's own row.
+//     output — the board alone cannot know this: kept runs are per-viewer
+//     private storage, and only the generator's author can update the
+//     generator's own document.
+//
+// 🔴 `generator_marks` documents share their key with a `records` document.
+// civitai resolves an App Store item key across ITEM collections only
+// (civitai/civitai#6296); without that, every downvoted generator's key would
+// be ambiguous and its store card refused.
 //
 // Both collections exist only once a manifest declaring them is APPROVED
 // (the server reads the approved manifest), so before that every call is

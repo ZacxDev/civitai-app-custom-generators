@@ -114,6 +114,37 @@ describe('publish → store upsert', () => {
     expect(await screen.findByTestId('builder-store-notice')).toHaveTextContent(/moderator/i);
   });
 
+  /**
+   * 🔴 A DOWNVOTED GENERATOR STAYS LISTABLE. A downvote keeps a `generator_marks`
+   * document under the generator's own `records` key. civitai resolves an upsert's
+   * `itemKey` across the app's ITEM collections only (civitai/civitai#6296): the
+   * write-"none" marks collection is not one, so the key still names one item.
+   * Before #6296 the key was found in two shared collections, read as no item, and
+   * every downvoted generator's upsert was refused `item_not_found`.
+   */
+  it('a downvoted generator still upserts: the marks document does not make its key ambiguous', async () => {
+    const fake = renderApp();
+    await buildGenerator('Downvoted', 'Desc.');
+    await userEvent.click(screen.getByTestId('publish'));
+    await waitFor(() => expect(storeCalls(fake, 'upsert').length).toBe(1));
+    const key = (storeCalls(fake, 'upsert')[0]!.body as { itemKey: string }).itemKey;
+    // Another viewer downvotes it, as generatorSocial does: increment creates the
+    // document in the write-"none" collection, then the mark.
+    const voter = fake.docStore
+      .as({ viewer: { username: 'voter', id: ME + 1 }, scopes: DEFAULT_SCOPES })
+      .storage.collection('generator_marks');
+    await voter.increment(key, 'anchor', 1);
+    await voter.mark(key, 'downvote');
+
+    const name = screen.getByTestId('gen-name');
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Downvoted, edited');
+    await userEvent.click(screen.getByTestId('publish'));
+    await waitFor(() => expect(storeCalls(fake, 'upsert').length).toBe(2));
+    expect(fake.subListings().get(key)!.title).toBe('Downvoted, edited');
+    expect(await screen.findByTestId('builder-store-notice')).toHaveTextContent(/moderator/i);
+  });
+
   it('an edit + republish upserts the SAME item key with the new title', async () => {
     const fake = renderApp();
     await buildGenerator('First Name', 'Desc.');
