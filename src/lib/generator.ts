@@ -32,6 +32,21 @@ export const DEFAULT_PROMPT_PLACEHOLDER = 'Describe what you want…';
 /** Max LoRAs the server accepts in `additionalResources` (mirrors the Zod gate). */
 export const MAX_LORAS = 5;
 
+/**
+ * The longest published `title` and `body`, in characters (code points, as the
+ * store counts them). They are the `records` collection schema's bounds in
+ * `block.manifest.json`, which are the legacy shared store's — so every row the
+ * go-live copy carried fits — and the store refuses a longer write with
+ * `schema_violation`. `validateGenerator` checks them before Publish so the
+ * viewer is told what to shorten. `src/platform/storageSchemas.test.ts` pins the two to
+ * the manifest.
+ */
+export const PUBLISH_TITLE_MAX = 200;
+export const PUBLISH_BODY_MAX = 4096;
+
+/** Length in code points (a surrogate pair is one), as the store's schemas count. */
+const codePoints = (s: string): number => Array.from(s).length;
+
 /** Default weight clamp when a picked LoRA carries no recommended range. */
 export const DEFAULT_MIN_WEIGHT = -1;
 export const DEFAULT_MAX_WEIGHT = 2;
@@ -659,6 +674,18 @@ export function validateGenerator(config: GeneratorConfig): string[] {
       errs.push(`Button ${n} needs a prompt template (add {prompt} for a runtime prompt box).`);
     }
   });
+  // The published text, exactly as `buildPublishPayload` will send it.
+  const { title, body } = collectVisibleText(config);
+  const titleLength = codePoints(title);
+  if (titleLength > PUBLISH_TITLE_MAX) {
+    errs.push(`Shorten the name to ${PUBLISH_TITLE_MAX} characters or fewer (it has ${titleLength}).`);
+  }
+  const bodyLength = codePoints(body);
+  if (bodyLength > PUBLISH_BODY_MAX) {
+    errs.push(
+      `The description, prompt hint, button labels and prompt templates are ${bodyLength} characters together; shorten them to ${PUBLISH_BODY_MAX} or fewer to publish.`,
+    );
+  }
   return errs;
 }
 
