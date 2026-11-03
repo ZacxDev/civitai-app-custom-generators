@@ -4,11 +4,30 @@ import { describe, expect, it } from 'vitest';
 
 import { BLOCK_SCOPES, BlockManifestError } from '@civitai/app-sdk/blocks';
 
-import { manifest, manifestBuzzBudgetPerGen, validateManifest } from './manifest.js';
+import { manifest, manifestBuzzBudgetPerGen, validateManifest, withoutCollectionSchemas } from './manifest.js';
 
 describe('block.manifest.json', () => {
-  it('validates against the SDK defineBlock gate, as committed', () => {
-    expect(() => validateManifest()).not.toThrow();
+  it('validates against the SDK defineBlock gate, as committed less its collection schemas', () => {
+    expect(() => validateManifest(withoutCollectionSchemas())).not.toThrow();
+  });
+
+  /**
+   * TRIPWIRE (not a regression test): the installed `@civitai/app-sdk` predates
+   * collection schemas (civitai/civitai#7491), so its gate refuses the committed
+   * manifest — which is the only reason the case above strips them. When an SDK
+   * bump makes THIS case fail, the gate reads schemas: delete
+   * `withoutCollectionSchemas` and validate the manifest as committed again.
+   * Pinned to the field, so a refusal of anything else cannot hold it green.
+   */
+  it('TRIPWIRE: the installed SDK gate still refuses collection schemas', () => {
+    let caught: unknown;
+    try {
+      validateManifest();
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(BlockManifestError);
+    expect((caught as BlockManifestError).field).toBe('storage.collections.kv.schema');
   });
 
   it('declares exactly the six scopes the app uses', () => {
@@ -33,11 +52,13 @@ describe('block.manifest.json', () => {
    * every viewer's drafts, kept images and published generators would vanish
    * while every test of the adapters stayed green. Pinned as the WHOLE object so
    * an added index or counter — which the copy would not populate — fails too.
+   * The per-collection `schema`s are left out here and pinned by
+   * `src/storageSchemas.test.ts`: a schema refuses writes, it moves no key space.
    */
   it('declares exactly the two collections the data copy writes, and the two social collections', () => {
     // `kv` and `records` are what the go-live copy writes (scripts/appdata-copy); the
     // social pair is new in the document store and has no legacy data.
-    expect(manifest.storage).toEqual({
+    expect(withoutCollectionSchemas().storage).toEqual({
       collections: {
         kv: { visibility: 'private' },
         records: { visibility: 'shared', write: 'own', marks: ['vote'] },
