@@ -53,7 +53,7 @@ describe('block.manifest.json', () => {
    * while every test of the adapters stayed green. Pinned as the WHOLE object so
    * an added index or counter — which the copy would not populate — fails too.
    * The per-collection `schema`s are left out here and pinned by
-   * `src/storageSchemas.test.ts`: a schema refuses writes, it moves no key space.
+   * `src/platform/storageSchemas.test.ts`: a schema refuses writes, it moves no key space.
    */
   it('declares exactly the two collections the data copy writes, and the two social collections', () => {
     // `kv` and `records` are what the go-live copy writes (scripts/appdata-copy); the

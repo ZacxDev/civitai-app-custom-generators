@@ -26,7 +26,7 @@ import { DEFAULT_RATE_LIMIT_RETRY, KV_COLLECTION, type RateLimitRetryPolicy } fr
 const ALICE = { username: 'alice', id: 99 };
 
 /**
- * The `kv` schema (`src/storageSchemas.test.ts`) admits only an object `value`, and
+ * The `kv` schema (`src/platform/storageSchemas.test.ts`) admits only an object `value`, and
  * the SDK fake will enforce it once it reads schemas. The cases about documents the
  * schema refuses — a non-object value, data without `value` (both possible only for
  * a document written before the schema shipped) — run without it, on `schemaless`.

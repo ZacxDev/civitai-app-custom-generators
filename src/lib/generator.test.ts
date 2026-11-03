@@ -412,7 +412,7 @@ describe('validateGenerator', () => {
    * with `schema_violation`. Publish is gated here so the viewer reads which text to
    * shorten instead of a refused write. Characters are CODE POINTS, as the store
    * counts them: 200 emoji are 400 UTF-16 units and still fit.
-   * `src/storageSchemas.test.ts` pins these numbers to the manifest.
+   * `src/platform/storageSchemas.test.ts` pins these numbers to the manifest.
    */
   it('accepts a 200-character name (in code points) and refuses 201', () => {
     const at = (name: string) => validateGenerator(newGenerator({ name, buttons: [buttonWith({})] }));

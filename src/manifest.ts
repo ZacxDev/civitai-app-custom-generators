@@ -43,7 +43,7 @@ export function validateManifest(source: Record<string, unknown> = manifest): Bl
  * `@civitai/app-sdk` this repo builds against vendors the schema from before it,
  * so `defineBlock` refuses the committed manifest at `storage.collections.kv.schema`
  * ("not a known property here"). Every other key still goes through the gate.
- * The schemas themselves are checked by `src/storageSchemas.test.ts`, and at submit
+ * The schemas themselves are checked by `src/platform/storageSchemas.test.ts`, and at submit
  * by civitai. `src/manifest.test.ts` asserts the installed gate STILL refuses them:
  * when an SDK bump makes that case fail, delete this function and validate the
  * manifest as committed again.

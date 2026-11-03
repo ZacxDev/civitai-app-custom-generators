@@ -27,9 +27,9 @@ import type { ValidateFunction } from 'ajv';
 
 import { createFakeStorage } from '@civitai/sdk/testing';
 
-import manifest from '../block.manifest.json';
-import { listDrafts, saveDraft, type StoredDraft } from './lib/drafts.js';
-import { EXAMPLE_GENERATORS } from './lib/examples.js';
+import manifest from '../../block.manifest.json';
+import { listDrafts, saveDraft, type StoredDraft } from '../lib/drafts.js';
+import { EXAMPLE_GENERATORS } from '../lib/examples.js';
 import {
   buildPublishPayload,
   cloneConfigForFork,
@@ -38,21 +38,21 @@ import {
   newGenerator,
   parsePublishedGenerator,
   validateGenerator,
-} from './lib/generator.js';
-import { removeKeptImages, saveKeptRun, type KeptRun } from './lib/runs.js';
-import { backfillLedgerIn } from './lib/storeListing.js';
-import { createAppStorage } from './platform/appStorage.js';
-import { KV_COLLECTION, RECORDS_COLLECTION } from './platform/docStore.js';
-import { createGeneratorSocial, MEDIA_COLLECTION, MEDIA_IDS_PER_RUN } from './platform/generatorSocial.js';
-import { createSharedStorage } from './platform/sharedStorage.js';
-import type { SharedAppendValue } from './platform/types.js';
-import type { GeneratorConfig } from './types.js';
+} from '../lib/generator.js';
+import { removeKeptImages, saveKeptRun, type KeptRun } from '../lib/runs.js';
+import { backfillLedgerIn } from '../lib/storeListing.js';
+import { createAppStorage } from './appStorage.js';
+import { KV_COLLECTION, RECORDS_COLLECTION } from './docStore.js';
+import { createGeneratorSocial, MEDIA_COLLECTION, MEDIA_IDS_PER_RUN } from './generatorSocial.js';
+import { createSharedStorage } from './sharedStorage.js';
+import type { SharedAppendValue } from './types.js';
+import type { GeneratorConfig } from '../types.js';
 
 // `recordPublishedMedia` reaches the store through the initialised client; the
 // media case below hands it a collection that records the create body.
 const hoisted = vi.hoisted(() => ({ client: null as unknown }));
-vi.mock('./platform/client.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./platform/client.js')>()),
+vi.mock('./client.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./client.js')>()),
   getClient: async () => hoisted.client,
 }));
 
