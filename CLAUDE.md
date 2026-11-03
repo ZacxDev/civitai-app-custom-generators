@@ -36,7 +36,10 @@ invariants — read [`README.md`](./README.md) before touching any of them:
 - **The storage mapping is a contract with the go-live data copy.** `kv` documents
   are `{ value }` under the legacy key; `records` documents are the legacy
   `{ title, body, data }` under the legacy ULID. Never rename a collection, change
-  its visibility, or change either shape without a matching copy change.
+  its visibility, or change either shape without a matching copy change. The
+  manifest's per-collection `schema`s must accept every write the app makes and
+  every document the copy wrote (`src/platform/storageSchemas.test.ts`); a new or changed
+  field needs a schema change in the same PR.
 - **Every shared create/edit checks `apps:storage:publish` first** (consent-gated;
   `App.tsx` → `ensurePublishGrant`). A new path that writes to `records` must too.
 - **Upload purpose.** `useImageUpload()` = moderated cosmetic background;

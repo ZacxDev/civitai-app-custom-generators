@@ -15,6 +15,7 @@ import { StorageError, type DocumentStorage } from '@civitai/sdk';
 import { createFakeStorage } from '@civitai/sdk/testing';
 
 import manifest from '../../block.manifest.json';
+import { withoutCollectionSchemas } from '../manifest.js';
 import { listDrafts, saveDraft, type StoredDraft } from '../lib/drafts.js';
 import { newGenerator } from '../lib/generator.js';
 import { listKeptRuns, saveKeptRun, type KeptRun } from '../lib/runs.js';
@@ -24,8 +25,14 @@ import { DEFAULT_RATE_LIMIT_RETRY, KV_COLLECTION, type RateLimitRetryPolicy } fr
 
 const ALICE = { username: 'alice', id: 99 };
 
-function setup() {
-  const fake = createFakeStorage({ manifest, viewer: ALICE });
+/**
+ * The `kv` schema (`src/platform/storageSchemas.test.ts`) admits only an object `value`, and
+ * the SDK fake will enforce it once it reads schemas. The cases about documents the
+ * schema refuses — a non-object value, data without `value` (both possible only for
+ * a document written before the schema shipped) — run without it, on `schemaless`.
+ */
+function setup({ schemaless = false } = {}) {
+  const fake = createFakeStorage({ manifest: schemaless ? (withoutCollectionSchemas() as typeof manifest) : manifest, viewer: ALICE });
   const kv = createAppStorage(() => fake.storage);
   /** The raw collection — the copy's view of the store, bypassing the adapter. */
   const raw = fake.storage.collection<Record<string, unknown>>(KV_COLLECTION);
@@ -62,7 +69,7 @@ describe('kv: the {value} wrapper, written', () => {
   });
 
   it('wraps a value that is not an object too (a document must be one)', async () => {
-    const { kv, raw } = setup();
+    const { kv, raw } = setup({ schemaless: true });
     await kv.set('x:null', null);
     await kv.set('x:arr', [1, 2]);
     await kv.set('x:bool', true);
@@ -112,7 +119,7 @@ describe('kv: reads what the go-live copy writes', () => {
   });
 
   it('a copied row whose data lacks `value` reads as missing, not as undefined', async () => {
-    const { kv, raw } = setup();
+    const { kv, raw } = setup({ schemaless: true });
     await raw.put('draft:odd', { other: 1 });
     expect(await kv.get('draft:odd')).toBeNull();
   });
@@ -121,14 +128,14 @@ describe('kv: reads what the go-live copy writes', () => {
 describe('kv: list', () => {
   it('carries each value on the page, in key order, newest-first on request', async () => {
     const { kv } = setup();
-    await kv.set('kept:a', 1);
-    await kv.set('kept:c', 3);
-    await kv.set('kept:b', 2);
-    await kv.set('draft:z', 'other prefix');
+    await kv.set('kept:a', { n: 1 });
+    await kv.set('kept:c', { n: 3 });
+    await kv.set('kept:b', { n: 2 });
+    await kv.set('draft:z', { n: 'other prefix' });
     expect((await kv.list({ prefix: 'kept:' })).keys).toEqual([
-      { key: 'kept:a', value: 1 },
-      { key: 'kept:b', value: 2 },
-      { key: 'kept:c', value: 3 },
+      { key: 'kept:a', value: { n: 1 } },
+      { key: 'kept:b', value: { n: 2 } },
+      { key: 'kept:c', value: { n: 3 } },
     ]);
     expect((await kv.list({ prefix: 'kept:', newestFirst: true })).keys.map((k) => k.key)).toEqual([
       'kept:c',
@@ -139,8 +146,8 @@ describe('kv: list', () => {
 
   it('passes the cursor through exactly when another key exists', async () => {
     const { kv } = setup();
-    await kv.set('kept:a', 1);
-    await kv.set('kept:b', 2);
+    await kv.set('kept:a', { n: 1 });
+    await kv.set('kept:b', { n: 2 });
     const first = await kv.list({ prefix: 'kept:', limit: 1 });
     expect(first.nextCursor).toEqual(expect.any(String));
     const second = await kv.list({ prefix: 'kept:', limit: 1, cursor: first.nextCursor });
@@ -151,7 +158,7 @@ describe('kv: list', () => {
   /** The store REFUSES a limit above 100; the adapter clamps rather than fail the read. */
   it('clamps a limit above the store ceiling instead of sending it', async () => {
     const { fake, kv } = setup();
-    await kv.set('kept:a', 1);
+    await kv.set('kept:a', { n: 1 });
     await expect(kv.list({ prefix: 'kept:', limit: 500 })).resolves.toMatchObject({ keys: [{ key: 'kept:a' }] });
     const listCall = fake.calls.filter((c) => c.method === 'GET' && c.path.endsWith('/kv')).at(-1);
     expect(listCall?.query.limit).toBe('100');

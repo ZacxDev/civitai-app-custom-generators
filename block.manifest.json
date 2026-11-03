@@ -1,7 +1,7 @@
 {
   "$schema": "https://civitai.com/schemas/app-block/v1.json",
   "blockId": "custom-generators",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "name": "Custom Generators",
   "tagline": "Build the button. Share the button.",
   "description": "Custom Generators turns a set of generation settings into buttons anyone can press.\n\nBuild one in the builder: give it a name, a cover image, and as many buttons as you like. Each button is a saved preset — a checkpoint, up to five weighted LoRAs, a prompt template, and optional params like steps, CFG, size and quantity. Put `{prompt}` anywhere in a template and a prompt box appears for whoever runs it; set a button to Image → Image and they get a source-image upload too. A live preview sits beside the editor, so you see exactly what runners will see.\n\nSave it as a draft, or publish it and it lands in Discover for everyone, and goes to the Civitai App Store as its own card once a moderator approves it. Browse what other people have built: search, sort by newest or popular, upvote or downvote, copy a share link, or hit Make a copy to fork someone's generator into your own editable draft. Anything you publish, you can withdraw again.\n\nEvery button tells you what it is before you press it — the checkpoint it uses, how many LoRAs, the output size, roughly what it costs, and whether it needs a prompt or an image from you.\n\nWhen a generation finishes, tap a result to see it full size alongside the recipe that made it. Press Keep and it is saved to My gallery, where your images stay — with the generator that made each one, and a one-tap way back to make another.\n\nFrom My gallery you can also post what you made: select up to twenty kept images, add an optional title, description and tags, and publish them as one Post on your own Civitai profile. Civitai shows you exactly what it is about to post first. Posting moves those images to your profile, so they leave My gallery here.\n\nRunning a generator spends your Buzz, and it always asks first. Press a button and you get a cost estimate for that exact generation, then a Confirm step before a single Buzz leaves your balance. If the estimate is more than you have, Confirm is blocked and you are offered a top-up instead of a failed generation.",
@@ -28,14 +28,321 @@
   "storage": {
     "collections": {
       "kv": {
-        "visibility": "private"
+        "visibility": "private",
+        "schema": {
+          "description": "The {value} envelope every kv document has (platform/appStorage.ts, and the go-live copy). value is a draft (draft:<id>), a kept run (kept:<id>) or the App Store backfill ledger (store-backfill:v1). The subset has no conditional keywords, so each family's fields are typed wherever they appear.",
+          "type": "object",
+          "required": [
+            "value"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "value": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "config": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "buttons": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "workflowType": {
+                            "enum": [
+                              "txt2img",
+                              "img2img"
+                            ]
+                          },
+                          "checkpoint": {
+                            "type": "object",
+                            "properties": {
+                              "versionId": {
+                                "type": "integer"
+                              },
+                              "modelId": {
+                                "type": "integer"
+                              }
+                            }
+                          },
+                          "loras": {
+                            "type": "array",
+                            "maxItems": 5,
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "versionId": {
+                                  "type": "integer"
+                                },
+                                "weight": {
+                                  "type": "number"
+                                }
+                              }
+                            }
+                          },
+                          "promptTemplate": {
+                            "type": "string"
+                          },
+                          "params": {
+                            "type": "object",
+                            "properties": {
+                              "negativePrompt": {
+                                "type": "string"
+                              },
+                              "cfgScale": {
+                                "type": "number"
+                              },
+                              "steps": {
+                                "type": "number"
+                              },
+                              "sampler": {
+                                "type": "string"
+                              },
+                              "width": {
+                                "type": "number"
+                              },
+                              "height": {
+                                "type": "number"
+                              },
+                              "seed": {
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              },
+                              "quantity": {
+                                "type": "number"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "updatedAt": {
+                  "type": "number"
+                },
+                "publishedKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9._:-]+$"
+                },
+                "keptAt": {
+                  "type": "number"
+                },
+                "imageIds": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "generatorName": {
+                  "type": "string"
+                },
+                "generatorKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9._:-]+$"
+                },
+                "buttonLabel": {
+                  "type": "string"
+                },
+                "prompt": {
+                  "type": "string"
+                },
+                "v": {
+                  "const": 1
+                },
+                "lastRunAt": {
+                  "type": "number"
+                },
+                "refused": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
       },
       "records": {
         "visibility": "shared",
         "write": "own",
         "marks": [
           "vote"
-        ]
+        ],
+        "schema": {
+          "description": "A published generator: the moderated text in title and body, within the legacy shared store's bounds (200 and 4096), and the generator config in data (lib/generator.ts buildPublishPayload).",
+          "type": "object",
+          "required": [
+            "title"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "body": {
+              "type": "string",
+              "maxLength": 4096
+            },
+            "data": {
+              "type": "object",
+              "required": [
+                "v",
+                "buttons"
+              ],
+              "properties": {
+                "v": {
+                  "const": 1
+                },
+                "workflowVersion": {
+                  "type": "string"
+                },
+                "buttons": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "label": {
+                        "type": "string"
+                      },
+                      "workflowType": {
+                        "enum": [
+                          "txt2img",
+                          "img2img"
+                        ]
+                      },
+                      "checkpoint": {
+                        "type": "object",
+                        "properties": {
+                          "versionId": {
+                            "type": "integer"
+                          },
+                          "modelId": {
+                            "type": "integer"
+                          }
+                        }
+                      },
+                      "loras": {
+                        "type": "array",
+                        "maxItems": 5,
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "versionId": {
+                              "type": "integer"
+                            },
+                            "weight": {
+                              "type": "number"
+                            }
+                          }
+                        }
+                      },
+                      "promptTemplate": {
+                        "type": "string"
+                      },
+                      "params": {
+                        "type": "object",
+                        "properties": {
+                          "negativePrompt": {
+                            "type": "string"
+                          },
+                          "cfgScale": {
+                            "type": "number"
+                          },
+                          "steps": {
+                            "type": "number"
+                          },
+                          "sampler": {
+                            "type": "string"
+                          },
+                          "width": {
+                            "type": "number"
+                          },
+                          "height": {
+                            "type": "number"
+                          },
+                          "seed": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "quantity": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "headerImageRef": {
+                  "type": "object",
+                  "properties": {
+                    "imageId": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "url": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "backgroundImageRef": {
+                  "type": "object",
+                  "properties": {
+                    "imageId": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "url": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "coverImageId": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "promptPlaceholder": {
+                  "type": "string"
+                },
+                "storeImageId": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        }
       },
       "generator_marks": {
         "visibility": "shared",
@@ -46,7 +353,33 @@
       "generator_media": {
         "visibility": "shared",
         "write": "own",
-        "indexes": { "generatorKey": "string" }
+        "indexes": { "generatorKey": "string" },
+        "schema": {
+          "description": "One kept run's published Image ids, against the records key of the generator that made them (platform/generatorSocial.ts recordPublishedMedia).",
+          "type": "object",
+          "required": [
+            "generatorKey",
+            "imageIds"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "generatorKey": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]+$"
+            },
+            "imageIds": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 4,
+              "items": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
       }
     }
   },

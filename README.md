@@ -116,7 +116,7 @@ This app emits **no analytics or funnel telemetry**. It used to carry an
 console.debug(...)` — inert in production, consumed by nothing. All of it is
 deleted. A caught render error is recovered on screen and reported nowhere.
 
-## Storage (0.16.0: the App Blocks document store)
+## Storage (0.16.0: the App Blocks document store; schemas since 0.17.0)
 
 Everything this app stores lives in four collections of the document store
 (`@civitai/sdk` 0.14 `app.storage.collection(name)`, REST `/api/v1/blocks/storage/*`),
@@ -137,6 +137,18 @@ writes existing viewers' rows into those two collections in exactly this shape (
 social pair is new and has no legacy data). `src/manifest.test.ts`
 pins the declaration whole; `src/platform/appStorage.test.ts` and
 `src/platform/sharedStorage.test.ts` read documents seeded in the copy's shape.
+
+- **Documents have schemas (0.17.0).** `kv`, `records` and `generator_media` each
+  declare a `schema` in the manifest, and the store refuses a create or put that
+  does not match it with `schema_violation`, for this app and for any app reaching
+  this data through a storage import. `kv` pins the `{ value }` envelope and types
+  each key family's fields; `records` bounds `title` to 200 and `body` to 4096
+  characters (the legacy shared store's bounds, which Publish now checks first) and
+  types the generator config; `generator_media` is exactly `{ generatorKey,
+  imageIds }`. Nothing a current write or an old row's re-save omits is required.
+  `src/platform/storageSchemas.test.ts` drives every write path against them. A change to
+  what the app writes needs a matching schema change, and the schema must still
+  accept what the copy wrote.
 
 - **Votes and reports are marks.** The tally is `marks.vote`, "did I vote" is
   `viewer.marks`; a report is the built-in `report` mark (permanent, does not hide).

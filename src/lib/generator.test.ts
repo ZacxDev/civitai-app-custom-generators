@@ -404,6 +404,35 @@ describe('validateGenerator', () => {
     );
     expect(errs).toEqual([]);
   });
+
+  /**
+   * 🔴 THE PUBLISH TEXT BOUNDS ARE THE `records` SCHEMA'S, CHECKED BEFORE THE WRITE.
+   * The schema caps `title` at 200 and `body` at 4096 characters (the legacy shared
+   * store's bounds, so every copied row fits), and the store refuses a longer one
+   * with `schema_violation`. Publish is gated here so the viewer reads which text to
+   * shorten instead of a refused write. Characters are CODE POINTS, as the store
+   * counts them: 200 emoji are 400 UTF-16 units and still fit.
+   * `src/platform/storageSchemas.test.ts` pins these numbers to the manifest.
+   */
+  it('accepts a 200-character name (in code points) and refuses 201', () => {
+    const at = (name: string) => validateGenerator(newGenerator({ name, buttons: [buttonWith({})] }));
+    expect(at('🎨'.repeat(200))).toEqual([]);
+    expect(at('a'.repeat(200))).toEqual([]);
+    expect(at('a'.repeat(201))).toEqual(['Shorten the name to 200 characters or fewer (it has 201).']);
+    // The title is the TRIMMED name, so surrounding spaces do not count.
+    expect(at(` ${'a'.repeat(200)} `)).toEqual([]);
+  });
+
+  it('refuses a generator whose published text (description, hint, buttons) passes 4096 characters', () => {
+    const config = (description: string) =>
+      newGenerator({ name: 'X', description, buttons: [buttonWith({ label: 'Go', promptTemplate: 'p' })] });
+    // body = `${description}\nButtons:\n• Go: p` — 17 characters after the description.
+    expect(collectVisibleText(config('d'.repeat(4079))).body).toHaveLength(4096);
+    expect(validateGenerator(config('d'.repeat(4079)))).toEqual([]);
+    expect(validateGenerator(config('d'.repeat(4080)))).toEqual([
+      'The description, prompt hint, button labels and prompt templates are 4097 characters together; shorten them to 4096 or fewer to publish.',
+    ]);
+  });
 });
 
 describe('inferred runtime inputs (replaces exposedInputs)', () => {
