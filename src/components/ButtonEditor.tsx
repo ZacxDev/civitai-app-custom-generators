@@ -374,6 +374,18 @@ function PromptTemplateEditor({
     }
   }
 
+  // 🔴 ONE TEXT LAYOUT FOR BOTH BOXES. The textarea is transparent: the caret is
+  // laid out by IT, the glyphs the viewer reads by the overlay, so they line up
+  // only while both wrap at the same width (feedback #180). Every text-layout property
+  // lives here, and nothing on either element below may override one.
+  //  - `scrollbarGutter: 'stable'` — the textarea scrolls once a template outgrows
+  //    its rows and the overlay never does. Without a gutter BOTH always reserve,
+  //    the textarea's scrollbar narrowed only its own content box (367 vs 382px
+  //    measured in Brave) and the two wrapped differently: the caret at the end of
+  //    a long template sat ~130px from the last visible glyph. Overlay scrollbars
+  //    (macOS) reserve nothing on either box, which is also equal.
+  //  - `overflowWrap` — the UA stylesheet gives a textarea `break-word` and a div
+  //    `normal`; stated so neither box inherits a different default.
   const boxText: CSSProperties = {
     margin: 0,
     padding: '8px 10px',
@@ -381,9 +393,13 @@ function PromptTemplateEditor({
     fontSize: 14,
     lineHeight: '20px',
     fontFamily: 'inherit',
+    fontWeight: 'inherit',
+    letterSpacing: 'normal',
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
+    overflowWrap: 'break-word',
     boxSizing: 'border-box',
+    scrollbarGutter: 'stable',
   };
 
   return (
@@ -464,7 +480,10 @@ function renderHighlighted(text: string): ReactNode {
             background: accentWash(28),
             color: 'inherit',
             borderRadius: 4,
-            padding: '0 1px',
+            // NO horizontal padding/margin/border: in the overlay any of them
+            // pushes every later glyph right of where the textarea puts the caret
+            // (feedback #180). The 1px breathing room is painted, not laid out.
+            boxShadow: `0 0 0 1px ${accentWash(28)}`,
           }}
         >
           {PROMPT_TOKEN}

@@ -117,6 +117,27 @@ describe('App — build → publish → run → vote wiring', () => {
     await screen.findByTestId('runner');
   });
 
+  /**
+   * feedback #181 — "the Open in Civitai generator button does nothing". The host resolves
+   * a NAVIGATE path in the APP's own route unless the block says `scope: 'site'`
+   * (civitai `resolveNavigateRequest`, civitai/civitai#5209), so the bare `navigate('/generate')`
+   * this button sent became a shallow push to `/apps/run/<slug>/generate` — a route
+   * this app does not own and ignores. Runner.test only proves the button calls
+   * its prop; this pins what the App hands the host.
+   */
+  it('"Open in Civitai generator" asks the host for the SITE generator page (feedback #181)', async () => {
+    const { navigate } = setup([publishedSeed('shared:x', 'Openable')]);
+    await userEvent.click(await within(await screen.findByTestId('published-card')).findByTestId('published-open'));
+    await screen.findByTestId('runner');
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a lighthouse');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+    await screen.findByTestId('queue-results');
+    navigate.mockClear();
+    await userEvent.click(screen.getByTestId('result-open-generator'));
+    expect(navigate.mock.calls).toEqual([['generate', { scope: 'site' }]]);
+  });
+
   it('up-votes through the shared seam and shows the authoritative new count', async () => {
     setup([publishedSeed('shared:v', 'Votable')]);
     const card = await screen.findByTestId('published-card');

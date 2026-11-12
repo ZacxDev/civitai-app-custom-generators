@@ -216,7 +216,10 @@ export function Runner(props: RunnerProps) {
   const effectiveBalance = localBalance ?? buzzBalance;
   // Leave-guard: when set, a "you have generations in progress" confirm gates
   // the Back navigation (see IN_FLIGHT_STATUSES).
-  const [confirmLeave, setConfirmLeave] = useState(false);
+  // The leave-guard's pending destination: `null` = closed. Both ways out of
+  // the app with work in flight — Back and "Open in Civitai generator" (a site
+  // navigation since feedback #181) — confirm through the same modal.
+  const [confirmLeave, setConfirmLeave] = useState<null | 'back' | 'generator'>(null);
   // Transient "link copied" confirmation, keyed by the copied image url.
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
   // The payoff view. `null` ⇒ closed.
@@ -666,10 +669,28 @@ export function Runner(props: RunnerProps) {
   // just-paid gen can't be dropped by an accidental Back.
   function handleBack() {
     if (hasInFlight) {
-      setConfirmLeave(true);
+      setConfirmLeave('back');
       return;
     }
     onBack();
+  }
+
+  // "Open in Civitai generator" leaves the app too (the host replaces this page),
+  // so it takes the same in-flight confirm as Back.
+  function handleOpenInGenerator() {
+    if (!onOpenInGenerator) return;
+    if (hasInFlight) {
+      setConfirmLeave('generator');
+      return;
+    }
+    onOpenInGenerator();
+  }
+
+  function leaveAnyway() {
+    const dest = confirmLeave;
+    setConfirmLeave(null);
+    if (dest === 'generator') onOpenInGenerator?.();
+    else if (dest === 'back') onBack();
   }
 
   // Copy a result image's url to the clipboard (sandbox-legal alternative to a
@@ -1133,7 +1154,7 @@ export function Runner(props: RunnerProps) {
                         </Button>
                       </Group>
                       {onOpenInGenerator && (
-                        <Button size="sm" variant="subtle" data-testid="result-open-generator" onClick={onOpenInGenerator}>
+                        <Button size="sm" variant="subtle" data-testid="result-open-generator" onClick={handleOpenInGenerator}>
                           Open in Civitai generator
                         </Button>
                       )}
@@ -1260,12 +1281,13 @@ export function Runner(props: RunnerProps) {
         copied={lightboxView?.src != null && copiedUrl === lightboxView.src}
       />
 
-      {/* Leave-guard: a Back press while a generation is estimating/confirming/
-          submitting/processing confirms first, so paid/in-flight work isn't
-          dropped by an accidental navigation. */}
+      {/* Leave-guard: a Back press or "Open in Civitai generator" while a
+          generation is estimating/confirming/submitting/processing confirms
+          first, so paid/in-flight work isn't dropped by an accidental
+          navigation. "Leave anyway" continues to whichever one was pressed. */}
       <Modal
-        opened={confirmLeave}
-        onClose={() => setConfirmLeave(false)}
+        opened={confirmLeave !== null}
+        onClose={() => setConfirmLeave(null)}
         title="Leave with generations in progress?"
         size="sm"
       >
@@ -1276,17 +1298,14 @@ export function Runner(props: RunnerProps) {
             shown here.
           </p>
           <Group justify="flex-end" gap={8}>
-            <Button variant="subtle" size="sm" data-testid="leave-cancel" onClick={() => setConfirmLeave(false)}>
+            <Button variant="subtle" size="sm" data-testid="leave-cancel" onClick={() => setConfirmLeave(null)}>
               Stay
             </Button>
             <Button
               color="error"
               size="sm"
               data-testid="leave-confirm"
-              onClick={() => {
-                setConfirmLeave(false);
-                onBack();
-              }}
+              onClick={leaveAnyway}
             >
               Leave anyway
             </Button>

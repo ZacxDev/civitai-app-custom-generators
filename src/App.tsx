@@ -44,6 +44,7 @@ import {
 import type {
   DownvoteState,
   GeneratorSocial,
+  NavigateOptions,
   SharedAppendValue,
   SharedListItem,
   SharedListResult,
@@ -204,8 +205,11 @@ export interface AppDeps {
   openPurchaseModal: (suggestedAmount?: number) => Promise<PurchaseResult>;
   /** Re-request the viewer's Buzz balance (after a spend / top-up). */
   refreshBalance: () => void;
-  /** Host-mediated navigation within civitai.com (open in the Civitai generator). */
-  navigate: (path: string, target?: 'current' | 'new_tab') => void;
+  /**
+   * Host-mediated navigation: the app's own route sync (app scope, the default)
+   * and "Open in Civitai generator" (`scope: 'site'`). See `NavigateOptions`.
+   */
+  navigate: (path: string, opts?: NavigateOptions) => void;
   /** Copy text to the clipboard (share link). Injectable so jsdom tests can assert it. */
   copyToClipboard: (text: string) => Promise<void>;
   /** Read the `?g=` deeplink key at mount (default: `window.location.search`). */
@@ -1655,7 +1659,8 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             onBack={backToBrowse}
             onTopUp={deps.openPurchaseModal}
             onBalanceRefresh={deps.refreshBalance}
-            onOpenInGenerator={() => deps.navigate('/generate')}
+            // SITE scope, or the host keeps it inside this app (feedback #181).
+            onOpenInGenerator={() => deps.navigate('generate', { scope: 'site' })}
             onCopyImageLink={async (url) => {
               // Sandbox-legal "save" affordance: copy the image url via the same
               // host-clipboard path Share uses (a file download / new tab is
