@@ -1659,7 +1659,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             onBack={backToBrowse}
             onTopUp={deps.openPurchaseModal}
             onBalanceRefresh={deps.refreshBalance}
-            // SITE scope, or the host keeps it inside this app (#181).
+            // SITE scope, or the host keeps it inside this app (feedback #181).
             onOpenInGenerator={() => deps.navigate('generate', { scope: 'site' })}
             onCopyImageLink={async (url) => {
               // Sandbox-legal "save" affordance: copy the image url via the same

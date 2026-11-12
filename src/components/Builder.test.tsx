@@ -360,7 +360,7 @@ describe('Builder — inferred inputs + {prompt} editor (no expose checkboxes)',
   });
 
   /**
-   * #180 — "the cursor is vastly offset from its actual location at the end of the
+   * feedback #180 — "the cursor is vastly offset from its actual location at the end of the
    * prompt template box". The editor is a TRANSPARENT textarea over a highlight
    * overlay: the caret is laid out by the textarea, the visible glyphs by the
    * overlay, so the two only agree while both wrap at the same width with the same
@@ -375,7 +375,7 @@ describe('Builder — inferred inputs + {prompt} editor (no expose checkboxes)',
    * text-layout property equal on both, a scrollbar gutter both ALWAYS reserve,
    * and no horizontal box on the mark. The width itself was measured live (PR body).
    */
-  it('the overlay and the textarea lay text out identically, so the caret stays on the text (#180)', async () => {
+  it('the overlay and the textarea lay text out identically, so the caret stays on the text (feedback #180)', async () => {
     setup();
     await openBuilder();
     const editor = screen.getByTestId('button-editor');

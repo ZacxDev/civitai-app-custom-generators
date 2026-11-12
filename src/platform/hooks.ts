@@ -341,9 +341,9 @@ export interface NavigateOptions {
    * `'site'` leaves the app for a civitai.com page.
    *
    * 🔴 A LEADING SLASH DOES NOT SELECT THE SITE. The host normalises it away in
-   * both spaces (civitai `resolveNavigateRequest`, #5209), so
+   * both spaces (civitai `resolveNavigateRequest`, civitai/civitai#5209), so
    * `navigate('/generate')` is `/apps/run/<slug>/generate` — a route this app does
-   * not own — and reads as a button that does nothing (#181). Only this field
+   * not own — and reads as a button that does nothing (feedback #181). Only this field
    * reaches the site.
    */
   scope?: 'app' | 'site';

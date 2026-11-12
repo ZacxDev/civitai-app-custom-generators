@@ -1,10 +1,10 @@
 // `useCivitaiNavigate` read off the wire (a jsdom suite, for `renderHook`): the
 // exact `NAVIGATE` payload this app SENDS, against `src/platform/testing.tsx`'s fake host.
 //
-// 🔴 WHY THE WIRE AND NOT A SPY: #181 ("Open in Civitai generator does nothing")
+// 🔴 WHY THE WIRE AND NOT A SPY: feedback #181 ("Open in Civitai generator does nothing")
 // lived in the gap between the App and the host. The civitai host resolves a
 // NAVIGATE path inside the app's OWN route unless the payload carries the
-// literal `scope: 'site'` (civitai `resolveNavigateRequest`, #5209). This hook's
+// literal `scope: 'site'` (civitai `resolveNavigateRequest`, civitai/civitai#5209). This hook's
 // old signature had no way to send `scope` at all — its second argument was the
 // tab target — so no caller could reach the site generator, and every spy-level
 // test above the hook stayed green. Nothing here has run against a real host;
@@ -50,7 +50,7 @@ async function sent(): Promise<unknown[]> {
 }
 
 describe('useCivitaiNavigate', () => {
-  it("passes `scope: 'site'` through, so a site page is reachable at all (#181)", async () => {
+  it("passes `scope: 'site'` through, so a site page is reachable at all (feedback #181)", async () => {
     navigateHook()('generate', { scope: 'site' });
     expect(await sent()).toStrictEqual([{ path: 'generate', scope: 'site', target: 'current' }]);
   });

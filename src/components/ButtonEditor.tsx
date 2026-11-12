@@ -376,7 +376,7 @@ function PromptTemplateEditor({
 
   // 🔴 ONE TEXT LAYOUT FOR BOTH BOXES. The textarea is transparent: the caret is
   // laid out by IT, the glyphs the viewer reads by the overlay, so they line up
-  // only while both wrap at the same width (#180). Every text-layout property
+  // only while both wrap at the same width (feedback #180). Every text-layout property
   // lives here, and nothing on either element below may override one.
   //  - `scrollbarGutter: 'stable'` — the textarea scrolls once a template outgrows
   //    its rows and the overlay never does. Without a gutter BOTH always reserve,
@@ -482,7 +482,7 @@ function renderHighlighted(text: string): ReactNode {
             borderRadius: 4,
             // NO horizontal padding/margin/border: in the overlay any of them
             // pushes every later glyph right of where the textarea puts the caret
-            // (#180). The 1px breathing room is painted, not laid out.
+            // (feedback #180). The 1px breathing room is painted, not laid out.
             boxShadow: `0 0 0 1px ${accentWash(28)}`,
           }}
         >

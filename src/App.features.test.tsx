@@ -118,14 +118,14 @@ describe('App — build → publish → run → vote wiring', () => {
   });
 
   /**
-   * #181 — "the Open in Civitai generator button does nothing". The host resolves
+   * feedback #181 — "the Open in Civitai generator button does nothing". The host resolves
    * a NAVIGATE path in the APP's own route unless the block says `scope: 'site'`
-   * (civitai `resolveNavigateRequest`, #5209), so the bare `navigate('/generate')`
+   * (civitai `resolveNavigateRequest`, civitai/civitai#5209), so the bare `navigate('/generate')`
    * this button sent became a shallow push to `/apps/run/<slug>/generate` — a route
    * this app does not own and ignores. Runner.test only proves the button calls
    * its prop; this pins what the App hands the host.
    */
-  it('"Open in Civitai generator" asks the host for the SITE generator page (#181)', async () => {
+  it('"Open in Civitai generator" asks the host for the SITE generator page (feedback #181)', async () => {
     const { navigate } = setup([publishedSeed('shared:x', 'Openable')]);
     await userEvent.click(await within(await screen.findByTestId('published-card')).findByTestId('published-open'));
     await screen.findByTestId('runner');
