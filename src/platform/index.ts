@@ -44,6 +44,7 @@ export {
 export type {
   BlockContextValue,
   BlockTokenValue,
+  NavigateOptions,
   PurchaseResult,
   UseBuzzBalance,
   UseBuzzPurchase,

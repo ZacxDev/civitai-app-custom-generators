@@ -334,15 +334,39 @@ export function useRequestSignIn(): UseRequestSignIn {
   return useMemo(() => ({ requestSignIn }), [requestSignIn]);
 }
 
-export interface UseCivitaiNavigate {
-  navigate: (path: string, target?: 'current' | 'new_tab') => void;
+export interface NavigateOptions {
+  /**
+   * Which space `path` is resolved in. Omitted ⇒ the host's default, `'app'`:
+   * a shallow push under this app's own route (`/apps/run/<slug>/<path>`).
+   * `'site'` leaves the app for a civitai.com page.
+   *
+   * 🔴 A LEADING SLASH DOES NOT SELECT THE SITE. The host normalises it away in
+   * both spaces (civitai `resolveNavigateRequest`, #5209), so
+   * `navigate('/generate')` is `/apps/run/<slug>/generate` — a route this app does
+   * not own — and reads as a button that does nothing (#181). Only this field
+   * reaches the site.
+   */
+  scope?: 'app' | 'site';
+  target?: 'current' | 'new_tab';
 }
 
-/** Host-mediated navigation. The host refuses anything outside this app's paths. */
+export interface UseCivitaiNavigate {
+  navigate: (path: string, opts?: NavigateOptions) => void;
+}
+
+/**
+ * Host-mediated navigation. Fire-and-forget: the host drops a request it refuses
+ * (a hostile path, site scope on a surface without the capability, `/api/*`)
+ * with no reply.
+ */
 export function useCivitaiNavigate(): UseCivitaiNavigate {
-  const navigate = useCallback((path: string, target?: 'current' | 'new_tab') => {
+  const navigate = useCallback((path: string, opts?: NavigateOptions) => {
+    const args = {
+      ...(opts?.scope ? { scope: opts.scope } : {}),
+      ...(opts?.target ? { target: opts.target } : {}),
+    };
     void getClient()
-      .then((app) => app.host.navigate(path, target ? { target } : undefined))
+      .then((app) => app.host.navigate(path, Object.keys(args).length ? args : undefined))
       .catch(() => {});
   }, []);
   return useMemo(() => ({ navigate }), [navigate]);
