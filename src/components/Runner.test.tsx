@@ -693,6 +693,40 @@ describe('Runner — result actions (feature #10)', () => {
     expect(wf.calls.estimate.at(-1)?.params.prompt).toBe('cyberpunk a fox');
   });
 
+  /**
+   * "Open in Civitai generator" LEAVES the app (a site-scope host navigation,
+   * feedback #181), so it is a Back by another name and takes the same
+   * in-flight confirm: a paid generation still running in the queue must not be
+   * dropped by it unasked. Audit round 1 on PR #44.
+   */
+  it('open-in-generator WHILE another gen is in flight confirms first; Stay cancels, Leave navigates', async () => {
+    const wf = mockWorkflow({ cost: 12, images: ['res.jpg'], polls: 1 });
+    let submits = 0;
+    // The first gen succeeds; the second never leaves 'submitting'.
+    const submit: typeof wf.submit = (body, o) =>
+      ++submits === 1 ? wf.submit(body, o) : new Promise<BlockWorkflowSnapshot>(() => {});
+    const onOpenInGenerator = vi.fn();
+    renderRunner(txtConfig(), { estimate: wf.estimate, submit, poll: wf.poll, onOpenInGenerator });
+    await userEvent.type(screen.getByTestId('runner-prompt'), 'a fox');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+    await screen.findByTestId('queue-results');
+    await userEvent.click(screen.getByTestId('gen-button'));
+    await userEvent.click(await screen.findByTestId('queue-confirm'));
+    await waitFor(() => expect(submits).toBe(2));
+
+    await userEvent.click(screen.getByTestId('result-open-generator'));
+    expect(await screen.findByTestId('leave-confirm-modal')).toBeInTheDocument();
+    expect(onOpenInGenerator).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByTestId('leave-cancel'));
+    await waitFor(() => expect(screen.queryByTestId('leave-confirm-modal')).not.toBeInTheDocument());
+    expect(onOpenInGenerator).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByTestId('result-open-generator'));
+    await userEvent.click(await screen.findByTestId('leave-confirm'));
+    expect(onOpenInGenerator).toHaveBeenCalledTimes(1);
+  });
+
   it('a failed copy surfaces a recoverable notice — never a silent failure', async () => {
     const onCopyImageLink = vi.fn(async () => false); // host clipboard unavailable
     renderRunner(txtConfig(), { onCopyImageLink });
