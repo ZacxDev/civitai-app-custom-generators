@@ -358,6 +358,65 @@ describe('Builder — inferred inputs + {prompt} editor (no expose checkboxes)',
     const mark = within(editor).getByTestId('prompt-token-mark');
     expect(mark).toHaveTextContent('{prompt}');
   });
+
+  /**
+   * #180 — "the cursor is vastly offset from its actual location at the end of the
+   * prompt template box". The editor is a TRANSPARENT textarea over a highlight
+   * overlay: the caret is laid out by the textarea, the visible glyphs by the
+   * overlay, so the two only agree while both wrap at the same width with the same
+   * glyph advances. Measured in Brave against 0.17.0: once a template outgrew three
+   * rows the textarea grew a 15px scrollbar and the overflow-hidden overlay did not
+   * (content width 367 vs 382px), the two wrapped differently, and the caret at the
+   * end of the text sat 130px right of the last visible glyph. Each `{prompt}` mark
+   * also carried 1px of horizontal padding a side, pushing every glyph after it.
+   *
+   * 🔴 STRUCTURAL, NOT A MEASUREMENT: jsdom has no layout, so this pins the style
+   * RELATIONSHIP that makes the two boxes lay text out identically — every
+   * text-layout property equal on both, a scrollbar gutter both ALWAYS reserve,
+   * and no horizontal box on the mark. The width itself was measured live (PR body).
+   */
+  it('the overlay and the textarea lay text out identically, so the caret stays on the text (#180)', async () => {
+    setup();
+    await openBuilder();
+    const editor = screen.getByTestId('button-editor');
+    const ta = within(editor).getByTestId('btn-prompt-template') as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: 'a {prompt}, b {prompt}' } });
+    const hl = within(editor).getByTestId('prompt-highlight');
+    const marks = within(editor).getAllByTestId('prompt-token-mark');
+    expect(marks).toHaveLength(2);
+
+    const LAYOUT = [
+      'fontFamily',
+      'fontSize',
+      'fontWeight',
+      'lineHeight',
+      'letterSpacing',
+      'paddingTop',
+      'paddingRight',
+      'paddingBottom',
+      'paddingLeft',
+      'whiteSpace',
+      'wordBreak',
+      'overflowWrap',
+      'boxSizing',
+    ] as const;
+    for (const k of LAYOUT) expect({ [k]: hl.style[k] }).toEqual({ [k]: ta.style[k] });
+
+    // A gutter reserved whether or not the box overflows: the textarea scrolls and
+    // the overlay never does, so only an ALWAYS-reserved gutter keeps them equal.
+    const gutter = (el: HTMLElement) =>
+      el.style.getPropertyValue('scrollbar-gutter') ||
+      ((el.style as unknown as Record<string, string | undefined>).scrollbarGutter ?? '');
+    expect(gutter(ta)).toBe('stable');
+    expect(gutter(hl)).toBe('stable');
+
+    const zero = ['', '0', '0px'];
+    for (const mark of marks) {
+      for (const k of ['paddingLeft', 'paddingRight', 'marginLeft', 'marginRight', 'borderLeftWidth', 'borderRightWidth'] as const) {
+        expect({ [k]: zero.includes(mark.style[k]) }).toEqual({ [k]: true });
+      }
+    }
+  });
 });
 
 describe('Builder — pack primitives (the `src/ui/` seam)', () => {
