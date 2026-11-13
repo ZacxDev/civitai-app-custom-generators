@@ -1,0 +1,237 @@
+// The builder's sampler field (feedback #179): a drop-down of the checkpoint
+// family's samplers, from the platform's catalog.
+//
+// FEATURE TESTS, not regression tests: the drop-down is new, so each case is red
+// on the base only because the behaviour did not exist there.
+//
+// Driven through the WHOLE app against the fake server in `platform/testing.tsx`,
+// so the catalog travels the real path: `platform/samplers.ts` → `app.site.get`
+// → the SDK's http client → the fake `blocks/generation-samplers` route →
+// `parseGenerationSamplers` → `resolveGenerationSampler`. Only the server is fake.
+
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it } from 'vitest';
+import type { BlockResourceInfo } from '@civitai/app-sdk/blocks';
+
+import { App, type AppDeps } from '../App.js';
+import { createFakeCivitai, Harness, type FakeCivitaiOptions } from '../platform/testing.js';
+import { listDrafts } from '../lib/drafts.js';
+import { SAMPLER_NOTES } from '../lib/sampler.js';
+import {
+  CHROMA_CKPT,
+  EMPTY_CKPT,
+  FLUX_CKPT,
+  PENDING_IMAGE,
+  SAMPLER_CATALOG,
+  SDXL_CKPT,
+  UNMAPPED_CKPT,
+  fakeShared,
+  memoryDraftStore,
+  mockWorkflow,
+  queuedCheckpointPicker,
+} from '../test-helpers.js';
+
+/** `'no-route'` = the fake's default for the route: the HTML 404 of a platform without it. */
+function setup(picks: BlockResourceInfo[], samplers: FakeCivitaiOptions['generationSamplers'] | 'no-route' = SAMPLER_CATALOG) {
+  const generationSamplers = samplers === 'no-route' ? undefined : samplers;
+  const shared = fakeShared();
+  const drafts = memoryDraftStore();
+  const wf = mockWorkflow();
+  const fake = createFakeCivitai({ viewer: { id: 99, username: 'me' }, generationSamplers });
+  const deps: Partial<AppDeps> = {
+    pickResource: queuedCheckpointPicker(picks),
+    uploadImage: async () => PENDING_IMAGE,
+    resolveResources: async () => [],
+    shared: shared.shared,
+    updateSharedGenerator: shared.update,
+    drafts,
+    estimate: wf.estimate,
+    submit: wf.submit,
+    poll: wf.poll,
+  };
+  render(
+    <Harness fake={fake}>
+      <App deps={deps} />
+    </Harness>,
+  );
+  return { drafts, fake };
+}
+
+async function openBuilder() {
+  await userEvent.click(await screen.findByTestId('create-generator'));
+  await screen.findByTestId('builder');
+}
+
+/** Pick the next queued checkpoint into the first button, and open its advanced params. */
+async function pickCheckpoint(name: string) {
+  const editor = screen.getAllByTestId('button-editor')[0]!;
+  await userEvent.click(within(editor).getByTestId('pick-checkpoint'));
+  await waitFor(() => expect(within(editor).getByTestId('checkpoint-name')).toHaveTextContent(name));
+  return editor;
+}
+
+async function openAdvanced(editor: HTMLElement) {
+  const toggle = within(editor).getByRole('button', { name: /advanced params/i });
+  if (toggle.getAttribute('aria-expanded') !== 'true') await userEvent.click(toggle);
+  expect(within(editor).getByTestId('advanced-params')).toBeVisible();
+}
+
+const optionsOf = (el: HTMLElement) =>
+  [...(el as HTMLSelectElement).options].map((o) => ({ value: o.value, label: o.textContent }));
+
+const samplerCalls = (fake: { calls: { path: string }[] }) =>
+  fake.calls.filter((c) => c.path === 'blocks/generation-samplers').length;
+
+describe('ButtonEditor — sampler drop-down from the platform catalog', () => {
+  it('lists the SDXL family options, in order, with the family default selected', async () => {
+    const { fake } = setup([SDXL_CKPT]);
+    await openBuilder();
+    const editor = await pickCheckpoint('Juggernaut XL');
+    await openAdvanced(editor);
+
+    const field = await waitFor(() => {
+      const f = within(editor).getByTestId('param-sampler');
+      expect(f.tagName).toBe('SELECT');
+      return f;
+    });
+    expect(optionsOf(field)).toEqual([
+      { value: 'Euler a', label: 'Euler a' },
+      { value: 'Euler', label: 'Euler' },
+      { value: 'DPM++ 2M Karras', label: 'DPM++ 2M Karras' },
+    ]);
+    expect(field).toHaveValue('Euler a');
+    expect(within(editor).queryByTestId('sampler-note')).toBeNull();
+    // The list came over the real route, once.
+    expect(samplerCalls(fake)).toBe(1);
+  });
+
+  it('hides the field for a family with no sampler control, and saves no sampler', async () => {
+    const { drafts } = setup([FLUX_CKPT]);
+    await openBuilder();
+    const editor = await pickCheckpoint('Flux Dev');
+    await openAdvanced(editor);
+
+    // Positive control: the advanced grid is rendered (its other fields are there).
+    expect(within(editor).getByTestId('param-steps')).toBeInTheDocument();
+    await waitFor(() => expect(within(editor).queryByTestId('param-sampler')).toBeNull());
+    expect(within(editor).queryByTestId('sampler-note')).toBeNull();
+
+    await userEvent.type(screen.getByTestId('gen-name'), 'Flux one');
+    await userEvent.click(screen.getByTestId('save-draft'));
+    await screen.findByTestId('builder-notice');
+    const [stored] = await listDrafts(drafts);
+    expect(stored!.config.buttons[0]!.checkpoint?.versionId).toBe(FLUX_CKPT.versionId);
+    expect(stored!.config.buttons[0]!.params).not.toHaveProperty('sampler');
+  });
+
+  it('switching checkpoint to a family without the current value resets it to that default, visibly', async () => {
+    setup([SDXL_CKPT, CHROMA_CKPT]);
+    await openBuilder();
+    const editor = await pickCheckpoint('Juggernaut XL');
+    await openAdvanced(editor);
+    const sdxl = await waitFor(() => {
+      const f = within(editor).getByTestId('param-sampler');
+      expect(f.tagName).toBe('SELECT');
+      return f;
+    });
+    await userEvent.selectOptions(sdxl, 'DPM++ 2M Karras');
+    expect(sdxl).toHaveValue('DPM++ 2M Karras');
+    // Choosing from the list is not a reset: no notice.
+    expect(within(editor).queryByTestId('sampler-reset-notice')).toBeNull();
+
+    await pickCheckpoint('Chroma HD');
+    const chroma = await waitFor(() => {
+      const f = within(editor).getByTestId('param-sampler');
+      expect(optionsOf(f).map((o) => o.value)).toEqual(['heun', 'euler']);
+      return f;
+    });
+    expect(chroma).toHaveValue('euler');
+    expect(within(editor).getByTestId('sampler-reset-notice')).toHaveTextContent(
+      "Sampler reset to euler: DPM++ 2M Karras isn't offered for this checkpoint.",
+    );
+
+    // The author picking again clears the notice.
+    await userEvent.selectOptions(chroma, 'heun');
+    expect(within(editor).queryByTestId('sampler-reset-notice')).toBeNull();
+  });
+
+  it('keeps a value the new family also offers, without a notice', async () => {
+    setup([SDXL_CKPT, { ...SDXL_CKPT, versionId: 3099, modelName: 'Another XL' }]);
+    await openBuilder();
+    const editor = await pickCheckpoint('Juggernaut XL');
+    await openAdvanced(editor);
+    const field = await waitFor(() => {
+      const f = within(editor).getByTestId('param-sampler');
+      expect(f.tagName).toBe('SELECT');
+      return f;
+    });
+    await userEvent.selectOptions(field, 'Euler');
+    await pickCheckpoint('Another XL');
+    expect(within(editor).getByTestId('param-sampler')).toHaveValue('Euler');
+    expect(within(editor).queryByTestId('sampler-reset-notice')).toBeNull();
+  });
+
+  it('one catalog request serves every button editor', async () => {
+    const { fake } = setup([SDXL_CKPT, CHROMA_CKPT]);
+    await openBuilder();
+    await userEvent.click(screen.getByTestId('add-button'));
+    expect(screen.getAllByTestId('button-editor')).toHaveLength(2);
+    await pickCheckpoint('Juggernaut XL');
+    await waitFor(() => expect(samplerCalls(fake)).toBe(1));
+    // Give a second request every chance to be sent before counting.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(samplerCalls(fake)).toBe(1);
+  });
+});
+
+describe('ButtonEditor — sampler falls back to free text when the answer is unknown', () => {
+  it.each([
+    ['an old platform without the route (HTML 404)', 'no-route'],
+    ['a server error', 500],
+    ['a network failure', 'network-error'],
+  ])('%s: free-text field with a note, never an empty drop-down', async (_label, failure) => {
+    setup([SDXL_CKPT], failure);
+    await openBuilder();
+    const editor = await pickCheckpoint('Juggernaut XL');
+    await openAdvanced(editor);
+    await waitFor(() =>
+      expect(within(editor).getByTestId('sampler-note')).toHaveTextContent(SAMPLER_NOTES.unavailable),
+    );
+    const field = within(editor).getByTestId('param-sampler');
+    expect(field.tagName).toBe('INPUT');
+    await userEvent.type(field, 'DPM++ SDE');
+    expect(field).toHaveValue('DPM++ SDE');
+  });
+
+  it('a base model the catalog does not map: free text with the unknown-family note', async () => {
+    setup([UNMAPPED_CKPT]);
+    await openBuilder();
+    const editor = await pickCheckpoint('Mystery');
+    await openAdvanced(editor);
+    await waitFor(() =>
+      expect(within(editor).getByTestId('sampler-note')).toHaveTextContent(SAMPLER_NOTES.unknownFamily),
+    );
+    expect(within(editor).getByTestId('param-sampler').tagName).toBe('INPUT');
+  });
+
+  it('a family whose list is empty renders free text, not an empty drop-down', async () => {
+    setup([EMPTY_CKPT]);
+    await openBuilder();
+    const editor = await pickCheckpoint('Empty Family');
+    await openAdvanced(editor);
+    await waitFor(() => expect(within(editor).getByTestId('sampler-note')).toBeInTheDocument());
+    expect(within(editor).getByTestId('param-sampler').tagName).toBe('INPUT');
+  });
+
+  it('before a checkpoint is picked: free text with the pick-a-checkpoint note', async () => {
+    setup([]);
+    await openBuilder();
+    const editor = screen.getAllByTestId('button-editor')[0]!;
+    await openAdvanced(editor);
+    await waitFor(() =>
+      expect(within(editor).getByTestId('sampler-note')).toHaveTextContent(SAMPLER_NOTES.noCheckpoint),
+    );
+    expect(within(editor).getByTestId('param-sampler').tagName).toBe('INPUT');
+  });
+});

@@ -79,7 +79,9 @@ export function defaultParams(): GenButtonParams {
     negativePrompt: '',
     cfgScale: 4,
     steps: 25,
-    sampler: 'Euler',
+    // No sampler: which names are valid depends on the checkpoint's family, so the
+    // builder fills in that family's default from the platform's catalog once a
+    // checkpoint is picked (lib/sampler.ts). A hardcoded name here would win over it.
     width: 1024,
     height: 1024,
     seed: null,

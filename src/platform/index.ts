@@ -79,6 +79,9 @@ export { useGatedImages } from './useGatedImages.js';
 export { fetchGenerationResources, RESOURCE_IDS_BATCH_MAX } from './resources.js';
 export { useGenerationResources } from './useGenerationResources.js';
 
+export { loadGenerationSamplers } from './samplers.js';
+export type { GenerationSamplersState } from './samplers.js';
+
 export { fetchBuzzBalance } from './buzz.js';
 export type { BuzzBalance } from './buzz.js';
 

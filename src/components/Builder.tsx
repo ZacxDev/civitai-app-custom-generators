@@ -9,6 +9,7 @@ import type { BlockGenerationSourceImageInfo, BlockPendingImageInfo, BlockPicked
 
 import { Alert, Badge, Button, Card, Group, Loader, Stack, TextInput, Textarea } from '../ui/index.js';
 
+import type { GenerationSamplersState } from '../platform/index.js';
 import type { BackgroundScanResult, GeneratorConfig, HeaderImageRef } from '../types.js';
 import { moveButton, newButton, updateButton, validateGenerator } from '../lib/generator.js';
 import { storeImageFromPick } from '../lib/storeListing.js';
@@ -25,6 +26,8 @@ export interface BuilderProps {
     resourceType: BlockResourcePickerType;
     baseModelGroup?: string;
   }) => Promise<BlockResourceInfo | null>;
+  /** The sampler catalog, loaded once when the builder opens (cached for the session). */
+  loadSamplers?: () => Promise<GenerationSamplersState>;
   uploadImage: () => Promise<BlockPendingImageInfo | null>;
   /** Resolve the moderation SCAN outcome for an accepted (pending) background image. */
   scanBackground: (img: BlockPendingImageInfo) => Promise<BackgroundScanResult>;
@@ -86,7 +89,7 @@ const previewSnapshot = async (): Promise<BlockWorkflowSnapshot> => ({ workflowI
 const previewNoUpload = async (): Promise<BlockGenerationSourceImageInfo | null> => null;
 const noop = () => {};
 
-export function Builder({ initial, c, pickResource, uploadImage, scanBackground, scanTimeoutMs = 30_000, onSaveDraft, onPublish, storeNotice = null, pickStoreImage, onBack }: BuilderProps) {
+export function Builder({ initial, c, pickResource, loadSamplers, uploadImage, scanBackground, scanTimeoutMs = 30_000, onSaveDraft, onPublish, storeNotice = null, pickStoreImage, onBack }: BuilderProps) {
   const [config, setConfig] = useState<GeneratorConfig>(initial);
   const [busy, setBusy] = useState<null | 'save' | 'publish' | 'bg' | 'storeImage'>(null);
   const [storeImageError, setStoreImageError] = useState<string | null>(null);
@@ -95,6 +98,18 @@ export function Builder({ initial, c, pickResource, uploadImage, scanBackground,
   const [scan, setScan] = useState<BgScanState>({ phase: 'idle' });
   const isMobile = useIsMobile();
   const [showPreview, setShowPreview] = useState(false);
+  // `null` until the catalog answers; each button editor resolves its own checkpoint against it.
+  const [samplers, setSamplers] = useState<GenerationSamplersState | null>(null);
+  useEffect(() => {
+    if (!loadSamplers) return;
+    let live = true;
+    void loadSamplers().then((s) => {
+      if (live) setSamplers(s);
+    });
+    return () => {
+      live = false;
+    };
+  }, [loadSamplers]);
 
   // Monotonic id so a stale scan (superseded by a newer upload) is ignored, and
   // a mounted flag so a scan resolving after unmount doesn't setState.
@@ -392,6 +407,7 @@ export function Builder({ initial, c, pickResource, uploadImage, scanBackground,
             count={config.buttons.length}
             c={c}
             pickResource={pickResource}
+            samplers={samplers}
             onChange={(patch) => patchButtons(updateButton(config.buttons, b.id, patch))}
             onMove={(dir) => patchButtons(moveButton(config.buttons, i, i + dir))}
             onRemove={() => patchButtons(config.buttons.filter((x) => x.id !== b.id))}
