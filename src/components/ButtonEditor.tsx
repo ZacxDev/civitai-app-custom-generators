@@ -222,7 +222,12 @@ export function ButtonEditor({
           required
           value={button.label}
           data-testid="btn-label-input"
-          onChange={(e) => onChange((b) => ({ ...b, label: e.currentTarget.value }))}
+          onChange={(e) => {
+            // Read now: the patch runs inside a state updater, after React has
+            // released the event (its `currentTarget` is null by then).
+            const label = e.currentTarget.value;
+            onChange((b) => ({ ...b, label }));
+          }}
         />
 
         <Select

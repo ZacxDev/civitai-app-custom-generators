@@ -15,6 +15,11 @@ import { describe, expect, it } from 'vitest';
 import type { BlockResourceInfo } from '@civitai/app-sdk/blocks';
 
 import { App, type AppDeps } from '../App.js';
+import { Builder } from './Builder.js';
+import { checkpointFromPick, newButton, newGenerator } from '../lib/generator.js';
+import { parseGenerationSamplers } from '@civitai/app-sdk/blocks';
+import type { GeneratorConfig } from '../types.js';
+import { palette } from '../theme.js';
 import { createFakeCivitai, Harness, type FakeCivitaiOptions } from '../platform/testing.js';
 import { listDrafts } from '../lib/drafts.js';
 import { SAMPLER_NOTES } from '../lib/sampler.js';
@@ -233,5 +238,54 @@ describe('ButtonEditor — sampler falls back to free text when the answer is un
       expect(within(editor).getByTestId('sampler-note')).toHaveTextContent(SAMPLER_NOTES.noCheckpoint),
     );
     expect(within(editor).getByTestId('param-sampler').tagName).toBe('INPUT');
+  });
+});
+
+/**
+ * REGRESSION (audit round 1 on #45): every editor corrects its sampler in the SAME
+ * commit when the catalog arrives. Patches built from one render's `config.buttons`
+ * let the last editor's write drop the others', so only the last button was saved
+ * corrected while every button showed the reset notice.
+ *
+ * Opens an EXISTING generator (the shape the new-generator tests above never build)
+ * with three buttons whose stored samplers their families do not offer.
+ */
+describe('Builder — every button keeps its sampler correction', () => {
+  it('corrects all buttons of an existing generator, not only the last', async () => {
+    const ready = { status: 'ready' as const, catalog: parseGenerationSamplers(SAMPLER_CATALOG) };
+    const initial = newGenerator({
+      name: 'Existing',
+      buttons: [
+        newButton({ label: 'A', checkpoint: checkpointFromPick(CHROMA_CKPT), params: { steps: 20, sampler: 'DPM++ 2M Karras' } }),
+        newButton({ label: 'B', checkpoint: checkpointFromPick(CHROMA_CKPT), params: { steps: 21, sampler: 'Euler a' } }),
+        newButton({ label: 'C', checkpoint: checkpointFromPick(FLUX_CKPT), params: { steps: 22, sampler: 'Euler' } }),
+      ],
+    });
+    let saved: GeneratorConfig | null = null;
+    render(
+      <Harness>
+        <Builder
+          initial={initial}
+          c={palette()}
+          pickResource={async () => null}
+          loadSamplers={async () => ready}
+          uploadImage={async () => null}
+          scanBackground={async () => ({ status: 'scanned' })}
+          onSaveDraft={async (cfg) => {
+            saved = cfg;
+          }}
+          onPublish={async () => {}}
+          onBack={() => {}}
+        />
+      </Harness>,
+    );
+    await waitFor(() => expect(screen.getAllByTestId('sampler-reset-notice')).toHaveLength(2));
+    await userEvent.click(screen.getByTestId('save-draft'));
+    await waitFor(() => expect(saved).not.toBeNull());
+    const params = saved!.buttons.map((b) => b.params);
+    expect(params.map((p) => p.sampler)).toEqual(['euler', 'euler', undefined]);
+    expect(params[2]).not.toHaveProperty('sampler');
+    // The other params of each button survive the correction.
+    expect(params.map((p) => p.steps)).toEqual([20, 21, 22]);
   });
 });

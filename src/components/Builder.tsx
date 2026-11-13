@@ -408,7 +408,10 @@ export function Builder({ initial, c, pickResource, loadSamplers, uploadImage, s
             c={c}
             pickResource={pickResource}
             samplers={samplers}
-            onChange={(patch) => patchButtons(updateButton(config.buttons, b.id, patch))}
+            // Applied to the LATEST buttons, not this render's: every editor corrects
+            // its sampler in the same commit when the catalog arrives, and a patch built
+            // from `config.buttons` would let the last editor's write drop the others'.
+            onChange={(patch) => setConfig((c0) => ({ ...c0, buttons: updateButton(c0.buttons, b.id, patch) }))}
             onMove={(dir) => patchButtons(moveButton(config.buttons, i, i + dir))}
             onRemove={() => patchButtons(config.buttons.filter((x) => x.id !== b.id))}
           />
