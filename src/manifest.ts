@@ -6,7 +6,7 @@
 // Node-only `@civitai/app-sdk/manifest` subpath, with `ajv` as its peer) validates
 // exactly that source shape against the canonical schema — and REJECTS a
 // manifest carrying `iframe.src`, which is server-owned — so the source is
-// validated as committed, with ONE thing removed: the collection `schema`s (below).
+// validated as committed.
 //
 // All six scopes are members of the SDK's `BLOCK_SCOPES` (`apps:storage` and
 // `apps:storage:publish` included), and the schema knows the `storage` block, so
@@ -25,28 +25,22 @@ export class ManifestValidationError extends Error {
 }
 
 /**
- * Run the SDK's `defineBlock` over a source manifest (default: as committed, which
- * the installed gate refuses until it knows collection schemas — see
- * {@link withoutCollectionSchemas}). Returns it typed; throws `BlockManifestError`
- * (with a `.field` dot-path) on any violation.
+ * Run the SDK's `defineBlock` over a source manifest (default: as committed).
+ * Returns it typed; throws `BlockManifestError` (with a `.field` dot-path) on any
+ * violation.
  */
 export function validateManifest(source: Record<string, unknown> = manifest): BlockManifest {
   return defineBlock({ manifest: source as unknown as BlockManifest });
 }
 
 /**
- * The manifest without its per-collection `schema`s — the one thing the installed
- * SDK gate cannot read yet.
+ * The manifest without its per-collection `schema`s.
  *
- * 🔴 A STOPGAP WITH A TRIPWIRE. civitai/civitai#7491 added
- * `storage.collections.<name>.schema` to the canonical manifest schema, but the
- * `@civitai/app-sdk` this repo builds against vendors the schema from before it,
- * so `defineBlock` refuses the committed manifest at `storage.collections.kv.schema`
- * ("not a known property here"). Every other key still goes through the gate.
- * The schemas themselves are checked by `src/platform/storageSchemas.test.ts`, and at submit
- * by civitai. `src/manifest.test.ts` asserts the installed gate STILL refuses them:
- * when an SDK bump makes that case fail, delete this function and validate the
- * manifest as committed again.
+ * It no longer feeds the `defineBlock` gate: since `@civitai/app-sdk` 0.81 the gate
+ * reads collection schemas, and the manifest is validated as committed. Two tests
+ * still use it: `src/manifest.test.ts` pins the collections' key-space shape apart
+ * from their schemas (which `src/platform/storageSchemas.test.ts` pins), and
+ * `src/platform/appStorage.test.ts` builds a schemaless store fake from it.
  */
 export function withoutCollectionSchemas(source: Record<string, unknown> = manifest): Record<string, unknown> {
   const storage = source.storage as { collections?: Record<string, Record<string, unknown>> } | undefined;

@@ -7,27 +7,14 @@ import { BLOCK_SCOPES, BlockManifestError } from '@civitai/app-sdk/blocks';
 import { manifest, manifestBuzzBudgetPerGen, validateManifest, withoutCollectionSchemas } from './manifest.js';
 
 describe('block.manifest.json', () => {
-  it('validates against the SDK defineBlock gate, as committed less its collection schemas', () => {
-    expect(() => validateManifest(withoutCollectionSchemas())).not.toThrow();
-  });
-
   /**
-   * TRIPWIRE (not a regression test): the installed `@civitai/app-sdk` predates
-   * collection schemas (civitai/civitai#7491), so its gate refuses the committed
-   * manifest — which is the only reason the case above strips them. When an SDK
-   * bump makes THIS case fail, the gate reads schemas: delete
-   * `withoutCollectionSchemas` and validate the manifest as committed again.
-   * Pinned to the field, so a refusal of anything else cannot hold it green.
+   * As committed, collection schemas included. Until `@civitai/app-sdk` 0.81 the
+   * gate did not know `storage.collections.<name>.schema` (civitai/civitai#7491),
+   * so this case stripped them and a TRIPWIRE asserted the gate still refused
+   * them; the 0.87 bump fired that tripwire, as it was written to.
    */
-  it('TRIPWIRE: the installed SDK gate still refuses collection schemas', () => {
-    let caught: unknown;
-    try {
-      validateManifest();
-    } catch (e) {
-      caught = e;
-    }
-    expect(caught).toBeInstanceOf(BlockManifestError);
-    expect((caught as BlockManifestError).field).toBe('storage.collections.kv.schema');
+  it('validates against the SDK defineBlock gate, as committed', () => {
+    expect(() => validateManifest()).not.toThrow();
   });
 
   it('declares exactly the six scopes the app uses', () => {
