@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import type { BlockResourceInfo, BlockResourcePickerType } from '@civitai/app-sdk/blocks';
+import type { GenerationSamplersState } from '../platform/index.js';
 
 import {
   Button,
@@ -36,6 +37,7 @@ import {
   exposesPrompt,
   loraFromPick,
 } from '../lib/generator.js';
+import { samplerControlFor, samplerCorrection } from '../lib/sampler.js';
 import { accentWash, type Palette } from '../theme.js';
 
 export interface ButtonEditorProps {
@@ -47,6 +49,11 @@ export interface ButtonEditorProps {
     resourceType: BlockResourcePickerType;
     baseModelGroup?: string;
   }) => Promise<BlockResourceInfo | null>;
+  /**
+   * The platform's sampler catalog: `null` while it loads. Optional so a caller
+   * that never loads it gets the free-text field (`loading` renders it).
+   */
+  samplers?: GenerationSamplersState | null;
   onChange: (patch: (b: GenButton) => GenButton) => void;
   onMove: (dir: -1 | 1) => void;
   onRemove: () => void;
@@ -58,11 +65,14 @@ export function ButtonEditor({
   count,
   c,
   pickResource,
+  samplers = null,
   onChange,
   onMove,
   onRemove,
 }: ButtonEditorProps) {
   const [advanced, setAdvanced] = useState(false);
+  // The value a checkpoint switch replaced, shown until the author picks again.
+  const [samplerReset, setSamplerReset] = useState<{ from: string; to: string } | null>(null);
   const [picking, setPicking] = useState<null | 'ckpt' | 'lora'>(null);
 
   // a11y: after a reorder the moved card jumps position; keep keyboard focus on
@@ -97,7 +107,11 @@ export function ButtonEditor({
     setPicking('ckpt');
     try {
       const picked = await pickResource({ resourceType: 'Checkpoint' });
-      if (picked) onChange((b) => ({ ...b, checkpoint: checkpointFromPick(picked) }));
+      if (picked) {
+        // A notice about the previous checkpoint's family no longer applies.
+        setSamplerReset(null);
+        onChange((b) => ({ ...b, checkpoint: checkpointFromPick(picked) }));
+      }
     } finally {
       setPicking(null);
     }
@@ -141,6 +155,25 @@ export function ButtonEditor({
   const p = button.params;
   const setParam = (patch: Partial<GenButton['params']>) =>
     onChange((b) => ({ ...b, params: { ...b.params, ...patch } }));
+
+  const samplerControl = samplerControlFor(samplers, button.checkpoint);
+
+  // Keep the stored sampler valid for the checkpoint's family: re-run whenever the
+  // catalog arrives, the checkpoint changes or the value does. A value the family
+  // does not offer is reset to its default VISIBLY (the host would otherwise swap
+  // it silently), and a family with no sampler control drops the stored value.
+  useEffect(() => {
+    const control = samplerControlFor(samplers, button.checkpoint);
+    const fix = samplerCorrection(control, button.params);
+    if (!fix) return;
+    onChange((b) => {
+      const latest = samplerCorrection(samplerControlFor(samplers, b.checkpoint), b.params);
+      return latest ? { ...b, params: latest.params } : b;
+    });
+    setSamplerReset(fix.reset !== null && fix.params.sampler ? { from: fix.reset, to: fix.params.sampler } : null);
+    // `onChange` is a fresh closure every render, so it is not a dependency; the
+    // inputs that decide the fix are.
+  }, [samplers, button.checkpoint?.baseModel, button.checkpoint?.versionId, button.params.sampler]);
 
   const showsPrompt = exposesPrompt(button);
   const showsImage = exposesImage(button);
@@ -189,7 +222,12 @@ export function ButtonEditor({
           required
           value={button.label}
           data-testid="btn-label-input"
-          onChange={(e) => onChange((b) => ({ ...b, label: e.currentTarget.value }))}
+          onChange={(e) => {
+            // Read now: the patch runs inside a state updater, after React has
+            // released the event (its `currentTarget` is null by then).
+            const label = e.currentTarget.value;
+            onChange((b) => ({ ...b, label }));
+          }}
         />
 
         <Select
@@ -301,12 +339,42 @@ export function ButtonEditor({
               data-testid="param-negative"
               onChange={(e) => setParam({ negativePrompt: e.currentTarget.value })}
             />
-            <TextInput
-              label="Sampler"
-              value={p.sampler ?? ''}
-              data-testid="param-sampler"
-              onChange={(e) => setParam({ sampler: e.currentTarget.value })}
-            />
+            {samplerControl.kind === 'select' && (
+              <div>
+                <Select
+                  label="Sampler"
+                  data-testid="param-sampler"
+                  data-sampler-control="select"
+                  value={p.sampler ?? samplerControl.defaultValue}
+                  options={samplerControl.options.map((o) => ({ value: o.value, label: o.label }))}
+                  onChange={(v) => {
+                    setSamplerReset(null);
+                    setParam({ sampler: v });
+                  }}
+                />
+                {samplerReset && (
+                  <Hint c={c} testid="sampler-reset-notice">
+                    {`Sampler reset to ${samplerReset.to}: ${samplerReset.from} isn't offered for this checkpoint.`}
+                  </Hint>
+                )}
+              </div>
+            )}
+            {(samplerControl.kind === 'free' || samplerControl.kind === 'loading') && (
+              <div>
+                <TextInput
+                  label="Sampler"
+                  value={p.sampler ?? ''}
+                  data-testid="param-sampler"
+                  data-sampler-control="text"
+                  onChange={(e) => setParam({ sampler: e.currentTarget.value })}
+                />
+                {samplerControl.kind === 'free' && (
+                  <Hint c={c} testid="sampler-note">
+                    {samplerControl.note}
+                  </Hint>
+                )}
+              </div>
+            )}
             {/* min/max come from PARAM_BOUNDS (single-sourced with the run-path
                 clamp in lib/generator.ts) so authoring inputs and the untrusted
                 clamp can never drift. */}

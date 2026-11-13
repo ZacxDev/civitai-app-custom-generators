@@ -161,6 +161,15 @@ export interface FakeCivitaiOptions {
    * until #5112 is deployed.
    */
   gatedImagesNotFound?: boolean;
+  /**
+   * The body `blocks/generation-samplers` answers with (the per-family sampler
+   * catalog), or how it fails: a number is that status with a JSON error body,
+   * `'network-error'` makes the fetch itself reject.
+   *
+   * 🔴 UNSET IS THE HTML 404 OF A PLATFORM THAT PREDATES THE ROUTE — the default
+   * every existing suite runs against, so they keep the free-text sampler field.
+   */
+  generationSamplers?: unknown;
   publishImageIds?: number[];
   publishError?: boolean | string;
   createPostResult?: BlockCreatePostResult;
@@ -559,6 +568,13 @@ export function createFakeCivitai(options: FakeCivitaiOptions = {}): FakeCivitai
         yellow: 0,
       };
       return json(200, { blue: b.blue, green: b.green, yellow: b.yellow });
+    }
+
+    if (path === 'blocks/generation-samplers' && options.generationSamplers !== undefined) {
+      const s = options.generationSamplers;
+      if (s === 'network-error') throw new TypeError('Failed to fetch');
+      if (typeof s === 'number') return json(s, { error: `scripted ${s}` });
+      return json(200, s);
     }
 
     // ---- workflows

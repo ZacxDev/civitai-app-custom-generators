@@ -314,3 +314,62 @@ export function mockWorkflow(opts: MockWorkflowOpts = {}) {
 }
 
 export const immediateSleep = () => Promise.resolve();
+
+// ---- sampler catalog (feedback #179) ---------------------------------------
+// A fixture in the wire shape of `GET /api/v1/blocks/generation-samplers`.
+// Families are chosen so every answer has a case: a drop-down (SDXL), a family
+// with NO sampler control (Flux1, `null`), a second drop-down whose list lacks
+// SDXL's non-default picks (Chroma, for the reset), and a mapped family with an
+// EMPTY list (which must never render as an empty drop-down). Option values and
+// labels differ in `Chroma` so a test can tell which one the UI used.
+
+export const SAMPLER_CATALOG = {
+  ecosystems: {
+    SDXL: {
+      sampler: {
+        options: [
+          { value: 'Euler a', label: 'Euler a' },
+          { value: 'Euler', label: 'Euler' },
+          { value: 'DPM++ 2M Karras', label: 'DPM++ 2M Karras' },
+        ],
+        default: 'Euler a',
+      },
+      byModelVersion: {},
+    },
+    Flux1: { sampler: null, byModelVersion: {} },
+    Chroma: {
+      sampler: {
+        options: [
+          { value: 'heun', label: 'Heun (Chroma)' },
+          { value: 'euler', label: 'Euler (Chroma)' },
+        ],
+        default: 'euler',
+      },
+      byModelVersion: {},
+    },
+    Empty: { sampler: { options: [], default: 'x' }, byModelVersion: {} },
+  },
+  baseModels: { 'SDXL 1.0': 'SDXL', 'Flux.1 D': 'Flux1', Chroma: 'Chroma', EmptyBase: 'Empty' },
+};
+
+const ckpt = (versionId: number, modelName: string, baseModel: string): BlockResourceInfo => ({
+  versionId,
+  modelId: versionId + 10_000,
+  modelName,
+  versionName: 'v1',
+  baseModel,
+  modelType: 'Checkpoint',
+});
+export const SDXL_CKPT = ckpt(3001, 'Juggernaut XL', 'SDXL 1.0');
+export const FLUX_CKPT = ckpt(3002, 'Flux Dev', 'Flux.1 D');
+export const CHROMA_CKPT = ckpt(3003, 'Chroma HD', 'Chroma');
+export const EMPTY_CKPT = ckpt(3004, 'Empty Family', 'EmptyBase');
+/** A base model the catalog does not map: the lookup's "unknown". */
+export const UNMAPPED_CKPT = ckpt(3005, 'Mystery', 'Some Future Model');
+
+/** A checkpoint picker that answers each pick with the next entry of `queue`. */
+export function queuedCheckpointPicker(queue: BlockResourceInfo[]) {
+  const left = [...queue];
+  return async ({ resourceType }: { resourceType: BlockResourcePickerType }) =>
+    resourceType === 'Checkpoint' ? (left.shift() ?? null) : null;
+}

@@ -1,0 +1,24 @@
+# pnpm workspace config.
+#
+# This repo is a single package, not a workspace: the file exists ONLY to carry
+# the `minimumReleaseAgeExclude` below, which pnpm reads from here and nowhere
+# else.
+#
+# 🔴 WHY THE EXEMPTION EXISTS. pnpm 11 enforces a 24-hour `minimumReleaseAge` on
+# every dependency: a version published less than a day ago is REFUSED, so
+# `pnpm install --frozen-lockfile` (CI, and the platform build) fails with
+# `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION` before a single test runs.
+# `@civitai/app-sdk@0.87.0` (published 2026-11-13 23:09Z) is the first release
+# with `parseGenerationSamplers` / `resolveGenerationSampler`, which the builder's
+# sampler drop-down is built on (feedback #179).
+#
+# 🔴 THE POLICY IS NOT RELAXED: exactly ONE pinned version is exempted, by exact
+# `name@version`. Do not widen it to a bare package name, a range, or a global
+# `minimumReleaseAge: 0`.
+#
+# ⏳ DELETE THIS FILE ONCE 0.87.0 IS MORE THAN 24 HOURS OLD (after 2026-11-14
+# ~23:09Z). The exemption then becomes inert rather than wrong, which is why it is
+# easy to forget. Precedent: #26 and #42, "chore: drop the expired
+# minimumReleaseAge exception".
+minimumReleaseAgeExclude:
+  - '@civitai/app-sdk@0.87.0'

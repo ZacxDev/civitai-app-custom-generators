@@ -40,9 +40,11 @@ import {
   pickPostedImage,
   createGeneratorSocial,
   requestGrants as platformRequestGrants,
+  loadGenerationSamplers,
 } from './platform/index.js';
 import type {
   DownvoteState,
+  GenerationSamplersState,
   GeneratorSocial,
   NavigateOptions,
   SharedAppendValue,
@@ -142,6 +144,12 @@ export interface AppDeps {
    */
   uploadSourceImage: () => Promise<BlockGenerationSourceImageInfo | null>;
   resolveResources: (ids: number[]) => Promise<BlockResourceInfo[]>;
+  /**
+   * The generator's sampler options per model family (`platform/samplers.ts`):
+   * fetched once per session, and never rejects — a failure is `unavailable`,
+   * which the builder shows as the free-text field.
+   */
+  loadSamplers: () => Promise<GenerationSamplersState>;
   /**
    * Resolve per-VIEWER MODERATED display data for a list of image ids
    * (`useGatedImages().getImages`). Each result is `visible` (incl. a host-served
@@ -378,6 +386,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
       },
       uploadSourceImage: sourceUpload.open,
       resolveResources: genResources.fetch,
+      loadSamplers: loadGenerationSamplers,
       getImages: gatedImages.getImages,
       estimate: workflow.estimate,
       submit: workflow.submit,
@@ -1629,6 +1638,7 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             initial={editing.config}
             c={c}
             pickResource={deps.pickResource}
+            loadSamplers={deps.loadSamplers}
             uploadImage={deps.uploadImage}
             scanBackground={deps.scanBackground}
             scanTimeoutMs={deps.bgScanTimeoutMs}

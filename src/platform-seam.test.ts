@@ -121,6 +121,8 @@ describe('the platform seam', () => {
       'platform/generatorSocial.test.ts',
       'platform/generatorSocial.ts',
       'platform/hooks.ts',
+      // Classifies the SDK's `ApiError` (a 404 is an old platform, not "no samplers").
+      'platform/samplers.ts',
       'platform/sharedStorage.test.ts',
       'platform/sharedStorage.ts',
       // Drives the adapters onto the SDK fake to read back what the schemas see.
