@@ -234,10 +234,15 @@ export function Runner(props: RunnerProps) {
 
   // The sampler catalog, requested when the Runner opens so a press rarely waits.
   // Never in preview: a preview never builds a body.
+  // A press waits for it at most ONCE: after one wait runs out, later presses use
+  // whatever has arrived by then and never wait again, so a hung request delays
+  // one press, not every press.
   const samplersRef = useRef<Promise<GenerationSamplersState> | null>(null);
+  const samplersWaitedOut = useRef(false);
   useEffect(() => {
     if (!loadSamplers || preview) return;
     samplersRef.current = loadSamplers();
+    samplersWaitedOut.current = false;
   }, [loadSamplers, preview]);
 
   const [promptInput, setPromptInput] = useState('');
@@ -375,7 +380,11 @@ export function Runner(props: RunnerProps) {
     // Resolve a sampler saved before the drop-down against the checkpoint's family.
     // `loadSamplers` never rejects; a slow answer is bounded so a press is never
     // held hostage by it, and then the stored value is sent as before.
-    const samplers = samplersRef.current ? await settleWithin(samplersRef.current, samplerWaitMs) : null;
+    let samplers: GenerationSamplersState | null = null;
+    if (samplersRef.current) {
+      samplers = await settleWithin(samplersRef.current, samplersWaitedOut.current ? 0 : samplerWaitMs);
+      if (samplers === null) samplersWaitedOut.current = true;
+    }
 
     let body: WorkflowBody;
     try {

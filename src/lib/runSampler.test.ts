@@ -72,7 +72,7 @@ describe('run time: a saved sampler is resolved against the checkpoint family', 
     expect(buildSubmitBody(saved(CHROMA_CKPT, undefined), { samplers: ready }).params).not.toHaveProperty('sampler');
   });
 
-  it('REGRESSION: a runner override is resolved too: the corrected value is what reaches the body', () => {
+  it('GUARD (no UI offers a sampler override today): a runner override is resolved too: the corrected value is what reaches the body', () => {
     const body = buildSubmitBody(saved(CHROMA_CKPT, 'heun'), {
       samplers: ready,
       paramOverrides: { sampler: 'Euler a' },
