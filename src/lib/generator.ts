@@ -22,6 +22,8 @@ import type {
   LoraRef,
   WorkflowType,
 } from '../types.js';
+import type { GenerationSamplersState } from '../platform/index.js';
+import { samplerForRun } from './sampler.js';
 
 /** Placeholder in a promptTemplate where the runner's typed prompt is spliced. */
 export const PROMPT_TOKEN = '{prompt}';
@@ -380,6 +382,12 @@ export interface BuildBodyOptions {
   sharedContentKey?: string;
   /** Runner "advanced" overrides merged over the author's params (e.g. quantity/seed/steps). */
   paramOverrides?: Partial<GenButtonParams>;
+  /**
+   * The platform's sampler catalog, which corrects a sampler saved before the
+   * drop-down existed (`samplerForRun` in `lib/sampler.ts`). Omitted or `null`
+   * (not loaded, or unavailable) sends the stored sampler unchanged.
+   */
+  samplers?: GenerationSamplersState | null;
 }
 
 /** Merge runner overrides over a button's authored params (only defined keys win). */
@@ -428,7 +436,8 @@ export function buildSubmitBody(button: GenButton, opts: BuildBodyOptions = {}):
   const params: BlockTextToImageParams = { prompt };
   if (p.negativePrompt) params.negativePrompt = p.negativePrompt;
   if (isNum(p.cfgScale)) params.cfgScale = p.cfgScale;
-  if (p.sampler) params.sampler = p.sampler;
+  const sampler = samplerForRun(opts.samplers ?? null, button.checkpoint, p.sampler);
+  if (sampler) params.sampler = sampler;
   if (isNum(p.steps)) params.steps = p.steps;
   if (p.seed === null || isNum(p.seed)) params.seed = p.seed;
   if (isNum(p.width)) params.width = p.width;

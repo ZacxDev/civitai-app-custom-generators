@@ -289,3 +289,100 @@ describe('Builder — every button keeps its sampler correction', () => {
     expect(params.map((p) => p.steps)).toEqual([20, 21, 22]);
   });
 });
+
+/**
+ * The AUTHOR's note for a generator saved before the drop-down (0.18.1). Runs
+ * correct such a sampler to the family default at run time; the author sees why,
+ * on the button's card itself rather than inside the collapsed advanced params
+ * (where the reset notice above is `hidden` until expanded).
+ */
+describe('Builder — the author is told a saved sampler is not valid for its checkpoint', () => {
+  function openSaved(
+    buttons: Parameters<typeof newButton>[0][],
+    samplers: Awaited<ReturnType<NonNullable<Parameters<typeof Builder>[0]['loadSamplers']>>> = {
+      status: 'ready',
+      catalog: parseGenerationSamplers(SAMPLER_CATALOG),
+    },
+    picks: BlockResourceInfo[] = [],
+  ) {
+    render(
+      <Harness>
+        <Builder
+          initial={newGenerator({ name: 'Saved', buttons: buttons.map((b) => newButton(b)) })}
+          c={palette()}
+          pickResource={queuedCheckpointPicker(picks)}
+          loadSamplers={async () => samplers}
+          uploadImage={async () => null}
+          scanBackground={async () => ({ status: 'scanned' })}
+          onSaveDraft={async () => {}}
+          onPublish={async () => {}}
+          onBack={() => {}}
+        />
+      </Harness>,
+    );
+  }
+
+  const STALE = { label: 'Old', checkpoint: checkpointFromPick(CHROMA_CKPT), params: { sampler: 'DPM++ 2M Karras' } };
+  const NOTE = "Saved sampler DPM++ 2M Karras isn't valid for this checkpoint, so the family default, euler, is used.";
+
+  it('shown: visible on the card without opening the advanced params, naming both values', async () => {
+    openSaved([STALE, { label: 'Fine', checkpoint: checkpointFromPick(CHROMA_CKPT), params: { sampler: 'heun' } }]);
+    const [stale, fine] = screen.getAllByTestId('button-editor');
+    const note = await within(stale!).findByTestId('sampler-saved-invalid');
+    expect(note).toHaveTextContent(NOTE);
+    expect(note).toBeVisible();
+    // The advanced params are still collapsed: the note does not depend on them.
+    expect(within(stale!).getByTestId('advanced-params')).not.toBeVisible();
+    // Only the button whose saved value is invalid carries it.
+    expect(within(fine!).queryByTestId('sampler-saved-invalid')).toBeNull();
+  });
+
+  it('hidden: a saved sampler the family offers', async () => {
+    openSaved([{ label: 'Fine', checkpoint: checkpointFromPick(CHROMA_CKPT), params: { sampler: 'heun' } }]);
+    // Positive control: the catalog arrived (the drop-down is rendered).
+    await waitFor(() => expect(screen.getByTestId('param-sampler').tagName).toBe('SELECT'));
+    expect(screen.queryByTestId('sampler-saved-invalid')).toBeNull();
+  });
+
+  it('hidden: the catalog is unavailable, so nothing is known to be invalid', async () => {
+    openSaved([STALE], { status: 'unavailable', code: 'http-error' });
+    await waitFor(() => expect(screen.getByTestId('sampler-note')).toHaveTextContent(SAMPLER_NOTES.unavailable));
+    expect(screen.queryByTestId('sampler-saved-invalid')).toBeNull();
+  });
+
+  it('hidden: a reset the AUTHOR caused by switching checkpoint is not a saved-value note', async () => {
+    openSaved([{ label: 'Fine', checkpoint: checkpointFromPick(SDXL_CKPT), params: { sampler: 'DPM++ 2M Karras' } }], undefined, [CHROMA_CKPT]);
+    const editor = screen.getAllByTestId('button-editor')[0]!;
+    await waitFor(() => expect(within(editor).getByTestId('param-sampler').tagName).toBe('SELECT'));
+    await pickCheckpoint('Chroma HD');
+    // Positive control: the switch DID reset the value (the in-advanced notice says so).
+    await waitFor(() => expect(within(editor).getByTestId('sampler-reset-notice')).toBeInTheDocument());
+    expect(within(editor).queryByTestId('sampler-saved-invalid')).toBeNull();
+  });
+
+  it('hidden: back on the saved checkpoint, a value the AUTHOR\'s switch produced is not the saved one', async () => {
+    // Saved valid (SDXL `Euler`). Switching to Chroma resets it to `euler`; switching
+    // back to the SAME SDXL version resets `euler` again. That value was never saved.
+    openSaved([{ label: 'Fine', checkpoint: checkpointFromPick(SDXL_CKPT), params: { sampler: 'Euler' } }], undefined, [CHROMA_CKPT, SDXL_CKPT]);
+    const editor = screen.getAllByTestId('button-editor')[0]!;
+    await waitFor(() => expect(within(editor).getByTestId('param-sampler').tagName).toBe('SELECT'));
+    await pickCheckpoint('Chroma HD');
+    await pickCheckpoint('Juggernaut XL');
+    // Positive control: the second switch reset `euler` to SDXL's default.
+    await waitFor(() =>
+      expect(within(editor).getByTestId('sampler-reset-notice')).toHaveTextContent(
+        "Sampler reset to Euler a: euler isn't offered for this checkpoint.",
+      ),
+    );
+    expect(within(editor).queryByTestId('sampler-saved-invalid')).toBeNull();
+  });
+
+  it('cleared once the author picks a sampler', async () => {
+    openSaved([STALE]);
+    const editor = screen.getAllByTestId('button-editor')[0]!;
+    await within(editor).findByTestId('sampler-saved-invalid');
+    await openAdvanced(editor);
+    await userEvent.selectOptions(within(editor).getByTestId('param-sampler'), 'heun');
+    expect(within(editor).queryByTestId('sampler-saved-invalid')).toBeNull();
+  });
+});

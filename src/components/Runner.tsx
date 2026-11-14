@@ -11,7 +11,7 @@
 // scans it at gen time) — distinct from the moderated cosmetic background, which
 // the Builder uploads via the DISPLAY purpose.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   BlockGatedImage,
   BlockGenerationSourceImageInfo,
@@ -23,6 +23,7 @@ import type {
 import { Alert, Badge, Button, Card, Collapse, Group, Loader, Modal, NumberInput, Stack, TextInput , Image } from '../ui/index.js';
 
 import type { GenButton, GeneratorConfig, GenButtonParams, QueueItem, QueueStatus } from '../types.js';
+import type { GenerationSamplersState } from '../platform/index.js';
 import { DEFAULT_PROMPT_PLACEHOLDER, buildSubmitBody, canRunButton, exposesImage, exposesPrompt, missingRequiredInputs, newId } from '../lib/generator.js';
 import { describeButton, missingForButtonMessage, presetNeedsLabel, presetRecipeLabel } from '../lib/preset.js';
 import type { KeptImageCell, KeptRun } from '../lib/runs.js';
@@ -103,6 +104,26 @@ const IN_FLIGHT_STATUSES: ReadonlySet<QueueStatus> = new Set<QueueStatus>([
   'submitting',
   'processing',
 ]);
+
+/** How long a press waits for the sampler catalog before sending the stored sampler. */
+export const SAMPLER_WAIT_MS = 3000;
+
+/** `p`'s value, or `null` if it has not settled within `ms`. */
+function settleWithin<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(null);
+      },
+    );
+  });
+}
 
 export interface RunnerProps {
   config: GeneratorConfig;
@@ -191,6 +212,15 @@ export interface RunnerProps {
    * alongside `keptRuns` — ids without a resolver render nothing.
    */
   getImages?: (imageIds: number[]) => Promise<BlockGatedImage[]>;
+  /**
+   * The platform's sampler catalog (cached for the session). A press resolves the
+   * button's saved sampler against it, so a generator saved before the sampler
+   * drop-down sends a value its checkpoint's family offers (`samplerForRun`).
+   * Omitted, or no answer within `samplerWaitMs`, sends the stored value as-is.
+   */
+  loadSamplers?: () => Promise<GenerationSamplersState>;
+  /** How long a press waits for the catalog before sending the stored sampler (ms). */
+  samplerWaitMs?: number;
   /** Test seams. */
   pollIntervalMs?: number;
   /** Total poll-window before a still-processing gen is marked `stalled` (ms). */
@@ -199,8 +229,21 @@ export interface RunnerProps {
 }
 
 export function Runner(props: RunnerProps) {
-  const { config, sharedContentKey, headerUrl, c, canGenerate, buzzBalance, onRequestConsent, uploadSourceImage, estimate, submit, poll, onBack, onTopUp, onBalanceRefresh, onOpenInGenerator, onCopyImageLink, keepOutputs, onKeepRun, keptRuns, getImages, rehydrateNotice, preview = false } = props;
+  const { config, sharedContentKey, headerUrl, c, canGenerate, buzzBalance, onRequestConsent, uploadSourceImage, estimate, submit, poll, onBack, onTopUp, onBalanceRefresh, onOpenInGenerator, onCopyImageLink, keepOutputs, onKeepRun, keptRuns, getImages, rehydrateNotice, preview = false, loadSamplers, samplerWaitMs = SAMPLER_WAIT_MS } = props;
   const motion = useMotion();
+
+  // The sampler catalog, requested when the Runner opens so a press rarely waits.
+  // Never in preview: a preview never builds a body.
+  // A press waits for it at most ONCE: after one wait runs out, later presses use
+  // whatever has arrived by then and never wait again, so a hung request delays
+  // one press, not every press.
+  const samplersRef = useRef<Promise<GenerationSamplersState> | null>(null);
+  const samplersWaitedOut = useRef(false);
+  useEffect(() => {
+    if (!loadSamplers || preview) return;
+    samplersRef.current = loadSamplers();
+    samplersWaitedOut.current = false;
+  }, [loadSamplers, preview]);
 
   const [promptInput, setPromptInput] = useState('');
   const [sourceImage, setSourceImage] = useState<BlockSourceImage | null>(null);
@@ -334,6 +377,15 @@ export function Runner(props: RunnerProps) {
       return;
     }
 
+    // Resolve a sampler saved before the drop-down against the checkpoint's family.
+    // `loadSamplers` never rejects; a slow answer is bounded so a press is never
+    // held hostage by it, and then the stored value is sent as before.
+    let samplers: GenerationSamplersState | null = null;
+    if (samplersRef.current) {
+      samplers = await settleWithin(samplersRef.current, samplersWaitedOut.current ? 0 : samplerWaitMs);
+      if (samplers === null) samplersWaitedOut.current = true;
+    }
+
     let body: WorkflowBody;
     try {
       body = buildSubmitBody(button, {
@@ -341,6 +393,7 @@ export function Runner(props: RunnerProps) {
         sourceImage: exposesImage(button) ? sourceImage ?? undefined : undefined,
         sharedContentKey,
         paramOverrides: overrides,
+        samplers,
       });
     } catch (e) {
       setRunnerError(errMsg(e));
