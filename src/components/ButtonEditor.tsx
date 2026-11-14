@@ -80,14 +80,6 @@ export function ButtonEditor({
   const [advanced, setAdvanced] = useState(false);
   // The value a checkpoint switch replaced, shown until the author picks again.
   const [samplerReset, setSamplerReset] = useState<{ from: string; to: string } | null>(null);
-  // A generator saved before the drop-down (0.18.0) can carry a sampler its
-  // checkpoint's family does not offer; runs then use the family default
-  // (`samplerForRun`), and the author is told so here, outside the collapsed
-  // advanced params where the reset notice lives. Only the Builder renders this
-  // editor, and only on the viewer's own drafts, so runners never see it.
-  // Whether a note still describes the SAVED value is `savedSamplerNote`, the one
-  // predicate both writers below go through.
-  const [savedInvalid, setSavedInvalid] = useState<SavedSamplerNote | null>(null);
   const [picking, setPicking] = useState<null | 'ckpt' | 'lora'>(null);
 
   // a11y: after a reorder the moved card jumps position; keep keyboard focus on
@@ -125,7 +117,6 @@ export function ButtonEditor({
       if (picked) {
         // A notice about the previous checkpoint's family no longer applies.
         setSamplerReset(null);
-        setSavedInvalid(null);
         onChange((b) => ({ ...b, checkpoint: checkpointFromPick(picked) }));
       }
     } finally {
@@ -187,21 +178,20 @@ export function ButtonEditor({
       return latest ? { ...b, params: latest.params } : b;
     });
     setSamplerReset(fix.reset !== null && fix.params.sampler ? { from: fix.reset, to: fix.params.sampler } : null);
-    setSavedInvalid(
-      fix.reset !== null && fix.params.sampler
-        ? savedSamplerNote({ from: fix.reset, to: fix.params.sampler }, saved, button.checkpoint?.versionId)
-        : null,
-    );
     // `onChange` is a fresh closure every render, so it is not a dependency; the
     // inputs that decide the fix are.
   }, [samplers, button.checkpoint?.baseModel, button.checkpoint?.versionId, button.params.sampler]);
 
-  // A save moved the baseline: keep the note only while the saved value is still
-  // the one it names. A successful save of the corrected value clears it; a
-  // failed save leaves `saved` (and so the note) as it was.
-  useEffect(() => {
-    setSavedInvalid((note) => note && savedSamplerNote(note, saved, button.checkpoint?.versionId));
-  }, [saved]);
+  // A generator saved before the drop-down (0.18.0) can carry a sampler its
+  // checkpoint's family does not offer; runs then use the family default
+  // (`samplerForRun`), and the author is told so here, outside the collapsed
+  // advanced params where the reset notice lives. Only the Builder renders this
+  // editor, and only on the viewer's own drafts, so runners never see it.
+  // DERIVED, not stored: it is the reset notice whenever that reset replaced the
+  // value this button was last SAVED with (`savedSamplerNote`). So every write
+  // to `samplerReset` moves it, and a successful save, which moves `saved`,
+  // clears it; a failed save moves nothing.
+  const savedInvalid = samplerReset && savedSamplerNote(samplerReset, saved, button.checkpoint?.versionId);
 
   const showsPrompt = exposesPrompt(button);
   const showsImage = exposesImage(button);
@@ -383,7 +373,6 @@ export function ButtonEditor({
                   options={samplerControl.options.map((o) => ({ value: o.value, label: o.label }))}
                   onChange={(v) => {
                     setSamplerReset(null);
-                    setSavedInvalid(null);
                     setParam({ sampler: v });
                   }}
                 />
