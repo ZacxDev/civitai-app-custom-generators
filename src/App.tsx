@@ -1667,6 +1667,8 @@ export function App({ deps: depsOverride }: AppProps = {}) {
             submit={deps.submit}
             poll={deps.poll}
             onBack={backToBrowse}
+            // Corrects a sampler saved before the drop-down, at run time only.
+            loadSamplers={deps.loadSamplers}
             onTopUp={deps.openPurchaseModal}
             onBalanceRefresh={deps.refreshBalance}
             // SITE scope, or the host keeps it inside this app (feedback #181).

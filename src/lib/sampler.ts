@@ -80,3 +80,35 @@ export function samplerCorrection(
   }
   return null;
 }
+
+/**
+ * The sampler a RUN sends for a saved button, or `undefined` for none.
+ *
+ * A generator saved before the drop-down (0.18.0) keeps whatever sampler it was
+ * saved with, and the host silently swaps an out-of-family value for the family
+ * default. This resolves it against the catalog for the button's CHECKPOINT
+ * instead, without writing anything back (the corrected value persists only
+ * when the author saves):
+ *
+ *  - in the family's list: sent unchanged;
+ *  - not in the list: the family default (`samplerCorrection`'s choice, so the
+ *    run and the editor can never disagree about which value replaces it);
+ *  - the family has no sampler control: none is sent;
+ *  - catalog loading, unavailable, no checkpoint or an unmapped family: the
+ *    stored value, unchanged, exactly as before this existed.
+ *
+ * No stored value (`undefined` or `''`) stays none: the host then applies the
+ * family default itself, so there is nothing to correct.
+ */
+export function samplerForRun(
+  state: GenerationSamplersState | null,
+  checkpoint: CheckpointRef | undefined,
+  sampler: string | undefined,
+): string | undefined {
+  if (!sampler) return sampler;
+  const control = samplerControlFor(state, checkpoint);
+  if (control.kind === 'none') return undefined;
+  if (control.kind !== 'select') return sampler;
+  const fix = samplerCorrection(control, { sampler });
+  return fix ? fix.params.sampler : sampler;
+}
