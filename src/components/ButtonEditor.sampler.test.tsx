@@ -386,3 +386,111 @@ describe('Builder — the author is told a saved sampler is not valid for its ch
     expect(within(editor).queryByTestId('sampler-saved-invalid')).toBeNull();
   });
 });
+
+/**
+ * REGRESSION (0.18.2): the note stayed up after the author SAVED. A save writes
+ * the corrected value, so "Saved sampler X isn't valid" is then false. The two
+ * REGRESSION cases are red at 0.18.1 (e4bca05), where only a sampler or
+ * checkpoint pick, or reopening the Builder, cleared it. The other two are
+ * INVARIANT guards (green there too): they pin what the new save baseline must
+ * not break, a failed save and a button that was never saved.
+ */
+describe('Builder — a successful save clears the saved-sampler note', () => {
+  const STALE = { label: 'Old', checkpoint: checkpointFromPick(CHROMA_CKPT), params: { sampler: 'DPM++ 2M Karras' } };
+
+  function openSaved(
+    buttons: Parameters<typeof newButton>[0][],
+    { onSaveDraft = async () => {}, onPublish = async () => {} }: {
+      onSaveDraft?: (cfg: GeneratorConfig) => Promise<void>;
+      onPublish?: (cfg: GeneratorConfig) => Promise<void>;
+    } = {},
+  ) {
+    render(
+      <Harness>
+        <Builder
+          initial={newGenerator({ name: 'Saved', buttons: buttons.map((b) => newButton(b)) })}
+          c={palette()}
+          pickResource={async () => null}
+          loadSamplers={async () => ({ status: 'ready', catalog: parseGenerationSamplers(SAMPLER_CATALOG) })}
+          uploadImage={async () => null}
+          scanBackground={async () => ({ status: 'scanned' })}
+          onSaveDraft={onSaveDraft}
+          onPublish={onPublish}
+          onBack={() => {}}
+        />
+      </Harness>,
+    );
+  }
+
+  it('REGRESSION: Save draft clears it, and the saved value is the corrected one', async () => {
+    let saved: GeneratorConfig | null = null;
+    openSaved([STALE], { onSaveDraft: async (cfg) => { saved = cfg; } });
+    const editor = screen.getAllByTestId('button-editor')[0]!;
+    // Positive control: the note is up before the save.
+    await within(editor).findByTestId('sampler-saved-invalid');
+    await userEvent.click(screen.getByTestId('save-draft'));
+    await waitFor(() => expect(screen.getByText('Draft saved.')).toBeInTheDocument());
+    expect(saved!.buttons[0]!.params.sampler).toBe('euler');
+    expect(within(editor).queryByTestId('sampler-saved-invalid')).toBeNull();
+  });
+
+  it('REGRESSION: a successful publish (which saves the draft first) clears it too', async () => {
+    openSaved([STALE]);
+    const editor = screen.getAllByTestId('button-editor')[0]!;
+    await within(editor).findByTestId('sampler-saved-invalid');
+    await userEvent.click(screen.getByTestId('publish'));
+    await waitFor(() => expect(screen.getByText(/Published!/)).toBeInTheDocument());
+    expect(within(editor).queryByTestId('sampler-saved-invalid')).toBeNull();
+  });
+
+  it('a FAILED save keeps it: nothing was written, so the stored value is still the invalid one', async () => {
+    openSaved([STALE], { onSaveDraft: async () => { throw new Error('storage down'); } });
+    const editor = screen.getAllByTestId('button-editor')[0]!;
+    await within(editor).findByTestId('sampler-saved-invalid');
+    await userEvent.click(screen.getByTestId('save-draft'));
+    // Positive control: the save really ran and failed.
+    await waitFor(() => expect(screen.getByText(/storage down/)).toBeInTheDocument());
+    expect(within(editor).getByTestId('sampler-saved-invalid')).toBeInTheDocument();
+  });
+
+  it('a button never saved has no baseline: an out-of-family value the AUTHOR typed is not a saved-value note', async () => {
+    // The catalog is held back so the author can type into the free-text field
+    // first; when it lands, both buttons are reset to euler.
+    let land!: () => void;
+    const catalog = new Promise<void>((r) => { land = r; });
+    render(
+      <Harness>
+        <Builder
+          initial={newGenerator({ name: 'Saved', buttons: [newButton(STALE)] })}
+          c={palette()}
+          pickResource={queuedCheckpointPicker([CHROMA_CKPT])}
+          loadSamplers={async () => {
+            await catalog;
+            return { status: 'ready', catalog: parseGenerationSamplers(SAMPLER_CATALOG) };
+          }}
+          uploadImage={async () => null}
+          scanBackground={async () => ({ status: 'scanned' })}
+          onSaveDraft={async () => {}}
+          onPublish={async () => {}}
+          onBack={() => {}}
+        />
+      </Harness>,
+    );
+    await userEvent.click(screen.getByTestId('add-button'));
+    const added = screen.getAllByTestId('button-editor')[1]!;
+    await userEvent.click(within(added).getByTestId('pick-checkpoint'));
+    await waitFor(() => expect(within(added).getByTestId('checkpoint-name')).toHaveTextContent('Chroma HD'));
+    await openAdvanced(added);
+    await userEvent.type(within(added).getByTestId('param-sampler'), 'DPM++ 2M Karras');
+    land();
+    const [stale] = screen.getAllByTestId('button-editor');
+    // Positive controls: the saved button gets its note, and the added one WAS reset.
+    await within(stale!).findByTestId('sampler-saved-invalid');
+    await waitFor(() =>
+      expect(within(added).getByTestId('sampler-reset-notice')).toHaveTextContent(
+        "Sampler reset to euler: DPM++ 2M Karras isn't offered for this checkpoint.",
+      ),
+    );
+    expect(within(added).queryByTestId('sampler-saved-invalid')).toBeNull();
+  });
+});

@@ -91,6 +91,9 @@ const noop = () => {};
 
 export function Builder({ initial, c, pickResource, loadSamplers, uploadImage, scanBackground, scanTimeoutMs = 30_000, onSaveDraft, onPublish, storeNotice = null, pickStoreImage, onBack }: BuilderProps) {
   const [config, setConfig] = useState<GeneratorConfig>(initial);
+  // The config as last persisted: what the editors' saved-sampler note is about.
+  // Moves only on a successful save or publish (which saves the draft first).
+  const [saved, setSaved] = useState<GeneratorConfig>(initial);
   const [busy, setBusy] = useState<null | 'save' | 'publish' | 'bg' | 'storeImage'>(null);
   const [storeImageError, setStoreImageError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -213,6 +216,7 @@ export function Builder({ initial, c, pickResource, loadSamplers, uploadImage, s
     setNotice(null);
     try {
       await onSaveDraft(config);
+      setSaved(config);
       setNotice('Draft saved.');
     } catch (e) {
       setError(errMsg(e));
@@ -228,6 +232,7 @@ export function Builder({ initial, c, pickResource, loadSamplers, uploadImage, s
     setNotice(null);
     try {
       await onPublish(config);
+      setSaved(config);
       setNotice('Published! Others can now find and run your generator.');
     } catch (e) {
       setError(errMsg(e));
@@ -408,6 +413,7 @@ export function Builder({ initial, c, pickResource, loadSamplers, uploadImage, s
             c={c}
             pickResource={pickResource}
             samplers={samplers}
+            saved={saved.buttons.find((x) => x.id === b.id)}
             // Applied to the LATEST buttons, not this render's: every editor corrects
             // its sampler in the same commit when the catalog arrives, and a patch built
             // from `config.buttons` would let the last editor's write drop the others'.
