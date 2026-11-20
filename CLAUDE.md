@@ -177,6 +177,14 @@ pattern to copy — both explain, in the file, the incident they exist to preven
 - `block.manifest.json` and `package.json` versions move **together**. The
   `release versions` describe in `src/manifest.test.ts` enforces it; a release
   that bumps one is a shippable defect that has actually shipped before.
+- Submitting a release: merge the version bump, then push the tag
+  `v<version>` for the manifest version on the merge commit
+  (`git tag v<version> <merge-sha> && git push origin v<version>`; a bare
+  `<version>` tag does not start the workflow). `.github/workflows/release.yml`
+  submits it through `civitai/app-submit-action` with a GitHub OIDC token and
+  the `CIVITAI_API_KEY` repo secret, which must be a personal API key of the
+  app's owner. A moderator still approves it. `civitai app submit` from a clean
+  checkout still works, and records no GitHub run.
 - `block.manifest.json`'s `buildCommand` is **`pnpm run build`** — that line is
   what the *platform's* builder runs. Changing it changes production.
 - Bumping any `@civitai/*` dependency: `pnpm install` re-checks pnpm's
