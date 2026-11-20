@@ -1,6 +1,6 @@
 name: Submit to Civitai
 
-# Pushing a tag that equals block.manifest.json's version (v0.18.3 or 0.18.3)
+# Pushing a tag v<version>, where <version> is block.manifest.json's version,
 # submits that version for moderator review. The action also sends a GitHub
 # Actions OIDC token, so the submission records this repository, tag and commit.
 on:
