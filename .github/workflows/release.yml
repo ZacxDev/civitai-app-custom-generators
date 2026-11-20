@@ -16,6 +16,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Pinned to a commit: this step receives the API key.
-      - uses: civitai/app-submit-action@259cdc5a966776a3882e968c466fa9affaccde0f # v1.0.2
+      - uses: civitai/app-submit-action@fb1c89b9d067bb6390106a7e07e627bcdc358b71 # v1.0.3
         with:
           api-key: ${{ secrets.CIVITAI_API_KEY }}
