@@ -1,0 +1,21 @@
+name: Submit to Civitai
+
+# Pushing a tag that equals block.manifest.json's version (v0.18.3 or 0.18.3)
+# submits that version for moderator review. The action also sends a GitHub
+# Actions OIDC token, so the submission records this repository, tag and commit.
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  submit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read   # check out the repository
+      id-token: write  # let the action request a GitHub OIDC token
+    steps:
+      - uses: actions/checkout@v4
+      # Pinned to a commit: this step receives the API key.
+      - uses: civitai/app-submit-action@259cdc5a966776a3882e968c466fa9affaccde0f # v1.0.2
+        with:
+          api-key: ${{ secrets.CIVITAI_API_KEY }}
